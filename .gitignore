@@ -1,0 +1,28 @@
+# Secrets — never commit these
+.env
+
+# Runtime data
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+models/
+
+# Logs
+*.log
+
+# macOS
+.DS_Store
+
+# ffmpeg
+ffmpeg/
+
+# Other
+.exe

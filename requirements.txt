@@ -1,0 +1,48 @@
+# ============================================================
+# DC Agent — Python Dependencies
+# ============================================================
+# Install with:  pip install -r requirements.txt
+
+# Discord library (with voice support optional)
+discord.py>=2.4.0
+
+# Async HTTP client (Ollama + YouTube API calls)
+aiohttp>=3.9.0
+yt-dlp>=2024.0.0
+
+# Environment variable loader
+python-dotenv>=1.0.0
+
+# Image generation
+pydantic>=2.0.0
+
+# Voice system (STT / TTS)
+transformers>=4.40.0
+huggingface_hub>=0.23.0
+librosa>=0.10.0
+soundfile>=0.12.1
+TTS>=0.22.0
+torch>=2.0.0
+torchaudio>=2.0.0
+# silero-vad is typically downloaded via torch.hub, but we can add its dependencies if needed.
+
+# Stock / Weather tools (CPU-only, no GPU usage)
+yfinance>=0.2.40
+mplfinance>=0.12.10b0
+matplotlib>=3.8.0
+quart
+uvicorn>=0.20.0
+httpx>=0.27.0          # Web UI server: proxy Ollama / LM Studio model list API
+psutil>=5.9.0           # Web UI server: system CPU / RAM / Network metrics
+
+# --- Optional Modules Dependencies (mod/market_plugin) ---
+# 若不使用股票分析與 PTCG 卡片追蹤功能，可略過以下套件
+google-generativeai>=0.5.0
+google-genai>=1.0.0
+apscheduler>=3.10.0
+finnhub-python>=2.4.19
+selenium>=4.18.0
+webdriver-manager>=4.0.1
+beautifulsoup4>=4.12.0
+# 修正與 TTS 套件的相依性衝突，鎖定為 2.0 以下的版本
+pandas>=1.4.0,<2.0.0

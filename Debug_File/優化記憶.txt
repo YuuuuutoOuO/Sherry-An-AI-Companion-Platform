@@ -1,0 +1,96 @@
+﻿# 🧠 雪莉記憶系統 — 未來優化待辦清單
+> 已於 2026-07-06 完成 🔴 高優先度項目，以下為剩餘的中低優先度優化事項。
+
+---
+
+## 🟡 中優先度
+
+### 1. 缺少 Episodic Memory（情節記憶）層
+
+現況：
+目前的 facts 是「關於某人的穩固事實」（Semantic Memory），但缺少「記得某次特定對話事件」的層次。
+
+企業標準做法：
+建立 data/user_episodes.json，在每次對話結束後，由 LLM 自動判斷是否需要記錄一條「情節摘要」。
+
+建議資料結構：
+{
+  "使用者UID": {
+    "episodes": [
+      {
+        "timestamp": "2026-07-06T18:00:00Z",
+        "summary": "Yuuto 今天提到他女友跑了，雪莉安慰了他。",
+        "importance": 4,
+        "tags": ["情感", "感情"]
+      }
+    ]
+  }
+}
+
+觸發時機：每次對話完成後（即 _on_reply callback 執行後），若對話超過一定長度或包含
+特定關鍵字（情感、重大事件），就非同步壓縮並儲存。
+
+注入位置：與現有的 get_user_memory_snippet() 合併輸出，或另建 get_user_episode_snippet()。
+
+---
+
+### 2. VibeManager 職責重新定義
+
+現況：
+VibeManager 記錄的是「頻道裡最近大家在聊什麼（話題熱度）」，但它被歸類在記憶系統下，
+容易造成混淆。
+
+建議做法：
+將 VibeManager 正式重新定位為「情境感知模組（Context Awareness Module）」，而非記憶系統。
+
+具體來說：
+- Memory（記憶）：持久化的、關於特定人物的知識 → MemoryManager
+- Context（情境）：即時的、關於當下頻道氛圍的感知 → VibeManager（可改名 ContextSensor）
+
+---
+
+## 🟢 低優先度
+
+### 3. 記憶召回機制（Memory Retrieval / RAG）
+
+現況：
+目前的記憶是「全部塞進去 Prompt」，沒有查詢機制。如果使用者資料很多，Token 會爆炸。
+
+企業標準做法：
+建立一個「關鍵字相關性評分」，只取出與當前對話最相關的記憶片段注入 Prompt，而非全量注入。
+
+最低成本實作方案（不需要向量資料庫）：
+根據當前 user_query 的關鍵字，對 facts 做簡單的字串 overlap 評分，只取 top-3 相關 facts 注入。
+
+---
+
+### 4. facts 老化機制（Memory Decay）
+
+現況：
+facts 永遠保留，沒有老化或過期機制。但如「他說他今天心情不好」這種短暫狀態
+不應該永久記憶。
+
+建議做法：
+對每個 fact 加入 importance（重要性，1-5分）與 expires_at（過期時間，選填）。
+- importance >= 4：永久保留（例如：「他是台灣人」）
+- importance <= 2：加上 expires_at = 7天後，到期自動刪除
+
+（注意：importance 欄位已在 2026-07-06 的 🔴 高優先度更新中加入 UserFact 結構，
+ 這個步驟只需要補上定期清理的排程邏輯即可。）
+
+---
+
+### 5. 跨 Session 對話脈絡摘要（Session Summary）
+
+現況：
+每次機器人重啟，_working_memory_buffers 就清空了。重啟前的上下文完全消失。
+
+建議做法：
+在機器人關閉（cog_unload）或 buffer 累積達到一定數量時，自動呼叫 LLM
+把 buffer 壓縮成一條「本次 Session 摘要」，存入 Episodic Memory，
+讓下次重啟後依然能回憶起「上次聊到哪了」。
+
+---
+
+最後更新：2026-07-06
+下次優先處理：Episodic Memory 層（中優先度 #1）
