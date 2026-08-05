@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=5">
+    <link rel="stylesheet" href="/static/style.css?v=7">
 </head>
 <body>
     <div class="app-layout">
@@ -53,6 +53,10 @@
                 <button class="nav-btn admin-only" id="nav-audit" onclick="switchView('audit')">
                     <span class="nav-icon">🛡️</span>
                     <span>管理員審計</span>
+                </button>
+                <button class="nav-btn admin-only" id="nav-mod-manager" onclick="switchView('mod-manager')">
+                    <span class="nav-icon">🧩</span>
+                    <span>模組管理</span>
                 </button>
                 <button class="nav-btn" id="nav-settings" onclick="switchView('settings')">
                     <span class="nav-icon">⚙️</span>
@@ -117,6 +121,15 @@
                 <div class="topbar-right hidden" id="audit-toolbar">
                     <button class="icon-btn" title="重新整理審計紀錄" onclick="loadAuditLogs()">↻</button>
                 </div>
+                <div class="topbar-right hidden" id="mod-manager-toolbar">
+                    <button class="icon-btn" title="重新整理模組清單" onclick="loadModManager()">↻</button>
+                    <button class="btn-restart admin-only" onclick="requestRestart()" style="font-size:0.82rem; padding:6px 12px;">
+                        <span>🔄</span> 重啟雪莉
+                    </button>
+                    <button class="btn-stop admin-only" onclick="requestStop()" style="font-size:0.82rem; padding:6px 12px;">
+                        <span>🛑</span> 關閉雪莉
+                    </button>
+                </div>
                 <div class="topbar-right hidden" id="settings-toolbar">
                     <button class="btn-save admin-only" id="save-btn" onclick="saveSettings()">
                         <span>💾</span> 儲存設定
@@ -126,6 +139,9 @@
                     </button>
                     <button class="btn-restart admin-only" id="restart-btn" onclick="requestRestart()">
                         <span>🔄</span> 重啟雪莉
+                    </button>
+                    <button class="btn-stop admin-only" id="stop-btn" onclick="requestStop()">
+                        <span>🛑</span> 關閉雪莉
                     </button>
                     <span class="changed-hint hidden" id="changed-hint">● 有未儲存的變更</span>
                 </div>
@@ -442,10 +458,14 @@
                 </div>
 
                 <!-- Game Tabs Selector -->
-                <div class="game-tabs" style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">
+                <div class="game-tabs" style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; overflow-x: auto;">
                     <button class="game-tab-btn active" id="tab-game-rps" onclick="switchGameTab('rps')">✌️ 猜拳大對決</button>
                     <button class="game-tab-btn" id="tab-game-blackjack" onclick="switchGameTab('blackjack')">🃏 21 點撲克</button>
                     <button class="game-tab-btn" id="tab-game-minesweeper" onclick="switchGameTab('minesweeper')">💣 踩地雷大冒險</button>
+                    <button class="game-tab-btn" id="tab-game-turtle_soup" onclick="switchGameTab('turtle_soup')">🐢 海龜湯解謎</button>
+                    <button class="game-tab-btn" id="tab-game-akinator" onclick="switchGameTab('akinator')">🧞 雪莉讀心術 (20Q)</button>
+                    <button class="game-tab-btn" id="tab-game-escape_room" onclick="switchGameTab('escape_room')">🗝️ 密室逃脫</button>
+                    <button class="game-tab-btn" id="tab-game-ttt" onclick="switchGameTab('ttt')">⭕ 圈圈叉叉</button>
                 </div>
 
                 <!-- GAME CONTAINER 1: RPS -->
@@ -517,6 +537,114 @@
                             <div style="grid-column: span 8; color: var(--text-muted); padding: 20px;">點擊「重置地雷棋盤」開局</div>
                         </div>
                     </div>
+                </div>
+
+                <!-- GAME CONTAINER 4: TURTLE SOUP -->
+                <div class="game-panel hidden" id="panel-game-turtle_soup">
+                    <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                            <h3 style="font-size: 1.1rem;">🐢 海龜湯情境解謎 (雪莉擔任湯主)</h3>
+                            <button class="btn-confirm-login" onclick="startTurtleSoup()" style="padding: 8px 16px; border-radius: 6px;">開啟新湯面</button>
+                        </div>
+                        <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border-color); border-radius: 10px; padding: 16px; margin-bottom: 16px;">
+                            <div style="font-weight: 700; color: #00e5ff; font-size: 1rem; margin-bottom: 6px;" id="ts-title">湯面：點擊開啟新湯面</div>
+                            <div style="font-size: 0.95rem; color: var(--text-main); line-height: 1.5;" id="ts-surface">請點擊上方按鈕隨機抽出海龜湯題目！</div>
+                        </div>
+                        <div id="ts-dialogue-history" style="max-height: 200px; overflow-y: auto; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 12px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 8px;">
+                            <div style="color: var(--text-muted); font-size: 0.85rem;">向雪莉提出只回答「是/否/無關」的問題...</div>
+                        </div>
+                        <div style="display: flex; gap: 10px;">
+                            <input type="text" id="ts-input" class="select-input" style="flex: 1; padding: 10px;" placeholder="輸入你的問題（例如：這個人是單身嗎？...）" onkeydown="if(event.key==='Enter') askTurtleSoup()">
+                            <button class="btn-confirm-login" onclick="askTurtleSoup()" style="padding: 10px 20px;">提問</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- GAME CONTAINER 5: AKINATOR -->
+                <div class="game-panel hidden" id="panel-game-akinator">
+                    <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; text-align: center;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                            <h3 style="font-size: 1.1rem;">🧞 雪莉讀心術 (20 個問題猜心)</h3>
+                            <button class="btn-confirm-login" onclick="startAkinator()" style="padding: 8px 16px; border-radius: 6px;">開始全新讀心遊戲</button>
+                        </div>
+                        <p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 20px;">在心中想一個動漫角色或真實物品，雪莉將問你 20 個問題猜出來！</p>
+                        <div style="background: rgba(0,229,255,0.08); border: 1px solid rgba(0,229,255,0.3); border-radius: 10px; padding: 20px; margin-bottom: 24px;">
+                            <div style="font-size: 0.9rem; color: #00e5ff; font-weight: 700; margin-bottom: 8px;" id="aki-q-num">第 1 / 20 題</div>
+                            <div style="font-size: 1.15rem; font-weight: 600; color: var(--text-main);" id="aki-question">點擊「開始全新讀心遊戲」</div>
+                        </div>
+                        <div style="display: flex; justify-content: center; gap: 16px;">
+                            <button class="game-action-btn" onclick="answerAkinator('是')" style="padding: 10px 24px; border-radius: 8px; font-weight: 700;">⭕ 是 / YES</button>
+                            <button class="game-action-btn" onclick="answerAkinator('否')" style="padding: 10px 24px; border-radius: 8px; font-weight: 700;">❌ 否 / NO</button>
+                            <button class="game-action-btn" onclick="answerAkinator('不確定')" style="padding: 10px 24px; border-radius: 8px; font-weight: 700;">❓ 不確定 / 無關</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- GAME CONTAINER 6: ESCAPE ROOM -->
+                <div class="game-panel hidden" id="panel-game-escape_room">
+                    <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                            <h3 style="font-size: 1.1rem;">🗝️ 橘雪莉密室逃脫 (文字冒險)</h3>
+                            <button class="btn-confirm-login" onclick="startEscapeRoom()" style="padding: 8px 16px; border-radius: 6px;">重置密室</button>
+                        </div>
+                        <div style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 10px; padding: 16px; min-height: 120px; margin-bottom: 20px;" id="er-narration">
+                            點擊「重置密室」與雪莉進入困住的名偵探密室！
+                        </div>
+                        <div style="display: flex; gap: 12px; justify-content: center;">
+                            <button class="game-action-btn" onclick="actionEscapeRoom('調查書桌')" style="padding: 10px 18px; border-radius: 8px;">🔍 調查書桌</button>
+                            <button class="game-action-btn" onclick="actionEscapeRoom('檢查牆上畫框')" style="padding: 10px 18px; border-radius: 8px;">🖼️ 檢查畫框</button>
+                            <button class="game-action-btn" onclick="actionEscapeRoom('解開大門密碼')" style="padding: 10px 18px; border-radius: 8px;">🚪 嘗試破解大門</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- GAME CONTAINER 7: TIC TAC TOE -->
+                <div class="game-panel hidden" id="panel-game-ttt">
+                    <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; text-align: center;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                            <h3 style="font-size: 1.1rem;">⭕ 圈圈叉叉 (Tic-Tac-Toe)</h3>
+                            <button class="btn-confirm-login" onclick="startTTT()" style="padding: 8px 16px; border-radius: 6px;">重新開局</button>
+                        </div>
+                        <div id="ttt-board" style="display: inline-grid; grid-template-columns: repeat(3, 70px); gap: 10px; background: rgba(0,0,0,0.3); padding: 16px; border-radius: 12px;">
+                            <div style="grid-column: span 3; color: var(--text-muted);">點擊「重新開局」</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== MOD MANAGER VIEW ===== -->
+            <div class="view hidden" id="view-mod-manager">
+                <div class="mod-manager-wrapper">
+
+                    <!-- Banner -->
+                    <div class="mod-manager-banner">
+                        <div>
+                            <h2 class="mod-manager-banner-title">🧩 功能模組管理中心</h2>
+                            <p class="mod-manager-banner-sub">管理雪莉的所有可插拔功能模組，開啟或停用後需重啟雪莉生效。</p>
+                        </div>
+                        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                            <button class="btn-restart admin-only" onclick="requestRestart()" id="mod-restart-btn">
+                                🔄 重啟雪莉 (Apply Changes)
+                            </button>
+                            <button class="btn-stop admin-only" onclick="requestStop()" id="mod-stop-btn">
+                                🛑 關閉雪莉
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Notice Bar -->
+                    <div class="mod-notice-bar" id="mod-notice-bar" style="display:none;">
+                        ⚠️ 模組設定已變更，請點擊上方「🔄 重啟雪莉」按鈕以套用。
+                    </div>
+
+                    <!-- Module Grid -->
+                    <div class="mod-grid" id="mod-grid">
+                        <div class="mod-loading">
+                            <div class="mod-loading-spinner"></div>
+                            <span>正在掃描模組清單...</span>
+                        </div>
+                    </div>
+
                 </div>
             </div>
 
@@ -595,12 +723,36 @@
         </div>
     </div>
 
+    <!-- ===== STOP CONFIRM & OVERLAY ===== -->
+    <div class="modal-backdrop hidden" id="stop-modal-backdrop" onclick="closeStopModal()">
+        <div class="modal modal-confirm" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <span>🛑 關閉雪莉</span>
+                <button class="modal-close" onclick="closeStopModal()">✕</button>
+            </div>
+            <div class="modal-body text-center">
+                <p style="font-size: 1.1rem; font-weight: 600; margin-bottom: 8px; color: #ff5555;">確定要停止並關閉雪莉機器人嗎？</p>
+                <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 20px;">此操作將會立即終止 Python 主程序與控制台 Web UI。<br>如需重新開機，請於地端終端機執行 <code>restart_sherry.bat</code>。</p>
+                <div style="display: flex; gap: 12px; justify-content: flex-end;">
+                    <button class="btn-cancel" style="padding: 8px 16px; border-radius: 6px; border: 1px solid var(--border-color); background: transparent; color: var(--text-main); cursor: pointer;" onclick="closeStopModal()">取消</button>
+                    <button class="btn-confirm-stop" style="padding: 8px 16px; border-radius: 6px; border: none; background: #d32f2f; color: #fff; font-weight: 600; cursor: pointer;" onclick="executeStop()">確定關閉</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="restart-overlay hidden" id="restart-overlay">
         <div class="restart-spinner"></div>
         <h2 style="margin-top: 16px; font-size: 1.3rem;">🚀 雪莉正在重新啟動中...</h2>
         <p style="color: var(--text-muted); font-size: 0.95rem; margin-top: 8px;" id="restart-overlay-desc">已傳送重啟指令，正等待伺服器連線恢復...</p>
     </div>
 
-    <script src="/static/app.js?v=5"></script>
+    <div class="stop-overlay hidden" id="stop-overlay">
+        <div style="font-size: 3.5rem; margin-bottom: 12px;">🛑</div>
+        <h2 style="margin-top: 8px; font-size: 1.4rem; color: #ff5555;">雪莉機器人已成功關閉與停止</h2>
+        <p style="color: var(--text-muted); font-size: 0.95rem; margin-top: 8px;">程序已終止。如需再次啟用，請於地端執行 <code>restart_sherry.bat</code> 啟動服務。</p>
+    </div>
+
+    <script src="/static/app.js?v=7"></script>
 </body>
 </html>

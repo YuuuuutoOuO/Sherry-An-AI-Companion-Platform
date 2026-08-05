@@ -198,8 +198,8 @@ async def require_auth() -> Response | None:
     if request.path.startswith("/static") or request.method == "GET":
         return None
 
-    # Public POST route for login
-    if request.path in ("/api/auth/login", "/api/auth/logout"):
+    # Public POST routes (Login & Game Center)
+    if request.path in ("/api/auth/login", "/api/auth/logout") or request.path.startswith("/api/games/"):
         return None
 
     # All other POST/DELETE/PUT write routes require Admin Auth
@@ -387,6 +387,20 @@ async def get_lms_models() -> Response:
         return jsonify({"models": [], "source": "lms", "error": str(exc)})
 
 
+@app.route("/api/models/vllm", methods=["GET"])
+async def get_vllm_models() -> Response:
+    """Proxy vLLM /v1/models to retrieve locally loaded model names."""
+    base_url: str = getattr(settings, "VLLM_BASE_URL", "http://localhost:8000/v1").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=settings.WEB_UI_HTTP_TIMEOUT) as client:
+            resp = await client.get(f"{base_url}/models")
+            data = resp.json()
+            models = [m["id"] for m in data.get("data", [])]
+            return jsonify({"models": models, "source": "vllm", "base_url": base_url})
+    except Exception as exc:
+        return jsonify({"models": [], "source": "vllm", "error": str(exc)})
+
+
 # ---------------------------------------------------------------------------
 # API: Auth
 # ---------------------------------------------------------------------------
@@ -571,7 +585,32 @@ async def get_services_status() -> Response:
     except Exception:
         services.append({"id": "lms", "name": "LM Studio 服務", "icon": "🤖", "url": lms_url, "status": "offline", "ping_ms": 0, "details": "未啟動或連線超時", "models": []})
 
-    # 3. Stable Diffusion WebUI / ComfyUI 繪圖引擎
+    # 3. vLLM Engine
+    vllm_url = getattr(settings, "VLLM_BASE_URL", "http://localhost:8000/v1").rstrip("/")
+    try:
+        t0 = time.time()
+        async with httpx.AsyncClient(timeout=settings.WEB_UI_HTTP_TIMEOUT) as client:
+            resp = await client.get(f"{vllm_url}/models")
+            ping_ms = int((time.time() - t0) * 1000)
+            if resp.status_code == 200:
+                data = resp.json()
+                models = [m.get("id") for m in data.get("data", [])]
+                services.append({
+                    "id": "vllm",
+                    "name": "vLLM 引擎服務",
+                    "icon": "⚡",
+                    "url": vllm_url,
+                    "status": "online",
+                    "ping_ms": ping_ms,
+                    "details": f"服務線上，已加載 {len(models)} 個模型",
+                    "models": models[:6],
+                })
+            else:
+                services.append({"id": "vllm", "name": "vLLM 引擎服務", "icon": "⚡", "url": vllm_url, "status": "offline", "ping_ms": ping_ms, "details": f"HTTP {resp.status_code}", "models": []})
+    except Exception:
+        services.append({"id": "vllm", "name": "vLLM 引擎服務", "icon": "⚡", "url": vllm_url, "status": "offline", "ping_ms": 0, "details": "未啟動或連線超時 (Port 8000)", "models": []})
+
+    # 4. Stable Diffusion WebUI / ComfyUI 繪圖引擎
     sd_url = "http://127.0.0.1:7860"
     try:
         t0 = time.time()
@@ -671,8 +710,11 @@ async def handle_settings() -> tuple[Response, int] | Response:
 
 
 @app.route("/api/restart", methods=["POST"])
-async def restart_bot() -> Response:
+async def restart_bot() -> Response | tuple[Response, int]:
     """Trigger a self-restart via bat launcher (conda-env safe, VS Code compatible)."""
+    if not _is_admin_request(request):
+        return jsonify({"status": "error", "message": "重啟雪莉僅限登入管理員使用，請先登入！"}), 403
+
     import asyncio
     import logging
     import os
@@ -686,18 +728,32 @@ async def restart_bot() -> Response:
         pass
 
     def _do_restart() -> None:
+        import sys
         logger = logging.getLogger(__name__)
-        logger.info("Launching restart_sherry.bat ...")
-        bat = os.path.join(os.getcwd(), "restart_sherry.bat")
-        try:
-            subprocess.Popen(
-                ["cmd.exe", "/C", bat],
-                cwd=os.getcwd(),
-                creationflags=0x00000010,  # CREATE_NEW_CONSOLE (完全脫離 VS Code 終端)
-                close_fds=True,
-            )
-        except Exception as e:
-            logger.error("Failed to launch restart_sherry.bat: %s", e)
+        if sys.platform == "win32":
+            logger.info("Launching restart_sherry.bat ...")
+            bat = os.path.join(os.getcwd(), "restart_sherry.bat")
+            try:
+                subprocess.Popen(
+                    ["cmd.exe", "/C", bat],
+                    cwd=os.getcwd(),
+                    creationflags=0x00000010,  # CREATE_NEW_CONSOLE (完全脫離 VS Code 終端)
+                    close_fds=True,
+                )
+            except Exception as e:
+                logger.error("Failed to launch restart_sherry.bat: %s", e)
+        else:
+            logger.info("Launching restart_sherry.sh ...")
+            sh = os.path.join(os.getcwd(), "restart_sherry.sh")
+            try:
+                subprocess.Popen(
+                    ["/bin/bash", sh],
+                    cwd=os.getcwd(),
+                    start_new_session=True,
+                    close_fds=True,
+                )
+            except Exception as e:
+                logger.error("Failed to launch restart_sherry.sh: %s", e)
         logging.shutdown()
         os._exit(0)  # 立即由 OS 釋放 Socket，避免 Python GC 出現 SSL Transport 錯誤
 
@@ -705,6 +761,36 @@ async def restart_bot() -> Response:
     return jsonify({
         "status": "restarting",
         "message": "雪莉機器人正在重新啟動中，請稍候約 5-10 秒..."
+    })
+
+
+@app.route("/api/stop", methods=["POST"])
+async def stop_bot() -> Response | tuple[Response, int]:
+    """Trigger a self-shutdown of the Sherry bot process. Admin-only."""
+    if not _is_admin_request(request):
+        return jsonify({"status": "error", "message": "關閉雪莉僅限登入管理員使用，請先登入！"}), 403
+
+    import asyncio
+    import logging
+    import os
+
+    try:
+        from mod.audit_manager import audit_manager
+        token = _get_request_token(request)
+        audit_manager.record_action(token, "系統操作", "觸發關閉/停止雪莉機器人")
+    except Exception:
+        pass
+
+    def _do_stop() -> None:
+        logger = logging.getLogger(__name__)
+        logger.info("Stopping Sherry bot per admin request...")
+        logging.shutdown()
+        os._exit(0)  # 立即終止 Python 程序與 Web UI
+
+    asyncio.get_running_loop().call_later(0.8, _do_stop)
+    return jsonify({
+        "status": "stopping",
+        "message": "雪莉機器人已接收關閉指令，即將停止運行。"
     })
 
 
@@ -717,18 +803,32 @@ async def update_and_restart() -> Response:
     import subprocess
 
     def _do_update() -> None:
+        import sys
         logger = logging.getLogger(__name__)
-        logger.info("Launching update_and_restart.bat (git pull + restart)...")
-        bat = os.path.join(os.getcwd(), "update_and_restart.bat")
-        try:
-            subprocess.Popen(
-                ["cmd.exe", "/C", bat],
-                cwd=os.getcwd(),
-                creationflags=0x00000010,  # CREATE_NEW_CONSOLE
-                close_fds=True,
-            )
-        except Exception as e:
-            logger.error("Failed to launch update_and_restart.bat: %s", e)
+        if sys.platform == "win32":
+            logger.info("Launching update_and_restart.bat (git pull + restart)...")
+            bat = os.path.join(os.getcwd(), "update_and_restart.bat")
+            try:
+                subprocess.Popen(
+                    ["cmd.exe", "/C", bat],
+                    cwd=os.getcwd(),
+                    creationflags=0x00000010,  # CREATE_NEW_CONSOLE
+                    close_fds=True,
+                )
+            except Exception as e:
+                logger.error("Failed to launch update_and_restart.bat: %s", e)
+        else:
+            logger.info("Launching update_and_restart.sh (git pull + restart)...")
+            sh = os.path.join(os.getcwd(), "update_and_restart.sh")
+            try:
+                subprocess.Popen(
+                    ["/bin/bash", sh],
+                    cwd=os.getcwd(),
+                    start_new_session=True,
+                    close_fds=True,
+                )
+            except Exception as e:
+                logger.error("Failed to launch update_and_restart.sh: %s", e)
         logging.shutdown()
         os._exit(0)  # 立即由 OS 釋放 Socket，避免 Python GC 出現 SSL Transport 錯誤
 
@@ -1189,26 +1289,184 @@ async def get_bot_live_status() -> Response:
 # Dynamic Plugin / Mod Endpoints
 # ---------------------------------------------------------------------------
 
+# Known mod registry — each entry maps mod key to display metadata.
+# Mods not in this registry but found on disk will still be listed as "unknown" type.
+_MOD_REGISTRY: dict[str, dict[str, Any]] = {
+    "game_center": {
+        "display_name": "🎮 小遊戲遊樂場",
+        "description": "與雪莉名偵探使用地端 LLM 進行 21 點、猜拳、踩地雷等對弈互動！",
+        "category": "娛樂 / Entertainment",
+        "nav_id": "nav-games",  # front-end nav button id to hide/show
+        "python_pkg": "mod.game_center",
+        "info_attr": "MOD_INFO",
+    },
+    "dnd": {
+        "display_name": "🐉 D&D 跑團引擎",
+        "description": "Discord 桌上角色扮演遊戲引擎，支援骰子、NPC 生成、世界模擬與戰鬥系統。",
+        "category": "娛樂 / Entertainment",
+        "nav_id": None,
+        "python_pkg": "mod.dnd",
+        "info_attr": None,
+    },
+    "market_plugin": {
+        "display_name": "📈 市場資料分析外掛",
+        "description": "股市、PTCG 卡牌市場即時行情追蹤與 AI 分析報告生成器。",
+        "category": "資料 / Data",
+        "nav_id": None,
+        "python_pkg": "mod.market_plugin",
+        "info_attr": None,
+    },
+}
+
+_MOD_CONFIG_PATH: Path = settings.DATA_DIR / "mod_config.json"
+
+
+def _load_mod_config() -> dict[str, bool]:
+    """Load mod enabled/disabled state from data/mod_config.json.
+
+    Returns:
+        dict[str, bool]: Mapping of mod_key -> enabled (True = enabled).
+    """
+    if _MOD_CONFIG_PATH.exists():
+        try:
+            raw = _MOD_CONFIG_PATH.read_text(encoding="utf-8")
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return {str(k): bool(v) for k, v in data.items()}
+        except Exception as exc:
+            logger.warning("Failed to read mod_config.json: %s", exc)
+    return {}
+
+
+def _save_mod_config(config: dict[str, bool]) -> None:
+    """Persist mod enabled/disabled state to data/mod_config.json.
+
+    Args:
+        config: Mapping of mod_key -> enabled.
+    """
+    _MOD_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _MOD_CONFIG_PATH.write_text(
+        json.dumps(config, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _is_mod_enabled(mod_key: str, config: dict[str, bool]) -> bool:
+    """Check if a mod is enabled in the config (defaults to True if not set).
+
+    Args:
+        mod_key: The mod identifier string.
+        config: The loaded mod config dict.
+
+    Returns:
+        bool: True if enabled (default), False if explicitly disabled.
+    """
+    return config.get(mod_key, True)
+
+
 @app.route("/api/modules", methods=["GET"])
 async def get_dynamic_modules() -> Response:
-    """Return available optional modules detected under ./mod/."""
+    """Return available optional modules detected under ./mod/.
+
+    Combines on-disk discovery with persisted enabled/disabled state.
+    Includes rich metadata from the module registry.
+    """
+    import importlib
+    import importlib.util
+
+    mod_config = _load_mod_config()
     modules: dict[str, Any] = {}
-    try:
-        import importlib
-        spec = importlib.util.find_spec("mod.game_center")
-        if spec is not None:
-            from mod.game_center import MOD_INFO
-            modules["game_center"] = {
-                "enabled": True,
-                "info": MOD_INFO,
-            }
-        else:
-            modules["game_center"] = {"enabled": False}
-    except Exception as exc:
-        logger.warning("Dynamic module detection error for game_center: %s", exc)
-        modules["game_center"] = {"enabled": False}
+
+    # Scan ./mod/ directory for sub-packages
+    mod_base = Path("mod")
+    discovered_keys: list[str] = []
+    if mod_base.is_dir():
+        for child in sorted(mod_base.iterdir()):
+            if (
+                child.is_dir()
+                and not child.name.startswith("_")
+                and (child / "__init__.py").exists()
+            ):
+                discovered_keys.append(child.name)
+
+    for mod_key in discovered_keys:
+        registry_meta = _MOD_REGISTRY.get(mod_key, {})
+        enabled = _is_mod_enabled(mod_key, mod_config)
+        python_pkg = registry_meta.get("python_pkg", f"mod.{mod_key}")
+        info_attr = registry_meta.get("info_attr")
+
+        # Try to load MOD_INFO from the package
+        extra_info: dict[str, Any] = {}
+        try:
+            spec = importlib.util.find_spec(python_pkg)
+            if spec is not None and info_attr:
+                mod = importlib.import_module(python_pkg)
+                extra_info = getattr(mod, info_attr, {}) or {}
+        except Exception as exc:
+            logger.debug("Could not load info for mod '%s': %s", mod_key, exc)
+
+        modules[mod_key] = {
+            "enabled": enabled,
+            "display_name": registry_meta.get("display_name", f"📦 {mod_key}"),
+            "description": registry_meta.get("description", "未登記的自訂模組。"),
+            "category": registry_meta.get("category", "自訂 / Custom"),
+            "nav_id": registry_meta.get("nav_id"),
+            "info": extra_info,
+        }
 
     return jsonify({"modules": modules})
+
+
+@app.route("/api/modules/toggle", methods=["POST"])
+async def toggle_module() -> tuple[Response, int] | Response:
+    """Enable or disable a mod module. Admin-only.
+
+    Expects JSON body: { "mod_key": str, "enabled": bool }
+
+    Returns:
+        Response: JSON status response.
+    """
+    if not _is_admin_request(request):
+        return jsonify({"status": "error", "message": "模組管理需要管理員身份，請先登入！"}), 403
+
+    data: dict[str, Any] = await request.get_json() or {}
+    mod_key = str(data.get("mod_key", "")).strip()
+    enable = bool(data.get("enabled", True))
+
+    if not mod_key or mod_key.startswith("_") or "/" in mod_key or "\\" in mod_key:
+        return jsonify({"status": "error", "message": "無效的模組名稱！"}), 400
+
+    # Verify the mod directory actually exists
+    mod_path = Path("mod") / mod_key
+    if not mod_path.is_dir():
+        return jsonify({"status": "error", "message": f"找不到模組目錄: mod/{mod_key}"}), 404
+
+    # Load, update, and persist config
+    mod_config = _load_mod_config()
+    mod_config[mod_key] = enable
+    _save_mod_config(mod_config)
+
+    # Audit log
+    try:
+        from mod.audit_manager import audit_manager
+        token = _get_request_token(request)
+        action_desc = "啟用" if enable else "停用"
+        audit_manager.record_action(
+            token,
+            "模組管理",
+            f"{action_desc}模組: {mod_key}",
+        )
+    except Exception:
+        pass
+
+    action_zh = "啟用" if enable else "停用"
+    logger.info("Mod '%s' %s by admin request.", mod_key, action_zh)
+    return jsonify({
+        "status": "success",
+        "mod_key": mod_key,
+        "enabled": enable,
+        "message": f"模組「{mod_key}」已{action_zh}，請重啟雪莉以套用變更。",
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -1432,6 +1690,201 @@ async def hint_minesweeper() -> Response:
         return jsonify({"error": str(exc)}), 500
 
 
+# ── New Games: Turtle Soup, 20Q Akinator, Escape Room, Tic-Tac-Toe ──
+
+_turtle_soup_engine: Any = None
+_akinator_engine: Any = None
+_escape_room_engine: Any = None
+_ttt_engine: Any = None
+
+
+@app.route("/api/games/turtle_soup/start", methods=["POST"])
+async def start_turtle_soup() -> Response:
+    """Start Turtle Soup game."""
+    try:
+        from mod.game_center.turtle_soup import TurtleSoupEngine
+        global _turtle_soup_engine
+        if _turtle_soup_engine is None:
+            _turtle_soup_engine = TurtleSoupEngine()
+
+        state = _turtle_soup_engine.start_game()
+        return jsonify(state.to_dict())
+    except Exception as exc:
+        logger.error("Turtle soup start error: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/games/turtle_soup/ask", methods=["POST"])
+async def ask_turtle_soup() -> Response:
+    """Ask question to Sherry Turtle Soup host."""
+    try:
+        data = await request.get_json() or {}
+        game_id = data.get("game_id", "")
+        question = data.get("question", "")
+
+        global _turtle_soup_engine
+        if not _turtle_soup_engine:
+            return jsonify({"error": "Game engine not initialized"}), 404
+
+        state = _turtle_soup_engine.get_game(game_id)
+        if not state:
+            return jsonify({"error": "Game not found"}), 404
+
+        from mod.game_center.sherry_ai import SherryGameAIService
+        ai_service = SherryGameAIService()
+
+        reply = await ai_service.generate_turtle_soup_reply(
+            surface_story=state.surface_story,
+            truth=state.truth,
+            player_question=question,
+        )
+        state.dialogue_history.append({"q": question, "a": reply})
+        state.sherry_reply = reply
+        return jsonify(state.to_dict())
+    except Exception as exc:
+        logger.error("Turtle soup ask error: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/games/akinator/start", methods=["POST"])
+async def start_akinator() -> Response:
+    """Start Akinator 20 Questions."""
+    try:
+        from mod.game_center.akinator_20q import AkinatorEngine
+        global _akinator_engine
+        if _akinator_engine is None:
+            _akinator_engine = AkinatorEngine()
+
+        state = _akinator_engine.start_game()
+        return jsonify(state.to_dict())
+    except Exception as exc:
+        logger.error("Akinator start error: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/games/akinator/answer", methods=["POST"])
+async def answer_akinator() -> Response:
+    """Submit answer to 20 Questions."""
+    try:
+        data = await request.get_json() or {}
+        game_id = data.get("game_id", "")
+        answer = data.get("answer", "是")
+
+        global _akinator_engine
+        if not _akinator_engine:
+            return jsonify({"error": "Game not initialized"}), 404
+
+        state = _akinator_engine.record_answer(game_id, answer)
+        if not state:
+            return jsonify({"error": "Game not found"}), 404
+
+        from mod.game_center.sherry_ai import SherryGameAIService
+        ai_service = SherryGameAIService()
+
+        next_q = await ai_service.generate_20q_next_question(
+            history=state.history,
+            q_count=state.question_count,
+        )
+        state.current_question = next_q
+        return jsonify(state.to_dict())
+    except Exception as exc:
+        logger.error("Akinator answer error: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/games/escape_room/start", methods=["POST"])
+async def start_escape_room() -> Response:
+    """Start Detective Escape Room."""
+    try:
+        from mod.game_center.escape_room import EscapeRoomEngine
+        global _escape_room_engine
+        if _escape_room_engine is None:
+            _escape_room_engine = EscapeRoomEngine()
+
+        state = _escape_room_engine.start_game()
+        return jsonify(state.to_dict())
+    except Exception as exc:
+        logger.error("Escape room start error: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/games/escape_room/action", methods=["POST"])
+async def action_escape_room() -> Response:
+    """Investigate target in escape room."""
+    try:
+        data = await request.get_json() or {}
+        game_id = data.get("game_id", "")
+        target = data.get("target", "書桌")
+
+        global _escape_room_engine
+        if not _escape_room_engine:
+            return jsonify({"error": "Game not initialized"}), 404
+
+        state = _escape_room_engine.get_game(game_id)
+        if not state:
+            return jsonify({"error": "Game not found"}), 404
+
+        from mod.game_center.sherry_ai import SherryGameAIService
+        ai_service = SherryGameAIService()
+
+        if target not in state.inventory:
+            state.inventory.append(f"從{target}獲得的線索")
+
+        narration = await ai_service.generate_escape_room_narration(
+            action=target,
+            inventory=state.inventory,
+        )
+        state.sherry_narration = narration
+        return jsonify(state.to_dict())
+    except Exception as exc:
+        logger.error("Escape room action error: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/games/ttt/start", methods=["POST"])
+async def start_ttt() -> Response:
+    """Start Tic-Tac-Toe."""
+    try:
+        from mod.game_center.tic_tac_toe import TicTacToeEngine
+        global _ttt_engine
+        if _ttt_engine is None:
+            _ttt_engine = TicTacToeEngine()
+
+        state = _ttt_engine.start_game()
+        return jsonify(state.to_dict())
+    except Exception as exc:
+        logger.error("TTT start error: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/games/ttt/move", methods=["POST"])
+async def move_ttt() -> Response:
+    """Make move in Tic-Tac-Toe."""
+    try:
+        data = await request.get_json() or {}
+        game_id = data.get("game_id", "")
+        index = int(data.get("index", 0))
+
+        global _ttt_engine
+        if not _ttt_engine:
+            return jsonify({"error": "Game not initialized"}), 404
+
+        state = _ttt_engine.player_move(game_id, index)
+        if not state:
+            return jsonify({"error": "Game not found"}), 404
+
+        from mod.game_center.sherry_ai import SherryGameAIService
+        ai_service = SherryGameAIService()
+
+        dialogue = await ai_service.generate_ttt_dialogue(state.status.value)
+        state.sherry_dialogue = dialogue
+        return jsonify(state.to_dict())
+    except Exception as exc:
+        logger.error("TTT move error: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+
 # ---------------------------------------------------------------------------
 # Entry point (used by main.py via asyncio)
 # ---------------------------------------------------------------------------
@@ -1521,8 +1974,18 @@ async def start_server_async(bot: Any = None) -> None:
         kwargs["ssl_certfile"] = ssl_certfile
         kwargs["ssl_keyfile"] = ssl_keyfile
 
-    config = uvicorn.Config(**kwargs)
-    server = uvicorn.Server(config)
-    await server.serve()
+    try:
+        config = uvicorn.Config(**kwargs)
+        server = uvicorn.Server(config)
+        await server.serve()
+    except (OSError, SystemExit) as e:
+        if kwargs.get("host") != "0.0.0.0":
+            logger.warning("Failed to bind Web UI on %s:%s (%s), falling back to 0.0.0.0...", kwargs.get("host"), kwargs.get("port"), e)
+            kwargs["host"] = "0.0.0.0"
+            config = uvicorn.Config(**kwargs)
+            server = uvicorn.Server(config)
+            await server.serve()
+        else:
+            raise
 
 

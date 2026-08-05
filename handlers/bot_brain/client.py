@@ -25,32 +25,76 @@ class OllamaClient:
 
     def __init__(
         self,
-        base_url: str = settings.OLLAMA_BASE_URL,
-        lms_base_url: str = settings.LMS_BASE_URL,
-        openai_base_url: str = settings.OPENAI_BASE_URL,
-        openai_api_key: str = settings.OPENAI_API_KEY,
-        deepseek_base_url: str = settings.DEEPSEEK_BASE_URL,
-        deepseek_api_key: str = settings.DEEPSEEK_API_KEY,
-        gemini_base_url: str = settings.GEMINI_BASE_URL,
-        gemini_api_key: str = settings.GEMINI_API_KEY,
-        claude_base_url: str = settings.CLAUDE_BASE_URL,
-        claude_api_key: str = settings.CLAUDE_API_KEY,
+        base_url: str | None = None,
+        lms_base_url: str | None = None,
+        openai_base_url: str | None = None,
+        openai_api_key: str | None = None,
+        deepseek_base_url: str | None = None,
+        deepseek_api_key: str | None = None,
+        gemini_base_url: str | None = None,
+        gemini_api_key: str | None = None,
+        claude_base_url: str | None = None,
+        claude_api_key: str | None = None,
     ) -> None:
-        # Local backends
-        self._base_url = base_url.rstrip("/")
-        self._lms_base_url = lms_base_url.rstrip("/")
+        # Custom overrides (if explicitly passed)
+        self._custom_base_url = base_url
+        self._custom_lms_base_url = lms_base_url
+        self._custom_openai_base_url = openai_base_url
+        self._custom_openai_api_key = openai_api_key
+        self._custom_deepseek_base_url = deepseek_base_url
+        self._custom_deepseek_api_key = deepseek_api_key
+        self._custom_gemini_base_url = gemini_base_url
+        self._custom_gemini_api_key = gemini_api_key
+        self._custom_claude_base_url = claude_base_url
+        self._custom_claude_api_key = claude_api_key
 
-        # Cloud OpenAI-compatible backends
-        self._openai_base_url = openai_base_url.rstrip("/")
-        self._openai_api_key = openai_api_key
-        self._deepseek_base_url = deepseek_base_url.rstrip("/")
-        self._deepseek_api_key = deepseek_api_key
-        self._gemini_base_url = gemini_base_url.rstrip("/")
-        self._gemini_api_key = gemini_api_key
+        self._session: aiohttp.ClientSession | None = None
 
-        # Anthropic Claude
-        self._claude_base_url = claude_base_url.rstrip("/")
-        self._claude_api_key = claude_api_key
+    @property
+    def _base_url(self) -> str:
+        url = self._custom_base_url or getattr(settings, "OLLAMA_BASE_URL", "http://localhost:11434")
+        return url.rstrip("/")
+
+    @property
+    def _lms_base_url(self) -> str:
+        url = self._custom_lms_base_url or getattr(settings, "LMS_BASE_URL", "http://localhost:1234/v1")
+        return url.rstrip("/")
+
+    @property
+    def _openai_base_url(self) -> str:
+        url = self._custom_openai_base_url or getattr(settings, "OPENAI_BASE_URL", "https://api.openai.com/v1")
+        return url.rstrip("/")
+
+    @property
+    def _openai_api_key(self) -> str:
+        return self._custom_openai_api_key or getattr(settings, "OPENAI_API_KEY", "")
+
+    @property
+    def _deepseek_base_url(self) -> str:
+        url = self._custom_deepseek_base_url or getattr(settings, "DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
+        return url.rstrip("/")
+
+    @property
+    def _deepseek_api_key(self) -> str:
+        return self._custom_deepseek_api_key or getattr(settings, "DEEPSEEK_API_KEY", "")
+
+    @property
+    def _gemini_base_url(self) -> str:
+        url = self._custom_gemini_base_url or getattr(settings, "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
+        return url.rstrip("/")
+
+    @property
+    def _gemini_api_key(self) -> str:
+        return self._custom_gemini_api_key or getattr(settings, "GEMINI_API_KEY", "")
+
+    @property
+    def _claude_base_url(self) -> str:
+        url = self._custom_claude_base_url or getattr(settings, "CLAUDE_BASE_URL", "https://api.anthropic.com/v1")
+        return url.rstrip("/")
+
+    @property
+    def _claude_api_key(self) -> str:
+        return self._custom_claude_api_key or getattr(settings, "CLAUDE_API_KEY", "")
 
         self._session: aiohttp.ClientSession | None = None
 
@@ -64,6 +108,11 @@ class OllamaClient:
     # Helpers – extract prefix & decide routing backend
     # ------------------------------------------------------------------
 
+    @property
+    def _vllm_base_url(self) -> str:
+        url = self._custom_vllm_base_url if hasattr(self, "_custom_vllm_base_url") and self._custom_vllm_base_url else getattr(settings, "VLLM_BASE_URL", "http://localhost:8000/v1")
+        return url.rstrip("/")
+
     @staticmethod
     def _parse_model(model: str) -> tuple[str, str]:
         """Return (backend_key, actual_model_name)."""
@@ -73,6 +122,7 @@ class OllamaClient:
             "gemini:":   7,
             "openai:":   7,
             "lms:":      4,
+            "vllm:":     5,
             "ollama:":   7,
         }
         for prefix, length in PREFIX_MAP.items():
@@ -132,6 +182,9 @@ class OllamaClient:
         logger.debug("%s request → model=%s url=%s", backend_label, actual_model, url)
 
         async with session.post(url, json=payload, headers=headers) as resp:
+            if resp.status >= 400:
+                err_body = await resp.text()
+                logger.error("%s API 錯誤 (HTTP %s): %s", backend_label, resp.status, err_body)
             resp.raise_for_status()
             data: dict[str, Any] = await resp.json()
 
@@ -212,9 +265,11 @@ class OllamaClient:
                     user_msg,
                 ],
                 "stream": False,
+                "keep_alive": getattr(settings, "OLLAMA_KEEP_ALIVE", "60m"),
                 "options": {
                     "num_ctx": settings.LLM_MAX_CONTEXT_TOKENS,
                     "num_predict": settings.LLM_MAX_OUTPUT_TOKENS,
+                    "num_batch": getattr(settings, "LLM_NUM_BATCH", 2048),
                     "temperature": getattr(settings, "LLM_TEMPERATURE", 0.85),
                     "presence_penalty": getattr(settings, "LLM_PRESENCE_PENALTY", 0.6),
                     "frequency_penalty": getattr(settings, "LLM_FREQUENCY_PENALTY", 0.6),
@@ -224,6 +279,20 @@ class OllamaClient:
             logger.debug("Ollama request → model=%s url=%s", actual_model, url)
 
             async with session.post(url, json=payload) as resp:
+                if resp.status >= 400:
+                    err_body = await resp.text()
+                    logger.error("Ollama API 錯誤 (HTTP %s): %s", resp.status, err_body)
+                    # 如果是因為 num_batch 導致 400 Bad Request，自動剔除 num_batch 重試一次
+                    if resp.status == 400 and "num_batch" in payload.get("options", {}):
+                        logger.warning("Ollama 不支援或拒絕 options.num_batch，自動降級重試...")
+                        payload["options"].pop("num_batch", None)
+                        async with session.post(url, json=payload) as retry_resp:
+                            if retry_resp.status >= 400:
+                                retry_body = await retry_resp.text()
+                                logger.error("Ollama 降級重試失敗 (HTTP %s): %s", retry_resp.status, retry_body)
+                            retry_resp.raise_for_status()
+                            data = await retry_resp.json()
+                            return data["message"]["content"].strip()
                 resp.raise_for_status()
                 data: dict[str, Any] = await resp.json()
 
@@ -244,6 +313,19 @@ class OllamaClient:
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 backend_label="LMS",
+                images=images,
+            )
+
+        # --- vLLM (High-Performance Engine, OpenAI-compatible) ---
+        if backend == "vllm":
+            return await self._request_openai_compatible(
+                session,
+                base_url=self._vllm_base_url,
+                api_key=getattr(settings, "VLLM_API_KEY", ""),
+                actual_model=actual_model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                backend_label="vLLM",
                 images=images,
             )
 

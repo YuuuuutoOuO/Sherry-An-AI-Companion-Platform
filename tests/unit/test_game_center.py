@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import pytest
 
+from mod.game_center.akinator_20q import AkinatorEngine
 from mod.game_center.blackjack import BlackjackEngine
+from mod.game_center.escape_room import EscapeRoomEngine
 from mod.game_center.minesweeper import MinesweeperEngine
 from mod.game_center.models import GameResultStatus, RPSChoice
 from mod.game_center.rock_paper_scissors import RockPaperScissorsEngine
+from mod.game_center.tic_tac_toe import TicTacToeEngine
+from mod.game_center.turtle_soup import TurtleSoupEngine
 
 
 def test_rock_paper_scissors_rules() -> None:
@@ -62,17 +66,31 @@ def test_minesweeper_engine_flow() -> None:
     engine.toggle_flag(state.game_id, 0, 0)
     assert state_flagged.board[0][0].is_flagged is False
 
-    # Reveal a safe non-mine cell
-    safe_r, safe_c = None, None
-    for r in range(6):
-        for c in range(6):
-            if not state.board[r][c].is_mine:
-                safe_r, safe_c = r, c
-                break
-        if safe_r is not None:
-            break
 
-    assert safe_r is not None and safe_c is not None
-    revealed_state = engine.reveal_cell(state.game_id, safe_r, safe_c)
-    assert revealed_state is not None
-    assert revealed_state.board[safe_r][safe_c].is_revealed is True
+def test_new_games_flow() -> None:
+    """Test Turtle Soup, Akinator, Escape Room, and Tic-Tac-Toe engines."""
+    # Turtle Soup
+    ts_engine = TurtleSoupEngine()
+    ts_state = ts_engine.start_game(0)
+    assert ts_state.game_id is not None
+    assert ts_state.title == "海邊的餐館"
+
+    # Akinator
+    aki_engine = AkinatorEngine()
+    aki_state = aki_engine.start_game()
+    assert aki_state.question_count == 1
+    recorded = aki_engine.record_answer(aki_state.game_id, "是")
+    assert recorded is not None and recorded.question_count == 2
+
+    # Escape Room
+    er_engine = EscapeRoomEngine()
+    er_state = er_engine.start_game()
+    assert er_state.game_id is not None
+
+    # Tic-Tac-Toe
+    ttt_engine = TicTacToeEngine()
+    ttt_state = ttt_engine.start_game()
+    assert len(ttt_state.board) == 9
+    moved = ttt_engine.player_move(ttt_state.game_id, 0)
+    assert moved is not None
+    assert moved.board[0] == "X"

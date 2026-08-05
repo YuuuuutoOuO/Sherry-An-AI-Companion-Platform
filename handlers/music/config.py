@@ -5,12 +5,21 @@ import settings
 
 logger = logging.getLogger(__name__)
 
-FFMPEG_EXE_PATH = os.path.join(settings.FFMPEG, "ffmpeg.exe")
+import shutil
+
+# Cross-platform FFmpeg path resolution (Windows ffmpeg.exe vs Linux ffmpeg)
+_system_ffmpeg = shutil.which("ffmpeg")
+if _system_ffmpeg:
+    FFMPEG_EXE_PATH = _system_ffmpeg
+elif os.path.exists(os.path.join(settings.FFMPEG, "ffmpeg.exe")):
+    FFMPEG_EXE_PATH = os.path.join(settings.FFMPEG, "ffmpeg.exe")
+else:
+    FFMPEG_EXE_PATH = "ffmpeg"
 
 # Removed user_agent string that crashed Windows ffmpeg
 # Enabled loudnorm for volume normalization
 FFMPEG_OPTIONS = {
-    'before_options': getattr(settings, "MUSIC_FFMPEG_BEFORE_OPTIONS", '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'),
+    'before_options': getattr(settings, "MUSIC_FFMPEG_BEFORE_OPTIONS", '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -loglevel error'),
     'options': getattr(settings, "MUSIC_FFMPEG_OPTIONS", '-vn -af "loudnorm=I=-14:LRA=11:TP=-1.5"')
 }
 
