@@ -24,6 +24,7 @@ soundfile>=0.12.1
 TTS>=0.22.0
 torch>=2.0.0
 torchaudio>=2.0.0
+numpy>=1.24.0,<2.0.0
 # silero-vad is typically downloaded via torch.hub, but we can add its dependencies if needed.
 
 # Stock / Weather tools (CPU-only, no GPU usage)
@@ -46,3 +47,6 @@ webdriver-manager>=4.0.1
 beautifulsoup4>=4.12.0
 # 修正與 TTS 套件的相依性衝突，鎖定為 2.0 以下的版本
 pandas>=1.4.0,<2.0.0
+
+davey
+PyNaCl

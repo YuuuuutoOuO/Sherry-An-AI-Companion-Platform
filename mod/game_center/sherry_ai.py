@@ -45,12 +45,6 @@ FALLBACK_RPS_DRAW = [
     "不分勝負！再來一局，本名偵探這次要認真了喔！🔍",
 ]
 
-FALLBACK_BLACKJACK_THOUGHTS = [
-    "目前的牌面有點微妙呢……本名偵探得好好計算一下概率才行！",
-    "哼哼，這點點數還難倒不了我，名偵探的直覺告訴我該這樣做！",
-    "看對方笑得這麼有自信……難道底牌是大牌？我要冷靜分析！",
-]
-
 
 class SherryGameAIService:
     """Service layer to invoke Primary Model LLM for Sherry game commentary."""
@@ -64,16 +58,7 @@ class SherryGameAIService:
         sherry_choice: str,
         outcome: str,
     ) -> str:
-        """Generate Sherry's reaction dialogue after a Rock-Paper-Scissors round.
-
-        Args:
-            player_choice: Player's choice ("rock", "paper", "scissors").
-            sherry_choice: Sherry's choice.
-            outcome: Game outcome ("win", "lose", "draw").
-
-        Returns:
-            Sherry's reaction text.
-        """
+        """Generate Sherry's reaction dialogue after a Rock-Paper-Scissors round."""
         prompt = (
             f"我們剛玩了一局猜拳！\n"
             f"玩家出了：{player_choice}\n"
@@ -93,7 +78,6 @@ class SherryGameAIService:
         except Exception as e:
             logger.warning("RPS LLM generation failed, using fallback: %s", e)
 
-        # Fallback based on outcome
         if outcome == "win":
             return random.choice(FALLBACK_RPS_WIN)
         elif outcome == "lose":
@@ -105,21 +89,10 @@ class SherryGameAIService:
         player_score: int,
         dealer_cards_str: str,
         dealer_score: int,
-        action: str,  # "hit", "stand", "start"
-        status: str,  # "ongoing", "win", "lose", "draw"
+        action: str,
+        status: str,
     ) -> tuple[str, str]:
-        """Generate Sherry's inner thought and public dialogue during Blackjack.
-
-        Args:
-            player_score: Current player total.
-            dealer_cards_str: Visible dealer cards.
-            dealer_score: Sherry dealer total.
-            action: Latest action taken.
-            status: Round status.
-
-        Returns:
-            Tuple of (inner_thought, public_dialogue).
-        """
+        """Generate Sherry's inner thought and public dialogue during Blackjack."""
         prompt = (
             f"你正在和玩家玩 21點 (Blackjack)！雪莉你是莊家。\n"
             f"當前狀態：\n"
@@ -147,9 +120,9 @@ class SherryGameAIService:
                     dialogue = parts[1].strip()
                 return thought, dialogue
         except Exception as e:
-            logger.warning("Blackjack LLM generation failed, using fallback: %s", e)
+            logger.warning("Blackjack LLM generation failed: %s", e)
 
-        thought = random.choice(FALLBACK_BLACKJACK_THOUGHTS)
+        thought = "目前的牌面有點微妙呢……本名偵探得好好計算一下概率才行！"
         if status == "win":
             dialogue = "哼哼！本名偵探的莊家點數正中目標，這局我贏啦 🍊✨"
         elif status == "lose":
@@ -167,16 +140,7 @@ class SherryGameAIService:
         revealed_count: int,
         mine_count: int,
     ) -> str:
-        """Generate a detective hint for Minesweeper when requested by player.
-
-        Args:
-            board_summary: Text representation of current revealed board state.
-            revealed_count: Number of revealed cells.
-            mine_count: Total mines on board.
-
-        Returns:
-            Sherry's detective hint text.
-        """
+        """Generate a detective hint for Minesweeper when requested by player."""
         prompt = (
             f"玩家在玩踩地雷，並按下了『求助雪莉 (名偵探推理)』按鈕！\n"
             f"地圖概況：已揭開 {revealed_count} 格，共有 {mine_count} 個地雷。\n"
@@ -193,9 +157,101 @@ class SherryGameAIService:
             if res and res.strip():
                 return res.strip()
         except Exception as e:
-            logger.warning("Minesweeper LLM generation failed, using fallback: %s", e)
+            logger.warning("Minesweeper LLM generation failed: %s", e)
 
-        return (
-            "🔍 名偵探觀察紀錄：注意看那些數字 1 與 2 的交界處！"
-            "經驗告訴我周圍必定隱藏著線索（地雷），踩下去前記得先仔細觀察喔 🍊✨"
+        return "🔍 名偵探觀察紀錄：注意看那些數字 1 與 2 的交界處！經驗告訴我周圍必定隱藏著線索 🍊✨"
+
+    async def generate_turtle_soup_reply(
+        self,
+        surface_story: str,
+        truth: str,
+        player_question: str,
+    ) -> str:
+        """Answer Turtle Soup question with 'Yes', 'No', or 'Irrelevant'."""
+        prompt = (
+            f"你正在作為海龜湯 (Situation Puzzle) 的湯主！\n"
+            f"湯面故事：{surface_story}\n"
+            f"湯底真實答案：{truth}\n"
+            f"玩家提問：{player_question}\n\n"
+            "請判斷玩家的問題，並用雪莉傲嬌名偵探的語氣回答（明確指出是/否/無關，並加上一句雪莉式點評）！"
         )
+        try:
+            model = getattr(settings, "PRIMARY_MODEL", "ollama:llama3.2")
+            res = await self._client.chat(
+                model=model,
+                system_prompt=SHERRY_GAME_SYSTEM_PROMPT,
+                user_prompt=prompt,
+            )
+            if res and res.strip():
+                return res.strip()
+        except Exception as e:
+            logger.warning("Turtle Soup LLM failed: %s", e)
+
+        return "🔍 [名偵探判定]：這個問題與湯底無關喔！再換個角度思考看看吧 🍊✨"
+
+    async def generate_20q_next_question(
+        self,
+        history: list[dict[str, str]],
+        q_count: int,
+    ) -> str:
+        """Generate Akinator 20-Questions question or final guess."""
+        history_str = "\n".join(f"Q{item['q_num']}: {item['question']} -> 玩家回答: {item['answer']}" for item in history)
+        prompt = (
+            f"你正在玩雪莉讀心術 (20 Questions)！已經問了 {q_count - 1} 個問題。\n"
+            f"歷史問答：\n{history_str}\n\n"
+            f"若是第 {q_count} 題，請用雪莉名偵探口吻提出下一個能縮小範圍的好問題，或者若很有把握直接猜測答案！"
+        )
+        try:
+            model = getattr(settings, "PRIMARY_MODEL", "ollama:llama3.2")
+            res = await self._client.chat(
+                model=model,
+                system_prompt=SHERRY_GAME_SYSTEM_PROMPT,
+                user_prompt=prompt,
+            )
+            if res and res.strip():
+                return res.strip()
+        except Exception as e:
+            logger.warning("20Q LLM failed: %s", e)
+
+        return f"第 {q_count} 題：請問這個角色/物品具備戰鬥能力或特殊超能力嗎？🔍"
+
+    async def generate_escape_room_narration(
+        self,
+        action: str,
+        inventory: list[str],
+    ) -> str:
+        """Generate Escape Room investigation narration."""
+        prompt = (
+            f"玩家與雪莉名偵探在密室逃脫！\n"
+            f"玩家調查了：{action}\n"
+            f"目前手邊道具：{inventory}\n"
+            "請以雪莉夥伴的視角描繪調查發現與搞笑/緊張氛圍！"
+        )
+        try:
+            model = getattr(settings, "PRIMARY_MODEL", "ollama:llama3.2")
+            res = await self._client.chat(
+                model=model,
+                system_prompt=SHERRY_GAME_SYSTEM_PROMPT,
+                user_prompt=prompt,
+            )
+            if res and res.strip():
+                return res.strip()
+        except Exception as e:
+            logger.warning("Escape Room LLM failed: %s", e)
+
+        return f"🔍 雪莉湊上前仔細觀察『{action}』……哇！這裡發現了一枚暗藏的銅質鑰匙！🍊✨"
+
+    async def generate_ttt_dialogue(
+        self,
+        status: str,
+    ) -> str:
+        """Generate Tic-Tac-Toe reaction."""
+        if status == "win":
+            return "可惡……竟然被你成功連線了！本名偵探大意了啦 哼！🍊"
+        elif status == "lose":
+            return "哈哈！三星連線！本名偵探的棋路可是無法預測的！✨✦"
+        elif status == "draw":
+            dialogue = "和局！看來我們的思維撞在同一條線上呢 🔍"
+        else:
+            dialogue = "換你下棋囉！名偵探嚴陣以待！✨"
+        return dialogue

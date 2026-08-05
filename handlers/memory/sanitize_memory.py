@@ -261,10 +261,10 @@ async def _call_llm_direct(system_prompt: str, user_prompt: str, uid: str) -> di
     # lms:gemma-4-12b → gemma-4-12b；ollama:xxx → xxx
     if ":" in raw_model:
         model_name = raw_model.split(":", 1)[1]
-        base = "http://localhost:11434" if raw_model.startswith("ollama") else "http://localhost:1234"
+        base = settings.OLLAMA_BASE_URL if raw_model.startswith("ollama") else settings.LMS_BASE_URL
     else:
         model_name = raw_model
-        base = "http://localhost:11434"
+        base = settings.OLLAMA_BASE_URL
 
     payload = {
         "model": model_name,

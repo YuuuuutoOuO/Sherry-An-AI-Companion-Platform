@@ -25,9 +25,10 @@ logger = logging.getLogger(__name__)
 from file.AI_personality import BOT_NAME, CORE_PERSONA, LOREBOOK
 
 # ---------------------------------------------------------------------------
-# Load .env
-# ---------------------------------------------------------------------------
-load_dotenv(override=True)
+try:
+    load_dotenv(override=True, encoding="utf-8")
+except Exception as e:
+    logger.warning("Failed to load .env file: %s", e)
 
 # ---------------------------------------------------------------------------
 # Project Paths
@@ -99,6 +100,7 @@ NSFW_ALLOWED_CHANNEL_IDS: list[int] = []
 # --- 本機後端 Base URLs ---
 OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 LMS_BASE_URL: str = os.getenv("LMS_BASE_URL", "http://localhost:1234/v1")
+VLLM_BASE_URL: str = os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
 
 # --- 雲端 API Keys ---
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
@@ -113,10 +115,10 @@ GEMINI_BASE_URL: str = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.
 CLAUDE_BASE_URL: str = os.getenv("CLAUDE_BASE_URL", "https://api.anthropic.com/v1")
 
 # 主力模型：平衡智商與生成速度，適合日常深度對話與邏輯推演
-PRIMARY_MODEL: str = "lms:huihui-gemma-4-12b-it-abliterated"
+PRIMARY_MODEL: str = "lms:gemma4-12b-qat-uncensored-hauhaucs-balanced"
 
 # 無道德限制模型：專門處理「橘雪莉」缺乏倫理觀的瘋狂人設
-NOMORAL_MODEL: str = "lms:huihui-gemma-4-12b-it-abliterated"
+NOMORAL_MODEL: str = "lms:gemma4-12b-qat-uncensored-hauhaucs-balanced"
 
 # 快速回覆模型：要求極速但需要足夠的基礎智商
 QUICK_MODEL: str = "ollama:krith/mistral-nemo-instruct-2407-abliterated:IQ4_XS"
@@ -136,6 +138,14 @@ CLOUD_SEARCH_MODEL: str = "deepseek:deepseek-v4-flash"
 OLLAMA_TIMEOUT: int = 120
 LLM_MAX_CONTEXT_TOKENS: int = 8192
 LLM_MAX_OUTPUT_TOKENS: int = 1024
+
+# GPU 吞吐量最佳化：Prompt 批次處理量（n_batch）
+# 預設 512 過於保守，A4000 可大幅提升至 2048–4096 以加速 Prefill（降低首字延遲）
+LLM_NUM_BATCH: int = 2048
+
+# Prompt Caching（KV 快取駐留時間）：讓模型與 System Prompt 維持在 VRAM 中
+# 格式："60m"（60分鐘）、"24h"（24小時）、"0"（每次推論後立即卸載）
+OLLAMA_KEEP_ALIVE: str = "60m"
 
 # 調整生成參數以降低跳針（重複生成相同內容）機率
 LLM_TEMPERATURE: float = 0.85
@@ -305,7 +315,7 @@ WEB_UI_HTTP_TIMEOUT: float = 5.0
 # ---------------------------------------------------------------------------
 YOUTUBE_COOKIES_PATH: Path = DATA_DIR / "cookies.txt"
 MUSIC_PLAYLIST_MAX_ITEMS: int = 100
-MUSIC_FFMPEG_BEFORE_OPTIONS: str = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+MUSIC_FFMPEG_BEFORE_OPTIONS: str = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -loglevel error"
 MUSIC_FFMPEG_OPTIONS: str = '-vn -af "loudnorm=I=-14:LRA=11:TP=-1.5"'
 MUSIC_QUEUE_VIEW_TIMEOUT: int = 180
 
@@ -397,6 +407,19 @@ if CONFIG_OVERRIDE_PATH.exists():
             overrides.pop("WEB_UI_HOST", None)
             overrides.pop("WEB_UI_PORT", None)
             overrides.pop("WEB_UI_HTTPS", None)
+            # 若 .env 或環境變數有指定 OLLAMA / LMS / SD 網址，優先使用環境變數
+            if os.getenv("OLLAMA_BASE_URL"):
+                overrides.pop("OLLAMA_BASE_URL", None)
+                globals()["OLLAMA_BASE_URL"] = os.getenv("OLLAMA_BASE_URL")
+            if os.getenv("LMS_BASE_URL"):
+                overrides.pop("LMS_BASE_URL", None)
+                globals()["LMS_BASE_URL"] = os.getenv("LMS_BASE_URL")
+            if os.getenv("VLLM_BASE_URL"):
+                overrides.pop("VLLM_BASE_URL", None)
+                globals()["VLLM_BASE_URL"] = os.getenv("VLLM_BASE_URL")
+            if os.getenv("SD_WEBUI_URL"):
+                overrides.pop("SD_WEBUI_URL", None)
+                globals()["SD_WEBUI_URL"] = os.getenv("SD_WEBUI_URL")
             for k, v in overrides.items():
                 if k in globals():
                     globals()[k] = v
@@ -542,6 +565,20 @@ SETTINGS_META: dict[str, dict] = {
         "min": -2.0,
         "max": 2.0,
         "step": 0.05,
+        "category": "LLM 參數",
+    },
+    "LLM_NUM_BATCH": {
+        "label": "Prompt 批次處理量 (n_batch)",
+        "description": "GPU 單次平行處理的 Prompt Token 批次大小（對應 llama.cpp n_batch）。數值越大首字延遲越低，但 VRAM 佔用略增。RTX A4000 (16GB) 建議 2048–4096。",
+        "type": "int",
+        "min": 512,
+        "max": 8192,
+        "category": "LLM 參數",
+    },
+    "OLLAMA_KEEP_ALIVE": {
+        "label": "Ollama 模型駐留時間 (Keep-Alive)",
+        "description": "推論完成後模型與 KV 快取在 VRAM 中保留多久。支援時間格式：\"60m\"（60 分鐘）、\"24h\"（24 小時）、\"0\"（立即卸載，停用快取）。建議設為 \"60m\" 以發揮 Prompt Caching 效益。",
+        "type": "str",
         "category": "LLM 參數",
     },
     # === 後端端點設定 ===

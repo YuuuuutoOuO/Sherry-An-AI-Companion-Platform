@@ -1,5 +1,91 @@
 [
   {
+    "path": "benchmark_nbatch_cache.py",
+    "module_docstring": "benchmark_nbatch_cache.py\n=========================\n實測 n_batch 調高 與 Prompt Caching (keep_alive) 的實際效能差異。\n\n量測指標：\n  - 首字延遲 (TTFT): 從發出請求到收到第一個 token 的時間\n  - 總延遲 (Total):  完整回覆所需時間\n  - 快取命中 (Cache): Ollama 回報的 prompt_eval_count vs prompt_eval_duration\n\n執行方式：\n  cd <project_root>\n  C:\\Users\\corps\\anaconda3\\envs\\Daily\\python.exe benchmark_nbatch_cache.py",
+    "global_vars": [
+      {
+        "name": "OLLAMA_URL",
+        "line": 25,
+        "value_repr": "'http://localhost:11434'"
+      },
+      {
+        "name": "MODEL",
+        "line": 29,
+        "value_repr": "'krith/mistral-nemo-instruct-2407-abliterated:IQ4_XS'"
+      },
+      {
+        "name": "SYSTEM_PROMPT",
+        "line": 32,
+        "value_repr": "'你是橘雪莉，一個 15 歲活潑可愛的台灣女高中生，同時自稱是名偵探。\\n你說話風格生動活潑，喜歡用台灣年輕人的口氣，偶爾夾雜台灣俗語和流行語。\\n你有強烈的好奇心，對各種謎題和推理遊戲充滿熱情。\\n你很愛吃甜食，特別是珍珠奶茶和麻薯。\\n..."
+      },
+      {
+        "name": "USER_PROMPT",
+        "line": 45,
+        "value_repr": "'嗨雪莉！今天有沒有什麼有趣的事情發生啊？'"
+      }
+    ],
+    "classes": [],
+    "functions": [
+      {
+        "name": "do_request",
+        "line": 49,
+        "is_async": true,
+        "decorators": [],
+        "params": [
+          {
+            "name": "session",
+            "type": "aiohttp.ClientSession"
+          },
+          {
+            "name": "keep_alive",
+            "type": "str"
+          },
+          {
+            "name": "num_batch",
+            "type": "int"
+          },
+          {
+            "name": "label",
+            "type": "str"
+          }
+        ],
+        "return_type": "dict",
+        "docstring": "Send a single /api/chat request and return timing + Ollama metrics."
+      },
+      {
+        "name": "print_result",
+        "line": 103,
+        "is_async": false,
+        "decorators": [],
+        "params": [
+          {
+            "name": "r",
+            "type": "dict"
+          }
+        ],
+        "return_type": "None",
+        "docstring": null
+      },
+      {
+        "name": "main",
+        "line": 113,
+        "is_async": true,
+        "decorators": [],
+        "params": [],
+        "return_type": "None",
+        "docstring": null
+      }
+    ],
+    "imports": [
+      "asyncio",
+      "json",
+      "os",
+      "sys",
+      "time",
+      "aiohttp"
+    ]
+  },
+  {
     "path": "build_tag_dict.py",
     "module_docstring": "build_tag_dict.py\n=================\n二次元標籤庫多源合併工具\n\n來源優先順序（後蓋前，品質越來越高）：\n  1. Danbooru /tags.json API   — 英文原始庫，約 6 萬筆高頻 tag\n  2. e621 tags CSV             — 西方/獸人風格補充，約 5 萬筆\n  3. byzod 中文翻譯包          — 社群維護的中英對照，約 1 萬筆\n\n最終輸出格式（中文 → 英文）：\n  {\n    \"初音未來\": \"hatsune_miku\",\n    \"藍色頭髮\": \"blue_hair\",\n    ...\n  }\n\n執行方式：\n  python build_tag_dict.py\n\n依賴：Python 3.8+ 標準函式庫（無需額外安裝）\n      若已安裝 opencc-python-reimplemented，會自動將簡體轉繁體。",
     "global_vars": [
@@ -781,61 +867,211 @@
               },
               {
                 "name": "base_url",
-                "type": "str",
-                "default": "settings.OLLAMA_BASE_URL"
+                "type": "str | None",
+                "default": "None"
               },
               {
                 "name": "lms_base_url",
-                "type": "str",
-                "default": "settings.LMS_BASE_URL"
+                "type": "str | None",
+                "default": "None"
               },
               {
                 "name": "openai_base_url",
-                "type": "str",
-                "default": "settings.OPENAI_BASE_URL"
+                "type": "str | None",
+                "default": "None"
               },
               {
                 "name": "openai_api_key",
-                "type": "str",
-                "default": "settings.OPENAI_API_KEY"
+                "type": "str | None",
+                "default": "None"
               },
               {
                 "name": "deepseek_base_url",
-                "type": "str",
-                "default": "settings.DEEPSEEK_BASE_URL"
+                "type": "str | None",
+                "default": "None"
               },
               {
                 "name": "deepseek_api_key",
-                "type": "str",
-                "default": "settings.DEEPSEEK_API_KEY"
+                "type": "str | None",
+                "default": "None"
               },
               {
                 "name": "gemini_base_url",
-                "type": "str",
-                "default": "settings.GEMINI_BASE_URL"
+                "type": "str | None",
+                "default": "None"
               },
               {
                 "name": "gemini_api_key",
-                "type": "str",
-                "default": "settings.GEMINI_API_KEY"
+                "type": "str | None",
+                "default": "None"
               },
               {
                 "name": "claude_base_url",
-                "type": "str",
-                "default": "settings.CLAUDE_BASE_URL"
+                "type": "str | None",
+                "default": "None"
               },
               {
                 "name": "claude_api_key",
-                "type": "str",
-                "default": "settings.CLAUDE_API_KEY"
+                "type": "str | None",
+                "default": "None"
               }
             ],
             "return_type": "None",
             "docstring": null
           },
           {
+            "name": "_base_url",
+            "line": 54,
+            "is_async": false,
+            "decorators": [
+              "property"
+            ],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "str",
+            "docstring": null
+          },
+          {
+            "name": "_lms_base_url",
+            "line": 59,
+            "is_async": false,
+            "decorators": [
+              "property"
+            ],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "str",
+            "docstring": null
+          },
+          {
+            "name": "_openai_base_url",
+            "line": 64,
+            "is_async": false,
+            "decorators": [
+              "property"
+            ],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "str",
+            "docstring": null
+          },
+          {
+            "name": "_openai_api_key",
+            "line": 69,
+            "is_async": false,
+            "decorators": [
+              "property"
+            ],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "str",
+            "docstring": null
+          },
+          {
+            "name": "_deepseek_base_url",
+            "line": 73,
+            "is_async": false,
+            "decorators": [
+              "property"
+            ],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "str",
+            "docstring": null
+          },
+          {
+            "name": "_deepseek_api_key",
+            "line": 78,
+            "is_async": false,
+            "decorators": [
+              "property"
+            ],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "str",
+            "docstring": null
+          },
+          {
+            "name": "_gemini_base_url",
+            "line": 82,
+            "is_async": false,
+            "decorators": [
+              "property"
+            ],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "str",
+            "docstring": null
+          },
+          {
+            "name": "_gemini_api_key",
+            "line": 87,
+            "is_async": false,
+            "decorators": [
+              "property"
+            ],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "str",
+            "docstring": null
+          },
+          {
+            "name": "_claude_base_url",
+            "line": 91,
+            "is_async": false,
+            "decorators": [
+              "property"
+            ],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "str",
+            "docstring": null
+          },
+          {
+            "name": "_claude_api_key",
+            "line": 96,
+            "is_async": false,
+            "decorators": [
+              "property"
+            ],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "str",
+            "docstring": null
+          },
+          {
             "name": "_get_session",
-            "line": 57,
+            "line": 101,
             "is_async": true,
             "decorators": [],
             "params": [
@@ -847,8 +1083,23 @@
             "docstring": null
           },
           {
+            "name": "_vllm_base_url",
+            "line": 112,
+            "is_async": false,
+            "decorators": [
+              "property"
+            ],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "str",
+            "docstring": null
+          },
+          {
             "name": "_parse_model",
-            "line": 68,
+            "line": 117,
             "is_async": false,
             "decorators": [
               "staticmethod"
@@ -864,7 +1115,7 @@
           },
           {
             "name": "_request_openai_compatible",
-            "line": 87,
+            "line": 137,
             "is_async": true,
             "decorators": [],
             "params": [
@@ -910,7 +1161,7 @@
           },
           {
             "name": "_request_claude",
-            "line": 145,
+            "line": 198,
             "is_async": true,
             "decorators": [],
             "params": [
@@ -939,7 +1190,7 @@
           },
           {
             "name": "chat",
-            "line": 189,
+            "line": 242,
             "is_async": true,
             "decorators": [],
             "params": [
@@ -969,7 +1220,7 @@
           },
           {
             "name": "close",
-            "line": 301,
+            "line": 383,
             "is_async": true,
             "decorators": [],
             "params": [
@@ -3618,28 +3869,28 @@
         "value_repr": "logging.getLogger(__name__)"
       },
       {
-        "name": "FFMPEG_EXE_PATH",
-        "line": 8,
-        "value_repr": "os.path.join(settings.FFMPEG, 'ffmpeg.exe')"
+        "name": "_system_ffmpeg",
+        "line": 11,
+        "value_repr": "shutil.which('ffmpeg')"
       },
       {
         "name": "FFMPEG_OPTIONS",
-        "line": 12,
+        "line": 21,
         "value_repr": "{'before_options': getattr(settings, 'MUSIC_FFMPEG_BEFORE_OPTIONS', '-reconnect 1 -reconnect_streamed 1 -reconnect_delay..."
       },
       {
         "name": "_COOKIE_PATH",
-        "line": 19,
+        "line": 28,
         "value_repr": "getattr(settings, 'YOUTUBE_COOKIES_PATH', os.path.join(settings.DATA_DIR, 'cookies.txt'))"
       },
       {
         "name": "YTDL_OPTIONS",
-        "line": 22,
+        "line": 31,
         "value_repr": "{'format': 'bestaudio/best', 'noplaylist': False, 'playlistend': getattr(settings, 'MUSIC_PLAYLIST_MAX_ITEMS', 100), 'no..."
       },
       {
         "name": "ytdl_client",
-        "line": 43,
+        "line": 52,
         "value_repr": "yt_dlp.YoutubeDL(YTDL_OPTIONS)"
       }
     ],
@@ -3649,7 +3900,8 @@
       "os",
       "logging",
       "yt_dlp",
-      "settings"
+      "settings",
+      "shutil"
     ]
   },
   {
@@ -10389,6 +10641,1214 @@
     ]
   },
   {
+    "path": "mod/game_center/__init__.py",
+    "module_docstring": "mod.game_center\n===============\n動態小遊戲遊樂場模組 (Plug & Play Game Center Mod).\n\n本模組提供雪莉 Web UI 的小遊戲遊戲邏輯（猜拳、21點、踩地雷）\n以及結合地端 LLM (Primary Model) 的雪莉名偵探個性互動系統。",
+    "global_vars": [
+      {
+        "name": "MOD_INFO",
+        "line": 12,
+        "value_repr": "{'id': 'game_center', 'name': '小遊戲遊樂場', 'icon': '🎮', 'description': '與雪莉名偵探使用地端 LLM 進行 21 點、猜拳、踩地雷等對弈互動！', 'version': '1..."
+      },
+      {
+        "name": "__all__",
+        "line": 25,
+        "value_repr": "['MOD_INFO']"
+      }
+    ],
+    "classes": [],
+    "functions": [],
+    "imports": [
+      "__future__.annotations"
+    ]
+  },
+  {
+    "path": "mod/game_center/akinator_20q.py",
+    "module_docstring": "mod.game_center.akinator_20q\n=============================\n20 Questions (Sherry Akinator) game engine.",
+    "global_vars": [],
+    "classes": [
+      {
+        "name": "AkinatorEngine",
+        "line": 15,
+        "bases": [],
+        "docstring": "Engine managing 20 Questions game flow.",
+        "class_vars": [],
+        "methods": [
+          {
+            "name": "__init__",
+            "line": 18,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "None",
+            "docstring": null
+          },
+          {
+            "name": "start_game",
+            "line": 21,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "AkinatorState",
+            "docstring": "Start a 20 Questions round."
+          },
+          {
+            "name": "record_answer",
+            "line": 33,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "game_id",
+                "type": "str"
+              },
+              {
+                "name": "answer",
+                "type": "str"
+              }
+            ],
+            "return_type": "AkinatorState | None",
+            "docstring": "Record player's answer (yes, no, unknown)."
+          },
+          {
+            "name": "get_game",
+            "line": 50,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "game_id",
+                "type": "str"
+              }
+            ],
+            "return_type": "AkinatorState | None",
+            "docstring": "Get game state."
+          }
+        ]
+      }
+    ],
+    "functions": [],
+    "imports": [
+      "__future__.annotations",
+      "uuid",
+      "typing.Any",
+      "mod.game_center.models.AkinatorState",
+      "mod.game_center.models.GameResultStatus"
+    ]
+  },
+  {
+    "path": "mod/game_center/blackjack.py",
+    "module_docstring": "mod.game_center.blackjack\n=========================\nBlackjack (21-point) game engine.",
+    "global_vars": [],
+    "classes": [
+      {
+        "name": "BlackjackEngine",
+        "line": 16,
+        "bases": [],
+        "docstring": "Blackjack card game manager.",
+        "class_vars": [],
+        "methods": [
+          {
+            "name": "__init__",
+            "line": 27,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "None",
+            "docstring": null
+          },
+          {
+            "name": "_create_deck",
+            "line": 30,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "list[Card]",
+            "docstring": "Generate a fresh shuffled 52-card deck."
+          },
+          {
+            "name": "calculate_score",
+            "line": 40,
+            "is_async": false,
+            "decorators": [
+              "staticmethod"
+            ],
+            "params": [
+              {
+                "name": "cards",
+                "type": "list[Card]"
+              }
+            ],
+            "return_type": "int",
+            "docstring": "Calculate total hand score accounting for Ace flex (1 or 11)."
+          },
+          {
+            "name": "start_game",
+            "line": 49,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "BlackjackState",
+            "docstring": "Initialize a new game round and deal initial 2 cards to player and Sherry dealer."
+          },
+          {
+            "name": "hit",
+            "line": 76,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "game_id",
+                "type": "str"
+              }
+            ],
+            "return_type": "BlackjackState | None",
+            "docstring": "Player draws a card."
+          },
+          {
+            "name": "stand",
+            "line": 94,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "game_id",
+                "type": "str"
+              }
+            ],
+            "return_type": "BlackjackState | None",
+            "docstring": "Player stands; Sherry dealer plays her turn."
+          },
+          {
+            "name": "get_game",
+            "line": 119,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "game_id",
+                "type": "str"
+              }
+            ],
+            "return_type": "BlackjackState | None",
+            "docstring": "Retrieve existing active game state."
+          }
+        ]
+      }
+    ],
+    "functions": [],
+    "imports": [
+      "__future__.annotations",
+      "random",
+      "uuid",
+      "typing.Any",
+      "mod.game_center.models.BlackjackState",
+      "mod.game_center.models.Card",
+      "mod.game_center.models.GameResultStatus"
+    ]
+  },
+  {
+    "path": "mod/game_center/escape_room.py",
+    "module_docstring": "mod.game_center.escape_room\n===========================\nDetective Escape Room Text Adventure Engine.",
+    "global_vars": [],
+    "classes": [
+      {
+        "name": "EscapeRoomEngine",
+        "line": 15,
+        "bases": [],
+        "docstring": "Escape Room adventure engine.",
+        "class_vars": [],
+        "methods": [
+          {
+            "name": "__init__",
+            "line": 18,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "None",
+            "docstring": null
+          },
+          {
+            "name": "start_game",
+            "line": 21,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "EscapeRoomState",
+            "docstring": "Start escape room adventure."
+          },
+          {
+            "name": "get_game",
+            "line": 35,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "game_id",
+                "type": "str"
+              }
+            ],
+            "return_type": "EscapeRoomState | None",
+            "docstring": "Get active game state."
+          }
+        ]
+      }
+    ],
+    "functions": [],
+    "imports": [
+      "__future__.annotations",
+      "uuid",
+      "typing.Any",
+      "mod.game_center.models.EscapeRoomState",
+      "mod.game_center.models.GameResultStatus"
+    ]
+  },
+  {
+    "path": "mod/game_center/minesweeper.py",
+    "module_docstring": "mod.game_center.minesweeper\n===========================\nMinesweeper game board logic engine.",
+    "global_vars": [],
+    "classes": [
+      {
+        "name": "MinesweeperEngine",
+        "line": 16,
+        "bases": [],
+        "docstring": "Minesweeper board manager.",
+        "class_vars": [],
+        "methods": [
+          {
+            "name": "__init__",
+            "line": 19,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "None",
+            "docstring": null
+          },
+          {
+            "name": "start_game",
+            "line": 22,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "rows",
+                "type": "int",
+                "default": "8"
+              },
+              {
+                "name": "cols",
+                "type": "int",
+                "default": "8"
+              },
+              {
+                "name": "mine_count",
+                "type": "int",
+                "default": "10"
+              }
+            ],
+            "return_type": "MinesweeperState",
+            "docstring": "Create a new Minesweeper game board."
+          },
+          {
+            "name": "reveal_cell",
+            "line": 62,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "game_id",
+                "type": "str"
+              },
+              {
+                "name": "row",
+                "type": "int"
+              },
+              {
+                "name": "col",
+                "type": "int"
+              }
+            ],
+            "return_type": "MinesweeperState | None",
+            "docstring": "Reveal cell at (row, col) and expand zero-neighbor cells."
+          },
+          {
+            "name": "toggle_flag",
+            "line": 110,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "game_id",
+                "type": "str"
+              },
+              {
+                "name": "row",
+                "type": "int"
+              },
+              {
+                "name": "col",
+                "type": "int"
+              }
+            ],
+            "return_type": "MinesweeperState | None",
+            "docstring": "Toggle flag marker on a cell."
+          },
+          {
+            "name": "get_game",
+            "line": 123,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "game_id",
+                "type": "str"
+              }
+            ],
+            "return_type": "MinesweeperState | None",
+            "docstring": "Get active game state."
+          }
+        ]
+      }
+    ],
+    "functions": [],
+    "imports": [
+      "__future__.annotations",
+      "random",
+      "uuid",
+      "typing.Any",
+      "mod.game_center.models.GameResultStatus",
+      "mod.game_center.models.MinesweeperCell",
+      "mod.game_center.models.MinesweeperState"
+    ]
+  },
+  {
+    "path": "mod/game_center/models.py",
+    "module_docstring": "mod.game_center.models\n======================\nData structures and dataclasses for Sherry Game Center.",
+    "global_vars": [],
+    "classes": [
+      {
+        "name": "GameType",
+        "line": 14,
+        "bases": [
+          "str",
+          "Enum"
+        ],
+        "docstring": "Supported game types in Sherry Game Center.",
+        "class_vars": [
+          {
+            "name": "RPS",
+            "line": 16,
+            "value_repr": "'rps'"
+          },
+          {
+            "name": "BLACKJACK",
+            "line": 17,
+            "value_repr": "'blackjack'"
+          },
+          {
+            "name": "MINESWEEPER",
+            "line": 18,
+            "value_repr": "'minesweeper'"
+          },
+          {
+            "name": "TURTLE_SOUP",
+            "line": 19,
+            "value_repr": "'turtle_soup'"
+          },
+          {
+            "name": "AKINATOR",
+            "line": 20,
+            "value_repr": "'akinator'"
+          },
+          {
+            "name": "ESCAPE_ROOM",
+            "line": 21,
+            "value_repr": "'escape_room'"
+          },
+          {
+            "name": "TIC_TAC_TOE",
+            "line": 22,
+            "value_repr": "'tic_tac_toe'"
+          }
+        ],
+        "methods": []
+      },
+      {
+        "name": "RPSChoice",
+        "line": 25,
+        "bases": [
+          "str",
+          "Enum"
+        ],
+        "docstring": "Rock Paper Scissors choices.",
+        "class_vars": [
+          {
+            "name": "ROCK",
+            "line": 27,
+            "value_repr": "'rock'"
+          },
+          {
+            "name": "PAPER",
+            "line": 28,
+            "value_repr": "'paper'"
+          },
+          {
+            "name": "SCISSORS",
+            "line": 29,
+            "value_repr": "'scissors'"
+          }
+        ],
+        "methods": []
+      },
+      {
+        "name": "GameResultStatus",
+        "line": 32,
+        "bases": [
+          "str",
+          "Enum"
+        ],
+        "docstring": "Outcome status of a game round.",
+        "class_vars": [
+          {
+            "name": "WIN",
+            "line": 34,
+            "value_repr": "'win'"
+          },
+          {
+            "name": "LOSE",
+            "line": 35,
+            "value_repr": "'lose'"
+          },
+          {
+            "name": "DRAW",
+            "line": 36,
+            "value_repr": "'draw'"
+          },
+          {
+            "name": "ONGOING",
+            "line": 37,
+            "value_repr": "'ongoing'"
+          }
+        ],
+        "methods": []
+      },
+      {
+        "name": "Card",
+        "line": 41,
+        "bases": [],
+        "docstring": "Playing card representation for Blackjack.",
+        "class_vars": [],
+        "methods": [
+          {
+            "name": "to_dict",
+            "line": 47,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "dict[str, Any]",
+            "docstring": "Convert card to dictionary."
+          }
+        ]
+      },
+      {
+        "name": "BlackjackState",
+        "line": 57,
+        "bases": [],
+        "docstring": "State tracking for a Blackjack game round.",
+        "class_vars": [],
+        "methods": [
+          {
+            "name": "to_dict",
+            "line": 69,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "dict[str, Any]",
+            "docstring": "Serialize state for JSON responses."
+          }
+        ]
+      },
+      {
+        "name": "MinesweeperCell",
+        "line": 85,
+        "bases": [],
+        "docstring": "Single cell representation in Minesweeper board.",
+        "class_vars": [],
+        "methods": [
+          {
+            "name": "to_dict",
+            "line": 94,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "reveal_all",
+                "type": "bool",
+                "default": "False"
+              }
+            ],
+            "return_type": "dict[str, Any]",
+            "docstring": "Serialize cell info without leaking mine location unless revealed."
+          }
+        ]
+      },
+      {
+        "name": "MinesweeperState",
+        "line": 107,
+        "bases": [],
+        "docstring": "State for Minesweeper game board.",
+        "class_vars": [],
+        "methods": [
+          {
+            "name": "to_dict",
+            "line": 118,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "dict[str, Any]",
+            "docstring": "Serialize Minesweeper state."
+          }
+        ]
+      },
+      {
+        "name": "TurtleSoupState",
+        "line": 137,
+        "bases": [],
+        "docstring": "State for Situation Puzzle (Turtle Soup).",
+        "class_vars": [],
+        "methods": [
+          {
+            "name": "to_dict",
+            "line": 147,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "dict[str, Any]",
+            "docstring": null
+          }
+        ]
+      },
+      {
+        "name": "AkinatorState",
+        "line": 159,
+        "bases": [],
+        "docstring": "State for 20 Questions / Sherry Akinator Game.",
+        "class_vars": [],
+        "methods": [
+          {
+            "name": "to_dict",
+            "line": 169,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "dict[str, Any]",
+            "docstring": null
+          }
+        ]
+      },
+      {
+        "name": "EscapeRoomState",
+        "line": 182,
+        "bases": [],
+        "docstring": "State for Detective Escape Room Text Adventure.",
+        "class_vars": [],
+        "methods": [
+          {
+            "name": "to_dict",
+            "line": 191,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "dict[str, Any]",
+            "docstring": null
+          }
+        ]
+      },
+      {
+        "name": "TicTacToeState",
+        "line": 203,
+        "bases": [],
+        "docstring": "State for Tic-Tac-Toe (3x3 grid).",
+        "class_vars": [],
+        "methods": [
+          {
+            "name": "to_dict",
+            "line": 210,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "dict[str, Any]",
+            "docstring": null
+          }
+        ]
+      }
+    ],
+    "functions": [],
+    "imports": [
+      "__future__.annotations",
+      "dataclasses.dataclass",
+      "dataclasses.field",
+      "enum.Enum",
+      "typing.Any"
+    ]
+  },
+  {
+    "path": "mod/game_center/rock_paper_scissors.py",
+    "module_docstring": "mod.game_center.rock_paper_scissors\n===================================\nRock Paper Scissors game logic engine.",
+    "global_vars": [],
+    "classes": [
+      {
+        "name": "RockPaperScissorsEngine",
+        "line": 15,
+        "bases": [],
+        "docstring": "Engine for managing Rock Paper Scissors rounds against Sherry.",
+        "class_vars": [],
+        "methods": [
+          {
+            "name": "play_round",
+            "line": 37,
+            "is_async": false,
+            "decorators": [
+              "classmethod"
+            ],
+            "params": [
+              {
+                "name": "cls"
+              },
+              {
+                "name": "player_choice_str",
+                "type": "str"
+              }
+            ],
+            "return_type": "dict[str, Any]",
+            "docstring": "Play a round of RPS against Sherry.\n\n        Args:\n            player_choice_str: Player's choice (\"rock\", \"paper\", \"scissors\" or Chinese equivalents).\n\n        Returns:\n            Dict containing round outcome details."
+          }
+        ]
+      }
+    ],
+    "functions": [],
+    "imports": [
+      "__future__.annotations",
+      "random",
+      "typing.Any",
+      "mod.game_center.models.GameResultStatus",
+      "mod.game_center.models.RPSChoice"
+    ]
+  },
+  {
+    "path": "mod/game_center/sherry_ai.py",
+    "module_docstring": "mod.game_center.sherry_ai\n=========================\nLLM Inference Service for Sherry Game Center using Primary Model.\nIntegrates Sherry's active persona and detective flair into mini-games.",
+    "global_vars": [
+      {
+        "name": "logger",
+        "line": 17,
+        "value_repr": "logging.getLogger(__name__)"
+      },
+      {
+        "name": "SHERRY_GAME_SYSTEM_PROMPT",
+        "line": 20,
+        "value_repr": "'你現在是「橘雪莉」(Sherry)，一位 15 歲活潑可愛的台灣女高中生，同時自稱「天才名偵探」！\\n你的性格特色：\\n1. 說話語氣活潑親切、帶有點小傲嬌與名偵探的自信。\\n2. 喜歡使用台灣繁體中文口吻（如：「本名偵探」、「哼哼」、「..."
+      },
+      {
+        "name": "FALLBACK_RPS_WIN",
+        "line": 30,
+        "value_repr": "['哼哼～本名偵探早看穿你的心理戰了！這局我贏啦 ✨🍊', '哈哈！我的直覺可是經過名偵探鍛鍊的，這把是我拿下了！✦', '贏囉！承讓承讓～下次再練練吧！✨']"
+      },
+      {
+        "name": "FALLBACK_RPS_LOSE",
+        "line": 36,
+        "value_repr": "['可惡……這次只是本名偵探大意了！下一局我一定贏回來 哼！🍊', '竟然被你猜中了？！這不科學……一定是剛好運氣好啦！✦', '哼！這局算你厲害，下一把本名偵探絕對不會再輸！✨']"
+      },
+      {
+        "name": "FALLBACK_RPS_DRAW",
+        "line": 42,
+        "value_repr": "['欸？！竟然出一樣的？！這難道就是傳說中的心有靈犀？🍊✨', '平手！看來我們兩個的推理思路卡在一起了呢 ✦', '不分勝負！再來一局，本名偵探這次要認真了喔！🔍']"
+      }
+    ],
+    "classes": [
+      {
+        "name": "SherryGameAIService",
+        "line": 49,
+        "bases": [],
+        "docstring": "Service layer to invoke Primary Model LLM for Sherry game commentary.",
+        "class_vars": [],
+        "methods": [
+          {
+            "name": "__init__",
+            "line": 52,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "ollama_client",
+                "type": "OllamaClient | None",
+                "default": "None"
+              }
+            ],
+            "return_type": "None",
+            "docstring": null
+          },
+          {
+            "name": "generate_rps_dialogue",
+            "line": 55,
+            "is_async": true,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "player_choice",
+                "type": "str"
+              },
+              {
+                "name": "sherry_choice",
+                "type": "str"
+              },
+              {
+                "name": "outcome",
+                "type": "str"
+              }
+            ],
+            "return_type": "str",
+            "docstring": "Generate Sherry's reaction dialogue after a Rock-Paper-Scissors round."
+          },
+          {
+            "name": "generate_blackjack_thought_and_dialogue",
+            "line": 87,
+            "is_async": true,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "player_score",
+                "type": "int"
+              },
+              {
+                "name": "dealer_cards_str",
+                "type": "str"
+              },
+              {
+                "name": "dealer_score",
+                "type": "int"
+              },
+              {
+                "name": "action",
+                "type": "str"
+              },
+              {
+                "name": "status",
+                "type": "str"
+              }
+            ],
+            "return_type": "tuple[str, str]",
+            "docstring": "Generate Sherry's inner thought and public dialogue during Blackjack."
+          },
+          {
+            "name": "generate_minesweeper_hint",
+            "line": 137,
+            "is_async": true,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "board_summary",
+                "type": "str"
+              },
+              {
+                "name": "revealed_count",
+                "type": "int"
+              },
+              {
+                "name": "mine_count",
+                "type": "int"
+              }
+            ],
+            "return_type": "str",
+            "docstring": "Generate a detective hint for Minesweeper when requested by player."
+          },
+          {
+            "name": "generate_turtle_soup_reply",
+            "line": 164,
+            "is_async": true,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "surface_story",
+                "type": "str"
+              },
+              {
+                "name": "truth",
+                "type": "str"
+              },
+              {
+                "name": "player_question",
+                "type": "str"
+              }
+            ],
+            "return_type": "str",
+            "docstring": "Answer Turtle Soup question with 'Yes', 'No', or 'Irrelevant'."
+          },
+          {
+            "name": "generate_20q_next_question",
+            "line": 192,
+            "is_async": true,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "history",
+                "type": "list[dict[str, str]]"
+              },
+              {
+                "name": "q_count",
+                "type": "int"
+              }
+            ],
+            "return_type": "str",
+            "docstring": "Generate Akinator 20-Questions question or final guess."
+          },
+          {
+            "name": "generate_escape_room_narration",
+            "line": 218,
+            "is_async": true,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "action",
+                "type": "str"
+              },
+              {
+                "name": "inventory",
+                "type": "list[str]"
+              }
+            ],
+            "return_type": "str",
+            "docstring": "Generate Escape Room investigation narration."
+          },
+          {
+            "name": "generate_ttt_dialogue",
+            "line": 244,
+            "is_async": true,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "status",
+                "type": "str"
+              }
+            ],
+            "return_type": "str",
+            "docstring": "Generate Tic-Tac-Toe reaction."
+          }
+        ]
+      }
+    ],
+    "functions": [],
+    "imports": [
+      "__future__.annotations",
+      "logging",
+      "random",
+      "typing.Any",
+      "settings",
+      "handlers.bot_brain.client.OllamaClient"
+    ]
+  },
+  {
+    "path": "mod/game_center/tic_tac_toe.py",
+    "module_docstring": "mod.game_center.tic_tac_toe\n===========================\nTic-Tac-Toe (3x3 Grid) Game Engine.",
+    "global_vars": [],
+    "classes": [
+      {
+        "name": "TicTacToeEngine",
+        "line": 16,
+        "bases": [],
+        "docstring": "Tic-Tac-Toe game manager.",
+        "class_vars": [],
+        "methods": [
+          {
+            "name": "__init__",
+            "line": 25,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "None",
+            "docstring": null
+          },
+          {
+            "name": "start_game",
+            "line": 28,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "TicTacToeState",
+            "docstring": "Start new Tic-Tac-Toe game."
+          },
+          {
+            "name": "check_winner",
+            "line": 40,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "board",
+                "type": "list[str]"
+              }
+            ],
+            "return_type": "str",
+            "docstring": "Check if X or O won, or if it's a draw/ongoing."
+          },
+          {
+            "name": "player_move",
+            "line": 49,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "game_id",
+                "type": "str"
+              },
+              {
+                "name": "index",
+                "type": "int"
+              }
+            ],
+            "return_type": "TicTacToeState | None",
+            "docstring": "Process player move and trigger Sherry's AI response move."
+          },
+          {
+            "name": "get_game",
+            "line": 95,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "game_id",
+                "type": "str"
+              }
+            ],
+            "return_type": "TicTacToeState | None",
+            "docstring": "Get game state."
+          }
+        ]
+      }
+    ],
+    "functions": [],
+    "imports": [
+      "__future__.annotations",
+      "random",
+      "uuid",
+      "typing.Any",
+      "mod.game_center.models.GameResultStatus",
+      "mod.game_center.models.TicTacToeState"
+    ]
+  },
+  {
+    "path": "mod/game_center/turtle_soup.py",
+    "module_docstring": "mod.game_center.turtle_soup\n===========================\nSituation Puzzle (Turtle Soup) game engine.",
+    "global_vars": [
+      {
+        "name": "SOUP_PRESETS",
+        "line": 15,
+        "value_repr": "[{'title': '海邊的餐館', 'surface': '一個人在海邊的餐館點了一碗海龜湯，喝了一口之後，他走出餐館跳海自殺了。為什麼？', 'truth': '這個人過去曾遭遇海難，當時在荒島上同伴煮了一碗湯給他喝，並告訴他是海龜湯..."
+      }
+    ],
+    "classes": [
+      {
+        "name": "TurtleSoupEngine",
+        "line": 34,
+        "bases": [],
+        "docstring": "Engine managing Situation Puzzle rounds.",
+        "class_vars": [],
+        "methods": [
+          {
+            "name": "__init__",
+            "line": 37,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              }
+            ],
+            "return_type": "None",
+            "docstring": null
+          },
+          {
+            "name": "start_game",
+            "line": 40,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "preset_index",
+                "type": "int | None",
+                "default": "None"
+              }
+            ],
+            "return_type": "TurtleSoupState",
+            "docstring": "Start a new Turtle Soup game round."
+          },
+          {
+            "name": "get_game",
+            "line": 59,
+            "is_async": false,
+            "decorators": [],
+            "params": [
+              {
+                "name": "self"
+              },
+              {
+                "name": "game_id",
+                "type": "str"
+              }
+            ],
+            "return_type": "TurtleSoupState | None",
+            "docstring": "Retrieve active Turtle Soup game state."
+          }
+        ]
+      }
+    ],
+    "functions": [],
+    "imports": [
+      "__future__.annotations",
+      "random",
+      "uuid",
+      "typing.Any",
+      "mod.game_center.models.GameResultStatus",
+      "mod.game_center.models.TurtleSoupState"
+    ]
+  },
+  {
     "path": "mod/market_plugin/__init__.py",
     "module_docstring": null,
     "global_vars": [],
@@ -11992,1065 +13452,1083 @@
       },
       {
         "name": "BASE_DIR",
-        "line": 35,
+        "line": 36,
         "type": "Path",
         "value_repr": "Path(__file__).resolve().parent"
       },
       {
         "name": "DATA_DIR",
-        "line": 36,
+        "line": 37,
         "type": "Path",
         "value_repr": "BASE_DIR / 'data'"
       },
       {
         "name": "FILE_DIR",
-        "line": 37,
+        "line": 38,
         "type": "Path",
         "value_repr": "BASE_DIR / 'file'"
       },
       {
         "name": "SOUL_DIR",
-        "line": 38,
+        "line": 39,
         "type": "Path",
         "value_repr": "FILE_DIR / 'soul'"
       },
       {
         "name": "DEFAULT_SOUL_PATH",
-        "line": 39,
+        "line": 40,
         "type": "Path",
         "value_repr": "SOUL_DIR / 'sherry_default.md'"
       },
       {
         "name": "CHANNEL_SOUL_MAP",
-        "line": 41,
+        "line": 42,
         "type": "dict[int, str]",
         "value_repr": "{}"
       },
       {
         "name": "HEARTBEAT_PATH",
-        "line": 43,
+        "line": 44,
         "type": "Path",
         "value_repr": "DATA_DIR / 'heartbeat.md'"
       },
       {
         "name": "DEFAULT_HEARTBEAT_CHANNEL_ID",
-        "line": 44,
+        "line": 45,
         "type": "int",
         "value_repr": "1519967448982487201"
       },
       {
         "name": "CHANNEL_VIBE_PATH",
-        "line": 46,
+        "line": 47,
         "type": "Path",
         "value_repr": "DATA_DIR / 'channel_vibe.json'"
       },
       {
         "name": "DEEP_THINKING_LOG_PATH",
-        "line": 48,
+        "line": 49,
         "type": "Path",
         "value_repr": "DATA_DIR / 'deep_thinking.json'"
       },
       {
         "name": "DRAW_THINKING_LOG_PATH",
-        "line": 49,
+        "line": 50,
         "type": "Path",
         "value_repr": "DATA_DIR / 'draw_thinking.json'"
       },
       {
         "name": "USER_MEMORY_PATH",
-        "line": 51,
+        "line": 52,
         "type": "Path",
         "value_repr": "DATA_DIR / 'user_memory.json'"
       },
       {
         "name": "USER_RELATIONS_PATH",
-        "line": 53,
+        "line": 54,
         "type": "Path",
         "value_repr": "DATA_DIR / 'user_relations.json'"
       },
       {
         "name": "RUNTIME_LOG_PATH",
-        "line": 59,
+        "line": 60,
         "type": "Path",
         "value_repr": "DATA_DIR / 'runtime_log.jsonl'"
       },
       {
         "name": "ERROR_LOG_PATH",
-        "line": 60,
+        "line": 61,
         "type": "Path",
         "value_repr": "DATA_DIR / 'error_log.jsonl'"
       },
       {
         "name": "SCHEDULE_PATH",
-        "line": 66,
+        "line": 67,
         "type": "Path",
         "value_repr": "BASE_DIR / 'data' / 'schedule.json'"
       },
       {
         "name": "THINKING_LOG_PATH",
-        "line": 69,
+        "line": 70,
         "type": "Path",
         "value_repr": "DATA_DIR / 'thinking.json'"
       },
       {
         "name": "THINKING_LOG_DIR",
-        "line": 70,
+        "line": 71,
         "type": "Path",
         "value_repr": "DATA_DIR / 'thinking'"
       },
       {
         "name": "STT_THINKING_LOG_PATH",
-        "line": 71,
+        "line": 72,
         "type": "Path",
         "value_repr": "DATA_DIR / 'stt_thinking.log'"
       },
       {
         "name": "FFMPEG",
-        "line": 76,
+        "line": 77,
         "value_repr": "str(BASE_DIR / 'ffmpeg')"
       },
       {
         "name": "DISCORD_BOT_TOKEN",
-        "line": 81,
+        "line": 82,
         "type": "str",
         "value_repr": "os.environ['DISCORD_BOT_TOKEN']"
       },
       {
         "name": "ADMIN_ROLE_IDS",
-        "line": 82,
+        "line": 83,
         "type": "list[int]",
         "value_repr": "[]"
       },
       {
         "name": "ADMIN_USER_IDS",
-        "line": 83,
+        "line": 84,
         "type": "list[int]",
         "value_repr": "[425311733503229972]"
       },
       {
         "name": "NSFW_ALLOWED_CHANNEL_IDS",
-        "line": 84,
+        "line": 85,
         "type": "list[int]",
         "value_repr": "[]"
       },
       {
         "name": "OLLAMA_BASE_URL",
-        "line": 100,
+        "line": 101,
         "type": "str",
         "value_repr": "os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')"
       },
       {
         "name": "LMS_BASE_URL",
-        "line": 101,
+        "line": 102,
         "type": "str",
         "value_repr": "os.getenv('LMS_BASE_URL', 'http://localhost:1234/v1')"
       },
       {
+        "name": "VLLM_BASE_URL",
+        "line": 103,
+        "type": "str",
+        "value_repr": "os.getenv('VLLM_BASE_URL', 'http://localhost:8000/v1')"
+      },
+      {
         "name": "OPENAI_API_KEY",
-        "line": 104,
+        "line": 106,
         "type": "str",
         "value_repr": "os.getenv('OPENAI_API_KEY', '')"
       },
       {
         "name": "DEEPSEEK_API_KEY",
-        "line": 105,
+        "line": 107,
         "type": "str",
         "value_repr": "os.getenv('DEEPSEEK_API_KEY', '')"
       },
       {
         "name": "GEMINI_API_KEY",
-        "line": 106,
+        "line": 108,
         "type": "str",
         "value_repr": "os.getenv('GEMINI_API_KEY', '')"
       },
       {
         "name": "CLAUDE_API_KEY",
-        "line": 107,
+        "line": 109,
         "type": "str",
         "value_repr": "os.getenv('CLAUDE_API_KEY', '')"
       },
       {
         "name": "OPENAI_BASE_URL",
-        "line": 110,
+        "line": 112,
         "type": "str",
         "value_repr": "os.getenv('OPENAI_BASE_URL', 'https://api.openai.com/v1')"
       },
       {
         "name": "DEEPSEEK_BASE_URL",
-        "line": 111,
+        "line": 113,
         "type": "str",
         "value_repr": "os.getenv('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/v1')"
       },
       {
         "name": "GEMINI_BASE_URL",
-        "line": 112,
+        "line": 114,
         "type": "str",
         "value_repr": "os.getenv('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta/openai')"
       },
       {
         "name": "CLAUDE_BASE_URL",
-        "line": 113,
+        "line": 115,
         "type": "str",
         "value_repr": "os.getenv('CLAUDE_BASE_URL', 'https://api.anthropic.com/v1')"
       },
       {
         "name": "PRIMARY_MODEL",
-        "line": 116,
+        "line": 118,
         "type": "str",
-        "value_repr": "'lms:huihui-gemma-4-12b-it-abliterated'"
+        "value_repr": "'lms:gemma4-12b-qat-uncensored-hauhaucs-balanced'"
       },
       {
         "name": "NOMORAL_MODEL",
-        "line": 119,
+        "line": 121,
         "type": "str",
-        "value_repr": "'lms:huihui-gemma-4-12b-it-abliterated'"
+        "value_repr": "'lms:gemma4-12b-qat-uncensored-hauhaucs-balanced'"
       },
       {
         "name": "QUICK_MODEL",
-        "line": 122,
+        "line": 124,
         "type": "str",
         "value_repr": "'ollama:krith/mistral-nemo-instruct-2407-abliterated:IQ4_XS'"
       },
       {
         "name": "CLASSIFIER_MODEL",
-        "line": 125,
+        "line": 127,
         "type": "str",
         "value_repr": "'ollama:qwen2.5:3b'"
       },
       {
         "name": "VIBE_MODEL",
-        "line": 128,
+        "line": 130,
         "type": "str",
         "value_repr": "'ollama:llama3.2:3b'"
       },
       {
         "name": "VISION_MODEL",
-        "line": 131,
+        "line": 133,
         "type": "str",
         "value_repr": "'ollama:minicpm-v'"
       },
       {
         "name": "CLOUD_SEARCH_MODEL",
-        "line": 134,
+        "line": 136,
         "type": "str",
         "value_repr": "'deepseek:deepseek-v4-flash'"
       },
       {
         "name": "OLLAMA_TIMEOUT",
-        "line": 136,
+        "line": 138,
         "type": "int",
         "value_repr": "120"
       },
       {
         "name": "LLM_MAX_CONTEXT_TOKENS",
-        "line": 137,
+        "line": 139,
         "type": "int",
         "value_repr": "8192"
       },
       {
         "name": "LLM_MAX_OUTPUT_TOKENS",
-        "line": 138,
+        "line": 140,
         "type": "int",
         "value_repr": "1024"
       },
       {
+        "name": "LLM_NUM_BATCH",
+        "line": 144,
+        "type": "int",
+        "value_repr": "2048"
+      },
+      {
+        "name": "OLLAMA_KEEP_ALIVE",
+        "line": 148,
+        "type": "str",
+        "value_repr": "'60m'"
+      },
+      {
         "name": "LLM_TEMPERATURE",
-        "line": 141,
+        "line": 151,
         "type": "float",
         "value_repr": "0.85"
       },
       {
         "name": "LLM_PRESENCE_PENALTY",
-        "line": 142,
+        "line": 152,
         "type": "float",
         "value_repr": "0.6"
       },
       {
         "name": "LLM_FREQUENCY_PENALTY",
-        "line": 143,
+        "line": 153,
         "type": "float",
         "value_repr": "0.6"
       },
       {
         "name": "PRIORITY_TAG_RESPONSE",
-        "line": 148,
+        "line": 158,
         "type": "int",
         "value_repr": "1"
       },
       {
         "name": "PRIORITY_INTERJECT",
-        "line": 149,
+        "line": 159,
         "type": "int",
         "value_repr": "10"
       },
       {
         "name": "PRIORITY_HEARTBEAT",
-        "line": 150,
+        "line": 160,
         "type": "int",
         "value_repr": "20"
       },
       {
         "name": "PRIORITY_VIBE_UPDATE",
-        "line": 151,
-        "type": "int",
-        "value_repr": "50"
-      },
-      {
-        "name": "PRIORITY_DRAW",
-        "line": 152,
-        "type": "int",
-        "value_repr": "80"
-      },
-      {
-        "name": "PRIORITY_WEB_EXPLORER",
-        "line": 153,
-        "type": "int",
-        "value_repr": "99"
-      },
-      {
-        "name": "CONTEXT_HISTORY_LIMIT",
-        "line": 158,
-        "type": "int",
-        "value_repr": "30"
-      },
-      {
-        "name": "CONTEXT_TIME_GAP_SECONDS",
-        "line": 159,
-        "type": "int",
-        "value_repr": "900"
-      },
-      {
-        "name": "VIBE_UPDATE_MESSAGE_THRESHOLD",
         "line": 161,
         "type": "int",
         "value_repr": "50"
       },
       {
-        "name": "VIBE_TOP_N_TOPICS",
+        "name": "PRIORITY_DRAW",
         "line": 162,
+        "type": "int",
+        "value_repr": "80"
+      },
+      {
+        "name": "PRIORITY_WEB_EXPLORER",
+        "line": 163,
+        "type": "int",
+        "value_repr": "99"
+      },
+      {
+        "name": "CONTEXT_HISTORY_LIMIT",
+        "line": 168,
+        "type": "int",
+        "value_repr": "30"
+      },
+      {
+        "name": "CONTEXT_TIME_GAP_SECONDS",
+        "line": 169,
+        "type": "int",
+        "value_repr": "900"
+      },
+      {
+        "name": "VIBE_UPDATE_MESSAGE_THRESHOLD",
+        "line": 171,
+        "type": "int",
+        "value_repr": "50"
+      },
+      {
+        "name": "VIBE_TOP_N_TOPICS",
+        "line": 172,
         "type": "int",
         "value_repr": "3"
       },
       {
         "name": "VIBE_DECAY_INTERVAL_SECONDS",
-        "line": 163,
+        "line": 173,
         "type": "int",
         "value_repr": "3600"
       },
       {
         "name": "VIBE_DECAY_AMOUNT",
-        "line": 164,
+        "line": 174,
         "type": "int",
         "value_repr": "1"
       },
       {
         "name": "VIBE_MIN_WEIGHT_TO_INJECT",
-        "line": 167,
+        "line": 177,
         "type": "int",
         "value_repr": "5"
       },
       {
         "name": "VIBE_REINFORCE_MAX_WEIGHT",
-        "line": 170,
+        "line": 180,
         "type": "int",
         "value_repr": "10"
       },
       {
         "name": "TYPING_BASE_DELAY",
-        "line": 176,
+        "line": 186,
         "type": "float",
         "value_repr": "1.0"
       },
       {
         "name": "TYPING_DELAY_PER_50_CHARS",
-        "line": 177,
+        "line": 187,
         "type": "float",
         "value_repr": "0.3"
       },
       {
         "name": "_yt_key_raw",
-        "line": 182,
+        "line": 192,
         "type": "str",
         "value_repr": "os.getenv('YOUTUBE_API_KEY', '')"
       },
       {
         "name": "YOUTUBE_API_KEY",
-        "line": 183,
+        "line": 193,
         "type": "str",
         "value_repr": "_yt_key_raw if _yt_key_raw not in ('', 'your_youtube_api_key_here') else ''"
       },
       {
         "name": "OPENWEATHERMAP_API_KEY",
-        "line": 185,
+        "line": 195,
         "type": "str",
         "value_repr": "os.getenv('OPENWEATHERMAP_API_KEY', '')"
       },
       {
         "name": "EXPLORER_INTERVAL_SECONDS",
-        "line": 187,
+        "line": 197,
         "type": "int",
         "value_repr": "1800"
       },
       {
         "name": "YOUTUBE_MAX_RESULTS",
-        "line": 188,
+        "line": 198,
         "type": "int",
         "value_repr": "5"
       },
       {
         "name": "EXPLORER_TARGET_CHANNEL_IDS",
-        "line": 189,
+        "line": 199,
         "type": "list[int]",
         "value_repr": "[1522439581658648636]"
       },
       {
         "name": "INTERJECT_EVAL_THRESHOLD",
-        "line": 196,
+        "line": 206,
         "type": "int",
         "value_repr": "10"
       },
       {
         "name": "INTERJECT_COOLDOWN_SECONDS",
-        "line": 199,
+        "line": 209,
         "type": "int",
         "value_repr": "30"
       },
       {
         "name": "INTERJECT_MAX_CONSECUTIVE",
-        "line": 203,
+        "line": 213,
         "type": "int",
         "value_repr": "3"
       },
       {
         "name": "INTERJECT_SCORE_THRESHOLD",
-        "line": 206,
+        "line": 216,
         "type": "int",
         "value_repr": "7"
       },
       {
         "name": "RATE_LIMIT_MAX_REQUESTS",
-        "line": 211,
+        "line": 221,
         "type": "int",
         "value_repr": "5"
       },
       {
         "name": "RATE_LIMIT_WINDOW_SECONDS",
-        "line": 212,
+        "line": 222,
         "type": "int",
         "value_repr": "30"
       },
       {
         "name": "RATE_LIMIT_REPLY_MESSAGE",
-        "line": 213,
+        "line": 223,
         "type": "str",
         "value_repr": "'名偵探現在很忙！{cooldown:.0f} 秒後再來！'"
       },
       {
         "name": "HEALTH_CHECK_INTERVAL_SECONDS",
-        "line": 218,
+        "line": 228,
         "type": "int",
         "value_repr": "300"
       },
       {
         "name": "HEALTH_ALERT_CHANNEL_ID",
-        "line": 219,
+        "line": 229,
         "type": "int",
         "value_repr": "1503226173386133574"
       },
       {
         "name": "DISCORD_LOG_LEVEL",
-        "line": 220,
+        "line": 230,
         "type": "str",
         "value_repr": "'WARNING'"
       },
       {
         "name": "VOICE_STT_MODEL",
-        "line": 225,
+        "line": 235,
         "type": "str",
         "value_repr": "str(BASE_DIR / 'models' / 'nemotron-3.5')"
       },
       {
         "name": "VOICE_STT_DEVICE",
-        "line": 226,
+        "line": 236,
         "type": "str",
         "value_repr": "'cpu'"
       },
       {
         "name": "VOICE_STT_COMPUTE_TYPE",
-        "line": 227,
+        "line": 237,
         "type": "str",
         "value_repr": "'float32'"
       },
       {
         "name": "VOICE_STT_LANGUAGE",
-        "line": 228,
+        "line": 238,
         "type": "str",
         "value_repr": "'zh'"
       },
       {
         "name": "VOICE_TTS_MODEL_PATH",
-        "line": 229,
+        "line": 239,
         "type": "str",
         "value_repr": "str(BASE_DIR / 'models' / 'xtts-v2')"
       },
       {
         "name": "VOICE_TTS_LANGUAGE",
-        "line": 230,
+        "line": 240,
         "type": "str",
         "value_repr": "'zh-cn'"
       },
       {
         "name": "VOICE_TTS_SPEAKER_WAV",
-        "line": 231,
+        "line": 241,
         "type": "str",
         "value_repr": "str(BASE_DIR / 'file' / 'shiry_voice_sample.wav')"
       },
       {
         "name": "VOICE_VAD_THRESHOLD",
-        "line": 232,
+        "line": 242,
         "type": "float",
         "value_repr": "0.5"
       },
       {
         "name": "VOICE_VAD_MIN_SILENCE_MS",
-        "line": 233,
+        "line": 243,
         "type": "int",
         "value_repr": "500"
       },
       {
         "name": "VOICE_SILENCE_TIMEOUT_SECONDS",
-        "line": 234,
+        "line": 244,
         "type": "float",
         "value_repr": "1.5"
       },
       {
         "name": "VOICE_MAX_RECORD_SECONDS",
-        "line": 235,
+        "line": 245,
         "type": "int",
         "value_repr": "30"
       },
       {
         "name": "POLLINATIONS_API_URL",
-        "line": 240,
+        "line": 250,
         "type": "str",
         "value_repr": "'https://image.pollinations.ai/prompt'"
       },
       {
         "name": "POLLINATIONS_TIMEOUT_SECONDS",
-        "line": 241,
+        "line": 251,
         "type": "int",
         "value_repr": "30"
       },
       {
         "name": "POLLINATIONS_MODEL",
-        "line": 243,
+        "line": 253,
         "type": "str",
         "value_repr": "'flux-anime'"
       },
       {
         "name": "USE_ONLINE_IMAGE_MODEL",
-        "line": 249,
+        "line": 259,
         "type": "bool",
         "value_repr": "os.getenv('USE_ONLINE_IMAGE_MODEL', 'True').lower() in ('true', '1', 'yes')"
       },
       {
         "name": "GEMINI_IMAGE_MODEL",
-        "line": 254,
+        "line": 264,
         "type": "str",
         "value_repr": "os.getenv('GEMINI_IMAGE_MODEL', 'gemini-2.5-flash-image')"
       },
       {
         "name": "GEMINI_IMAGE_TIMEOUT_SECONDS",
-        "line": 255,
+        "line": 265,
         "type": "int",
         "value_repr": "30"
       },
       {
         "name": "HF_TOKEN",
-        "line": 260,
+        "line": 270,
         "type": "str",
         "value_repr": "os.getenv('HF_TOKEN', '')"
       },
       {
         "name": "HF_IMAGE_MODEL",
-        "line": 261,
+        "line": 271,
         "type": "str",
         "value_repr": "'cagliostrolab/animagine-xl-3.1'"
       },
       {
         "name": "HF_IMAGE_TIMEOUT_SECONDS",
-        "line": 262,
+        "line": 272,
         "type": "int",
         "value_repr": "120"
       },
       {
         "name": "SD_WEBUI_URL",
-        "line": 267,
+        "line": 277,
         "type": "str",
         "value_repr": "'http://localhost:7860'"
       },
       {
         "name": "SD_DEFAULT_WIDTH",
-        "line": 268,
+        "line": 278,
         "type": "int",
         "value_repr": "768"
       },
       {
         "name": "SD_DEFAULT_HEIGHT",
-        "line": 269,
+        "line": 279,
         "type": "int",
         "value_repr": "1024"
       },
       {
         "name": "SD_DEFAULT_STEPS",
-        "line": 270,
+        "line": 280,
         "type": "int",
         "value_repr": "20"
       },
       {
         "name": "SD_DEFAULT_CFG_SCALE",
-        "line": 271,
+        "line": 281,
         "type": "float",
         "value_repr": "7.0"
       },
       {
         "name": "SD_DEFAULT_SAMPLER",
-        "line": 272,
+        "line": 282,
         "type": "str",
         "value_repr": "'DPM++ 2M Karras'"
       },
       {
         "name": "SD_TIMEOUT_SECONDS",
-        "line": 273,
+        "line": 283,
         "type": "int",
         "value_repr": "120"
       },
       {
         "name": "SD_NEGATIVE_PROMPT_BASE",
-        "line": 274,
+        "line": 284,
         "type": "str",
         "value_repr": "'lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, blurry, artist name'"
       },
       {
         "name": "MICRO_COT_ENABLED",
-        "line": 282,
+        "line": 292,
         "type": "bool",
         "value_repr": "True"
       },
       {
         "name": "CHAT_LOG_DIR",
-        "line": 287,
+        "line": 297,
         "type": "Path",
         "value_repr": "DATA_DIR / 'chat_logs'"
       },
       {
         "name": "NIGHTLY_DIGEST_HOUR",
-        "line": 288,
+        "line": 298,
         "type": "int",
         "value_repr": "3"
       },
       {
         "name": "NIGHTLY_DIGEST_MODEL",
-        "line": 289,
+        "line": 299,
         "type": "str",
         "value_repr": "PRIMARY_MODEL"
       },
       {
         "name": "NIGHTLY_MAX_MSGS_PER_USER",
-        "line": 290,
+        "line": 300,
         "type": "int",
         "value_repr": "200"
       },
       {
         "name": "WEB_UI_HOST",
-        "line": 295,
+        "line": 305,
         "type": "str",
         "value_repr": "os.getenv('WEB_UI_HOST', '0.0.0.0')"
       },
       {
         "name": "WEB_UI_PORT",
-        "line": 296,
+        "line": 306,
         "type": "int",
         "value_repr": "int(os.getenv('WEB_UI_PORT', '8080'))"
       },
       {
         "name": "WEB_UI_HTTPS",
-        "line": 297,
+        "line": 307,
         "type": "bool",
         "value_repr": "True"
       },
       {
         "name": "WEB_UI_SSL_CERT",
-        "line": 298,
+        "line": 308,
         "type": "str | None",
         "value_repr": "os.getenv('WEB_UI_SSL_CERT', None)"
       },
       {
         "name": "WEB_UI_SSL_KEY",
-        "line": 299,
+        "line": 309,
         "type": "str | None",
         "value_repr": "os.getenv('WEB_UI_SSL_KEY', None)"
       },
       {
         "name": "WEB_UI_RADMIN_IP",
-        "line": 300,
+        "line": 310,
         "type": "str | None",
         "value_repr": "os.getenv('WEB_UI_RADMIN_IP', '26.108.83.196')"
       },
       {
         "name": "WEB_UI_HTTP_TIMEOUT",
-        "line": 301,
+        "line": 311,
         "type": "float",
         "value_repr": "5.0"
       },
       {
         "name": "YOUTUBE_COOKIES_PATH",
-        "line": 306,
+        "line": 316,
         "type": "Path",
         "value_repr": "DATA_DIR / 'cookies.txt'"
       },
       {
         "name": "MUSIC_PLAYLIST_MAX_ITEMS",
-        "line": 307,
+        "line": 317,
         "type": "int",
         "value_repr": "100"
       },
       {
         "name": "MUSIC_FFMPEG_BEFORE_OPTIONS",
-        "line": 308,
+        "line": 318,
         "type": "str",
-        "value_repr": "'-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'"
+        "value_repr": "'-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -loglevel error'"
       },
       {
         "name": "MUSIC_FFMPEG_OPTIONS",
-        "line": 309,
+        "line": 319,
         "type": "str",
         "value_repr": "'-vn -af \"loudnorm=I=-14:LRA=11:TP=-1.5\"'"
       },
       {
         "name": "MUSIC_QUEUE_VIEW_TIMEOUT",
-        "line": 310,
+        "line": 320,
         "type": "int",
         "value_repr": "180"
       },
       {
         "name": "VOICE_STT_REPO_ID",
-        "line": 312,
+        "line": 322,
         "type": "str",
         "value_repr": "'nvidia/nemotron-3.5-asr-streaming-0.6b'"
       },
       {
         "name": "VOICE_TTS_MODEL_NAME",
-        "line": 313,
+        "line": 323,
         "type": "str",
         "value_repr": "'tts_models/multilingual/multi-dataset/xtts_v2'"
       },
       {
         "name": "VOICE_VAD_REPO_OR_DIR",
-        "line": 314,
+        "line": 324,
         "type": "str",
         "value_repr": "'snakers4/silero-vad'"
       },
       {
         "name": "VOICE_VAD_MODEL_NAME",
-        "line": 315,
+        "line": 325,
         "type": "str",
         "value_repr": "'silero_vad'"
       },
       {
         "name": "PIXIV_TAG_PATH",
-        "line": 320,
+        "line": 330,
         "type": "Path",
         "value_repr": "FILE_DIR / 'pixiv_tag.json'"
       },
       {
         "name": "PIXIV_TAG_MIN_POST_COUNT",
-        "line": 321,
+        "line": 331,
         "type": "int",
         "value_repr": "100"
       },
       {
         "name": "PIXIV_TAG_MAX_PAGES",
-        "line": 322,
+        "line": 332,
         "type": "int",
         "value_repr": "60"
       },
       {
         "name": "PIXIV_TAG_REQUEST_DELAY",
-        "line": 323,
+        "line": 333,
         "type": "float",
         "value_repr": "0.5"
       },
       {
         "name": "DANBOORU_API_URL",
-        "line": 324,
+        "line": 334,
         "type": "str",
         "value_repr": "'https://danbooru.donmai.us/tags.json'"
       },
       {
         "name": "WORLD_LOG_DIR",
-        "line": 326,
+        "line": 336,
         "type": "Path",
         "value_repr": "DATA_DIR / 'world_history'"
       },
       {
         "name": "WORLD_MEMORY_PATH",
-        "line": 327,
+        "line": 337,
         "type": "Path",
         "value_repr": "DATA_DIR / 'world_memory.json'"
       },
       {
         "name": "BOT_LOG_PATH",
-        "line": 328,
+        "line": 338,
         "type": "Path",
         "value_repr": "DATA_DIR / 'bot.log'"
       },
       {
         "name": "MEMORY_MAX_FACTS_IN_CONTEXT",
-        "line": 333,
+        "line": 343,
         "type": "int",
         "value_repr": "5"
       },
       {
         "name": "MEMORY_MAX_FACTS_PER_USER",
-        "line": 334,
+        "line": 344,
         "type": "int",
         "value_repr": "15"
       },
       {
         "name": "MEMORY_PERMANENT_FACT_THRESHOLD",
-        "line": 335,
+        "line": 345,
         "type": "int",
         "value_repr": "4"
       },
       {
         "name": "NIGHTLY_MIN_MSGS_THRESHOLD",
-        "line": 336,
+        "line": 346,
         "type": "int",
         "value_repr": "5"
       },
       {
         "name": "BOT_BRAIN_MAX_RETRIES",
-        "line": 341,
+        "line": 351,
         "type": "int",
         "value_repr": "3"
       },
       {
         "name": "BOT_BRAIN_RETRY_DELAY",
-        "line": 342,
+        "line": 352,
         "type": "float",
         "value_repr": "2.0"
       },
       {
         "name": "HEARTBEAT_CHECK_INTERVAL_MINUTES",
-        "line": 347,
+        "line": 357,
         "type": "int",
         "value_repr": "30"
       },
       {
         "name": "HEARTBEAT_CONDITION_START_HOUR",
-        "line": 348,
+        "line": 358,
         "type": "int",
         "value_repr": "9"
       },
       {
         "name": "HEARTBEAT_CONDITION_END_HOUR",
-        "line": 349,
+        "line": 359,
         "type": "int",
         "value_repr": "22"
       },
       {
         "name": "HEARTBEAT_CONDITION_MIN_GAP_SECONDS",
-        "line": 350,
+        "line": 360,
         "type": "int",
         "value_repr": "7200"
       },
       {
         "name": "OPENWEATHERMAP_API_URL",
-        "line": 355,
+        "line": 365,
         "type": "str",
         "value_repr": "'https://api.openweathermap.org/data/2.5/weather'"
       },
       {
         "name": "SAFEBOORU_API_URL",
-        "line": 356,
+        "line": 366,
         "type": "str",
         "value_repr": "'https://safebooru.org/index.php?page=dapi&s=post'"
       },
       {
         "name": "SAFEBOORU_IMAGE_BASE_URL",
-        "line": 357,
+        "line": 367,
         "type": "str",
         "value_repr": "'https://safebooru.org/images/'"
       },
       {
         "name": "DUCKDUCKGO_SEARCH_URL",
-        "line": 358,
+        "line": 368,
         "type": "str",
         "value_repr": "'https://html.duckduckgo.com/html/?q='"
       },
       {
         "name": "DEFAULT_HTTP_TIMEOUT",
-        "line": 359,
+        "line": 369,
         "type": "int",
         "value_repr": "10"
       },
       {
         "name": "YOUTUBE_SEARCH_API_URL",
-        "line": 360,
+        "line": 370,
         "type": "str",
         "value_repr": "'https://www.googleapis.com/youtube/v3/search'"
       },
       {
         "name": "YOUTUBE_RSS_FEED_URL",
-        "line": 361,
+        "line": 371,
         "type": "str",
         "value_repr": "'https://www.youtube.com/feeds/videos.xml?channel_id='"
       },
       {
         "name": "YOUTUBE_RSS_NS",
-        "line": 362,
+        "line": 372,
         "type": "str",
         "value_repr": "'http://www.w3.org/2005/Atom'"
       },
       {
         "name": "DEFAULT_USER_AGENT",
-        "line": 363,
+        "line": 373,
         "type": "str",
         "value_repr": "'DiscordBot/1.0 (https://github.com/placeholder; contact@placeholder.com)'"
       },
       {
         "name": "WEATHER_EXTRACT_TIMEOUT",
-        "line": 368,
+        "line": 378,
         "type": "float",
         "value_repr": "10.0"
       },
       {
         "name": "WEATHER_REPLY_TIMEOUT",
-        "line": 369,
-        "type": "float",
-        "value_repr": "60.0"
-      },
-      {
-        "name": "SAFEBOORU_HTTP_TIMEOUT",
-        "line": 370,
-        "type": "int",
-        "value_repr": "12"
-      },
-      {
-        "name": "VISION_ANALYSIS_TIMEOUT",
-        "line": 371,
-        "type": "int",
-        "value_repr": "30"
-      },
-      {
-        "name": "STOCK_EXTRACT_TIMEOUT",
-        "line": 372,
-        "type": "float",
-        "value_repr": "10.0"
-      },
-      {
-        "name": "STOCK_REPLY_TIMEOUT",
-        "line": 373,
-        "type": "float",
-        "value_repr": "60.0"
-      },
-      {
-        "name": "SCHEDULE_PARSE_TIMEOUT",
-        "line": 374,
-        "type": "float",
-        "value_repr": "20.0"
-      },
-      {
-        "name": "DRAW_RAW_TIMEOUT",
-        "line": 375,
-        "type": "float",
-        "value_repr": "30.0"
-      },
-      {
-        "name": "DRAW_EXPAND_TIMEOUT",
-        "line": 376,
-        "type": "float",
-        "value_repr": "10.0"
-      },
-      {
-        "name": "COMPOUND_PARSER_TIMEOUT",
-        "line": 377,
-        "type": "float",
-        "value_repr": "10.0"
-      },
-      {
-        "name": "INTERJECT_SCORE_TIMEOUT",
-        "line": 378,
-        "type": "float",
-        "value_repr": "30.0"
-      },
-      {
-        "name": "INTERJECT_REPLY_TIMEOUT",
         "line": 379,
         "type": "float",
         "value_repr": "60.0"
       },
       {
-        "name": "YOUTUBE_EXPLORER_TIMEOUT",
+        "name": "SAFEBOORU_HTTP_TIMEOUT",
         "line": 380,
+        "type": "int",
+        "value_repr": "12"
+      },
+      {
+        "name": "VISION_ANALYSIS_TIMEOUT",
+        "line": 381,
+        "type": "int",
+        "value_repr": "30"
+      },
+      {
+        "name": "STOCK_EXTRACT_TIMEOUT",
+        "line": 382,
+        "type": "float",
+        "value_repr": "10.0"
+      },
+      {
+        "name": "STOCK_REPLY_TIMEOUT",
+        "line": 383,
+        "type": "float",
+        "value_repr": "60.0"
+      },
+      {
+        "name": "SCHEDULE_PARSE_TIMEOUT",
+        "line": 384,
+        "type": "float",
+        "value_repr": "20.0"
+      },
+      {
+        "name": "DRAW_RAW_TIMEOUT",
+        "line": 385,
+        "type": "float",
+        "value_repr": "30.0"
+      },
+      {
+        "name": "DRAW_EXPAND_TIMEOUT",
+        "line": 386,
+        "type": "float",
+        "value_repr": "10.0"
+      },
+      {
+        "name": "COMPOUND_PARSER_TIMEOUT",
+        "line": 387,
+        "type": "float",
+        "value_repr": "10.0"
+      },
+      {
+        "name": "INTERJECT_SCORE_TIMEOUT",
+        "line": 388,
+        "type": "float",
+        "value_repr": "30.0"
+      },
+      {
+        "name": "INTERJECT_REPLY_TIMEOUT",
+        "line": 389,
+        "type": "float",
+        "value_repr": "60.0"
+      },
+      {
+        "name": "YOUTUBE_EXPLORER_TIMEOUT",
+        "line": 390,
         "type": "float",
         "value_repr": "20.0"
       },
       {
         "name": "NIGHTLY_DIGEST_TIMEOUT",
-        "line": 381,
+        "line": 391,
         "type": "float",
         "value_repr": "120.0"
       },
       {
         "name": "HEALTH_CHECK_TIMEOUT",
-        "line": 382,
+        "line": 392,
         "type": "float",
         "value_repr": "5.0"
       },
       {
         "name": "DISCORD_UI_VIEW_TIMEOUT",
-        "line": 383,
+        "line": 393,
         "type": "int",
         "value_repr": "300"
       },
       {
         "name": "CONFIG_OVERRIDE_PATH",
-        "line": 389,
+        "line": 399,
         "type": "Path",
         "value_repr": "DATA_DIR / 'config_override.json'"
       },
       {
         "name": "WEB_UI_PASSWORD",
-        "line": 406,
+        "line": 429,
         "type": "str",
         "value_repr": "os.getenv('WEB_UI_PASSWORD', '1919810')"
       },
       {
         "name": "WEB_UI_MAX_LOGIN_ATTEMPTS",
-        "line": 407,
+        "line": 430,
         "type": "int",
         "value_repr": "5"
       },
       {
         "name": "WEB_UI_LOCKOUT_MINUTES",
-        "line": 408,
+        "line": 431,
         "type": "int",
         "value_repr": "15"
       },
       {
         "name": "SETTINGS_META",
-        "line": 450,
+        "line": 473,
         "type": "dict[str, dict]",
-        "value_repr": "{'PRIMARY_MODEL': {'label': '主力模型 (Primary Model)', 'description': '平衡智商與生成速度，用於日常深度對話與邏輯推演。格式：前綴:模型名（例：ollama:llama3.2 / lms:gemma-4）', 'type': 'model', 'category': '模型設定'}, 'NOMORAL_MODEL': {'label': '無道德限制模型 (No-Moral Model)', 'description': '專門處理橘雪莉缺乏倫理觀的瘋狂人設，通常使用 abliterated 版本模型。', 'type': 'model', 'category': '模型設定'}, 'QUICK_MODEL': {'label': '快速回覆模型 (Quick Model)', 'description': '要求極速回覆時使用，需要足夠基礎智商。適合簡短互動。', 'type': 'model', 'category': '模型設定'}, 'CLASSIFIER_MODEL': {'label': '分類輕量模型 (Classifier Model)', 'description': '用於插話評分與 YouTube 影片篩選，輕量優先（如 qwen2.5:3b）。', 'type': 'model', 'category': '模型設定'}, 'VIBE_MODEL': {'label': '氛圍萃取模型 (Vibe Model)', 'description': '從聊天記錄中萃取當前話題氛圍，輕量模型即可勝任。', 'type': 'model', 'category': '模型設定'}, 'VISION_MODEL': {'label': '視覺辨識模型 (Vision Model)', 'description': '多模態圖片理解，需要支援圖像的模型（如 minicpm-v）。', 'type': 'model', 'category': '模型設定'}, 'CLOUD_SEARCH_MODEL': {'label': '雲端搜尋模型 (Cloud Search Model)', 'description': '網路搜尋任務使用的雲端模型，需要良好的工具呼叫能力。', 'type': 'model', 'category': '模型設定'}, 'OLLAMA_TIMEOUT': {'label': 'Ollama 逾時秒數 (Timeout)', 'description': '等待 Ollama 回應的最長秒數，較大模型需要更長時間。建議 60–180。', 'type': 'int', 'min': 10, 'max': 600, 'category': 'LLM 參數'}, 'LLM_MAX_CONTEXT_TOKENS': {'label': '最大 Context Token 數', 'description': '送給 LLM 的最大上下文長度（包含 System Prompt + 歷史記錄）。越大越耗資源。', 'type': 'int', 'min': 1024, 'max': 131072, 'category': 'LLM 參數'}, 'LLM_MAX_OUTPUT_TOKENS': {'label': '最大輸出 Token 數', 'description': '模型單次生成的最大 token 數量。太少會截斷回覆，太多會降低速度。', 'type': 'int', 'min': 128, 'max': 8192, 'category': 'LLM 參數'}, 'LLM_TEMPERATURE': {'label': '生成溫度 (Temperature)', 'description': '控制輸出隨機性。0 = 完全確定性；1 = 高隨機創意。日常對話建議 0.7–0.9。', 'type': 'float', 'min': 0.0, 'max': 2.0, 'step': 0.05, 'category': 'LLM 參數'}, 'LLM_PRESENCE_PENALTY': {'label': 'Presence Penalty（話題多樣性）', 'description': '懲罰已出現過的 token，迫使模型引入新話題。建議 0.4–0.8。', 'type': 'float', 'min': -2.0, 'max': 2.0, 'step': 0.05, 'category': 'LLM 參數'}, 'LLM_FREQUENCY_PENALTY': {'label': 'Frequency Penalty（降低重複）', 'description': '懲罰重複出現的 token，降低跳針（重複生成相同句子）機率。建議 0.4–0.8。', 'type': 'float', 'min': -2.0, 'max': 2.0, 'step': 0.05, 'category': 'LLM 參數'}, 'OLLAMA_BASE_URL': {'label': 'Ollama 伺服器 URL', 'description': '本機 Ollama 服務的基礎 URL，預設為 http://localhost:11434。', 'type': 'url', 'category': '後端連線設定'}, 'LMS_BASE_URL': {'label': 'LM Studio 伺服器 URL', 'description': '本機 LM Studio 的 OpenAI 相容 API 位址，預設為 http://localhost:1234/v1。', 'type': 'url', 'category': '後端連線設定'}, 'OPENAI_BASE_URL': {'label': 'OpenAI API URL', 'description': 'OpenAI 相容 API 端點，可指向 OpenAI 或第三方代理。', 'type': 'url', 'category': '後端連線設定'}, 'DEEPSEEK_BASE_URL': {'label': 'DeepSeek API URL', 'description': 'DeepSeek API 端點 URL。', 'type': 'url', 'category': '後端連線設定'}, 'GEMINI_BASE_URL': {'label': 'Gemini API URL', 'description': 'Google Gemini OpenAI 相容端點 URL。', 'type': 'url', 'category': '後端連線設定'}, 'CLAUDE_BASE_URL': {'label': 'Claude API URL', 'description': 'Anthropic Claude Messages API 端點。', 'type': 'url', 'category': '後端連線設定'}, 'CONTEXT_HISTORY_LIMIT': {'label': '歷史記錄筆數限制', 'description': '注入 LLM Prompt 的最大對話輪數（USER+BOT 各算一輪）。越高記憶越長但越耗 token。', 'type': 'int', 'min': 2, 'max': 100, 'category': '記憶與上下文'}, 'CONTEXT_TIME_GAP_SECONDS': {'label': '上下文時間斷層門檻（秒）', 'description': '兩則訊息相差超過此秒數，視為對話斷層並截斷歷史。預設 900 秒（15 分鐘）。', 'type': 'int', 'min': 60, 'max': 86400, 'category': '記憶與上下文'}, 'VIBE_UPDATE_MESSAGE_THRESHOLD': {'label': '氛圍更新訊息門檻', 'description': '累積幾則訊息後才觸發氛圍（話題）萃取更新。', 'type': 'int', 'min': 5, 'max': 500, 'category': '氛圍系統'}, 'VIBE_TOP_N_TOPICS': {'label': '話題萃取數量 (Top N)', 'description': '每次氛圍萃取保留前 N 個主要話題注入 Prompt。', 'type': 'int', 'min': 1, 'max': 10, 'category': '氛圍系統'}, 'VIBE_DECAY_INTERVAL_SECONDS': {'label': '話題衰減間隔（秒）', 'description': '每隔多少秒話題權重自動降低一次，模擬話題逐漸淡忘。', 'type': 'int', 'min': 300, 'max': 86400, 'category': '氛圍系統'}, 'VIBE_DECAY_AMOUNT': {'label': '話題衰減量', 'description': '每次衰減時話題權重減少的數值。', 'type': 'int', 'min': 1, 'max': 10, 'category': '氛圍系統'}, 'VIBE_MIN_WEIGHT_TO_INJECT': {'label': '話題注入最低權重', 'description': '低於此權重的話題不會注入 Prompt（避免注入過時或無關話題）。', 'type': 'int', 'min': 1, 'max': 20, 'category': '氛圍系統'}, 'VIBE_REINFORCE_MAX_WEIGHT': {'label': '話題強化最高權重上限', 'description': '話題再次出現時可補滿到的最高權重值。', 'type': 'int', 'min': 5, 'max': 50, 'category': '氛圍系統'}, 'INTERJECT_EVAL_THRESHOLD': {'label': '插話觸發門檻（訊息數）', 'description': '每累積幾則真人訊息，觸發一次插話評分。', 'type': 'int', 'min': 1, 'max': 100, 'category': '插話引擎'}, 'INTERJECT_COOLDOWN_SECONDS': {'label': '插話冷卻時間（秒）', 'description': '插話後的冷卻秒數，冷卻期間不再觸發插話評估。', 'type': 'int', 'min': 0, 'max': 600, 'category': '插話引擎'}, 'INTERJECT_MAX_CONSECUTIVE': {'label': '最大連續插話次數', 'description': '同一冷卻週期內最多允許連續插話幾次，超過後需等下一週期。', 'type': 'int', 'min': 1, 'max': 20, 'category': '插話引擎'}, 'INTERJECT_SCORE_THRESHOLD': {'label': '插話評分門檻 (1–10)', 'description': 'LLM 插話評分 >= 此值才實際插話。設為 10 = 幾乎不主動插話。', 'type': 'int', 'min': 1, 'max': 10, 'category': '插話引擎'}, 'RATE_LIMIT_MAX_REQUESTS': {'label': '速率限制：最大請求數', 'description': '在時間窗口內，同一用戶最多可以發送的請求數量。', 'type': 'int', 'min': 1, 'max': 100, 'category': '速率限制'}, 'RATE_LIMIT_WINDOW_SECONDS': {'label': '速率限制：時間窗口（秒）', 'description': '速率限制的統計時間窗口長度（秒）。', 'type': 'int', 'min': 5, 'max': 3600, 'category': '速率限制'}, 'TYPING_BASE_DELAY': {'label': '打字延遲基礎值（秒）', 'description': '雪莉開始打字前的最小等待秒數，模擬人類思考時間。', 'type': 'float', 'min': 0.0, 'max': 10.0, 'step': 0.1, 'category': '打字模擬'}, 'TYPING_DELAY_PER_50_CHARS': {'label': '每 50 字打字追加延遲（秒）', 'description': '回覆每 50 個字增加的打字延遲，模擬長文打字速度。', 'type': 'float', 'min': 0.0, 'max': 5.0, 'step': 0.1, 'category': '打字模擬'}, 'MICRO_COT_ENABLED': {'label': '啟用 Micro Chain-of-Thought', 'description': '開啟後，雪莉在每次回覆前先輸出內心推理 <thought>。會增加推理品質但略微降低速度。', 'type': 'bool', 'category': 'Chain-of-Thought'}, 'USE_ONLINE_IMAGE_MODEL': {'label': '使用線上圖片生成模型', 'description': 'True = 優先使用 Gemini/HF/Pollinations 線上生成；False = 使用本機 SD WebUI。', 'type': 'bool', 'category': '圖片生成'}, 'POLLINATIONS_MODEL': {'label': 'Pollinations 圖片模型', 'description': 'Pollinations.ai 使用的模型名稱。推薦：flux-anime（二次元）、z-image-turbo（寫實）。', 'type': 'str', 'category': '圖片生成'}, 'GEMINI_IMAGE_MODEL': {'label': 'Gemini 圖片生成模型', 'description': 'Google Gemini 圖片生成使用的模型 ID。', 'type': 'str', 'category': '圖片生成'}, 'SD_WEBUI_URL': {'label': 'Stable Diffusion WebUI URL', 'description': '本機 SD WebUI（AUTOMATIC1111）的服務位址，作為圖片生成後備方案。', 'type': 'url', 'category': '圖片生成'}, 'SD_DEFAULT_WIDTH': {'label': 'SD 預設圖片寬度（px）', 'description': 'Stable Diffusion 生成圖片的預設寬度，建議為 64 的倍數。', 'type': 'int', 'min': 256, 'max': 2048, 'category': '圖片生成'}, 'SD_DEFAULT_HEIGHT': {'label': 'SD 預設圖片高度（px）', 'description': 'Stable Diffusion 生成圖片的預設高度，建議為 64 的倍數。', 'type': 'int', 'min': 256, 'max': 2048, 'category': '圖片生成'}, 'SD_DEFAULT_STEPS': {'label': 'SD 推理步數 (Steps)', 'description': '步數越多品質越高但速度越慢，一般推薦 20–30 步。', 'type': 'int', 'min': 5, 'max': 150, 'category': '圖片生成'}, 'SD_DEFAULT_CFG_SCALE': {'label': 'SD CFG Scale（提示詞遵從度）', 'description': '越高越嚴格遵從 Prompt，過高會過度飽和。建議 5–9。', 'type': 'float', 'min': 1.0, 'max': 30.0, 'step': 0.5, 'category': '圖片生成'}, 'HEALTH_CHECK_INTERVAL_SECONDS': {'label': '健康監控間隔（秒）', 'description': 'Bot 健康狀態檢查的頻率，單位為秒。', 'type': 'int', 'min': 30, 'max': 3600, 'category': '健康監控'}, 'DISCORD_LOG_LEVEL': {'label': 'Discord 日誌等級', 'description': 'discord.py 的日誌輸出等級。可選：DEBUG、INFO、WARNING、ERROR、CRITICAL。', 'type': 'str', 'category': '健康監控'}, 'EXPLORER_INTERVAL_SECONDS': {'label': '爬蟲執行間隔（秒）', 'description': '閒置爬蟲（Web Explorer）的觸發間隔。', 'type': 'int', 'min': 60, 'max': 86400, 'category': 'Web 爬蟲'}, 'YOUTUBE_MAX_RESULTS': {'label': 'YouTube 搜尋最大結果數', 'description': '每次 YouTube 搜尋的最大候選影片數量。', 'type': 'int', 'min': 1, 'max': 50, 'category': 'Web 爬蟲'}, 'NIGHTLY_DIGEST_HOUR': {'label': '深夜整合觸發時間（小時）', 'description': '每天深夜幾點觸發記憶整合任務（台灣時間 UTC+8）。預設 3（凌晨 3 點）。', 'type': 'int', 'min': 0, 'max': 23, 'category': '深夜記憶整合'}, 'NIGHTLY_MAX_MSGS_PER_USER': {'label': '深夜整合每用戶最大訊息數', 'description': '每位使用者最多送入 LLM 進行整合的訊息數量，過多會超出 context。', 'type': 'int', 'min': 10, 'max': 2000, 'category': '深夜記憶整合'}, 'NIGHTLY_DIGEST_MODEL': {'label': '深夜記憶整合模型', 'description': '進行每日深夜對話記憶摘要與精煉的模型前綴與名稱。', 'type': 'model', 'category': '深夜記憶整合'}, 'NIGHTLY_DIGEST_TIMEOUT': {'label': '深夜整合逾時秒數', 'description': '深夜記憶整合任務的最長執行等待秒數。', 'type': 'int', 'min': 30, 'max': 600, 'category': '深夜記憶整合'}, 'NIGHTLY_MIN_MSGS_THRESHOLD': {'label': '深夜整合最低訊息門檻', 'description': '使用者當日發送超過此數量訊息時，才會觸發該用戶的深夜記憶總結。', 'type': 'int', 'min': 1, 'max': 50, 'category': '深夜記憶整合'}, 'BOT_NAME': {'label': '雪莉稱呼名稱 (Bot Name)', 'description': '橘雪莉對外顯示與對話中被稱呼的名字。', 'type': 'str', 'category': '雪莉人設與心跳'}, 'CORE_PERSONA': {'label': '橘雪莉核心人設 Prompt', 'description': '設定橘雪莉為 15 歲活潑台灣女高中生及自稱名偵探的核心靈魂設定。', 'type': 'str', 'category': '雪莉人設與心跳'}, 'DEFAULT_HEARTBEAT_CHANNEL_ID': {'label': '預設心跳主動發言頻道 ID', 'description': '當雪莉主動觸發心跳聊天或日常閒聊時，預設發布的 Discord 頻道 ID。', 'type': 'int', 'category': '雪莉人設與心跳'}, 'HEARTBEAT_CHECK_INTERVAL_MINUTES': {'label': '心跳巡邏檢查間隔（分鐘）', 'description': '系統多久檢查一次是否該在頻道中主動發起問候或閒聊。', 'type': 'int', 'min': 5, 'max': 1440, 'category': '雪莉人設與心跳'}, 'HEARTBEAT_CONDITION_START_HOUR': {'label': '心跳活躍起始時間（時）', 'description': '每天幾點開始允許橘雪莉主動在頻道裡說話（0-23）。', 'type': 'int', 'min': 0, 'max': 23, 'category': '雪莉人設與心跳'}, 'HEARTBEAT_CONDITION_END_HOUR': {'label': '心跳活躍結束時間（時）', 'description': '每天幾點後停止主動在頻道發言，進入夜晚休息（0-23）。', 'type': 'int', 'min': 0, 'max': 23, 'category': '雪莉人設與心跳'}, 'HEARTBEAT_CONDITION_MIN_GAP_SECONDS': {'label': '心跳兩次主動發言最短間隔（秒）', 'description': '兩次主動閒聊之間的最短間隔，預設 7200 秒（2 小時），避免洗版。', 'type': 'int', 'min': 600, 'max': 86400, 'category': '雪莉人設與心跳'}, 'MEMORY_MAX_FACTS_IN_CONTEXT': {'label': '單次對話注入事實上限', 'description': '每次與用戶對話時，自資料庫取出並注入 Prompt 的用戶個人記憶上限筆數。', 'type': 'int', 'min': 1, 'max': 20, 'category': '記憶與上下文'}, 'MEMORY_MAX_FACTS_PER_USER': {'label': '每用戶最多記憶事實數', 'description': '每位 Discord 使用者在資料庫中最多儲存的事實記憶上限。', 'type': 'int', 'min': 5, 'max': 100, 'category': '記憶與上下文'}, 'MEMORY_PERMANENT_FACT_THRESHOLD': {'label': '記憶轉為永久保留門檻', 'description': '當事實權重超過此數值，將轉為永久記憶不被淘汰。', 'type': 'int', 'min': 1, 'max': 20, 'category': '記憶與上下文'}, 'VOICE_STT_MODEL': {'label': '語音辨識 STT 本地模型路徑', 'description': '本機 Nemotron-3.5 語音轉文字模型的存放資料夾路徑。', 'type': 'str', 'category': '語音辨識與合成'}, 'VOICE_STT_REPO_ID': {'label': 'STT 於 HuggingFace Repo ID', 'description': 'Nemotron 語音辨識於 Hugging Face 的模型名稱。', 'type': 'str', 'category': '語音辨識與合成'}, 'VOICE_STT_LANGUAGE': {'label': '語音辨識目標語言', 'description': \"STT 辨識預設語言代碼，例如 'zh' 代表中文。\", 'type': 'str', 'category': '語音辨識與合成'}, 'VOICE_STT_DEVICE': {'label': 'STT 運算設備', 'description': \"執行語音辨識的設備（'cpu' 或 'cuda'）。\", 'type': 'str', 'category': '語音辨識與合成'}, 'VOICE_STT_COMPUTE_TYPE': {'label': 'STT 運算精度', 'description': \"模型推論使用的浮點數精度（如 'float32', 'float16'）。\", 'type': 'str', 'category': '語音辨識與合成'}, 'VOICE_TTS_MODEL_NAME': {'label': '語音合成 TTS 模型名稱', 'description': '發音合成模型，預設採用 XTTS v2 進行多語情感合成。', 'type': 'str', 'category': '語音辨識與合成'}, 'VOICE_TTS_LANGUAGE': {'label': 'TTS 語音發音語言', 'description': \"語音合成目標發音語言（例如 'zh-cn'）。\", 'type': 'str', 'category': '語音辨識與合成'}, 'VOICE_TTS_SPEAKER_WAV': {'label': 'TTS 參考音訊樣本檔路徑', 'description': '用於聲音音色選用之樣本檔案（如 shiry_voice_sample.wav）。', 'type': 'str', 'category': '語音辨識與合成'}, 'VOICE_VAD_MODEL_NAME': {'label': 'VAD 靜音檢測模型名稱', 'description': '用於判斷使用者說話起止的 VAD 引擎名稱（如 silero_vad）。', 'type': 'str', 'category': '語音辨識與合成'}, 'VOICE_VAD_THRESHOLD': {'label': 'VAD 靜音檢測靈敏度', 'description': '判定是否為人聲的聲音強度閥值（0.1–1.0），越高越不易誤判噪音。', 'type': 'float', 'min': 0.1, 'max': 1.0, 'step': 0.05, 'category': '語音辨識與合成'}, 'VOICE_VAD_MIN_SILENCE_MS': {'label': '判定說話結束之靜音毫秒數', 'description': '持續靜音超過幾毫秒後，認定使用者講話完畢並開始回復。', 'type': 'int', 'min': 100, 'max': 3000, 'category': '語音辨識與合成'}, 'VOICE_MAX_RECORD_SECONDS': {'label': '單次語音最長錄製秒數', 'description': '每次錄製使用者語音的最長秒數限制，防呆與防濫用。', 'type': 'int', 'min': 5, 'max': 120, 'category': '語音辨識與合成'}, 'VOICE_SILENCE_TIMEOUT_SECONDS': {'label': '語音對話靜音逾時秒數', 'description': '當通話中持續沉靜多久（秒）判定為發話間隔結尾。', 'type': 'float', 'min': 0.5, 'max': 10.0, 'step': 0.5, 'category': '語音辨識與合成'}, 'FFMPEG': {'label': 'FFmpeg 執行檔路徑', 'description': '系統中的 FFmpeg 執行檔位址，用於音訊解碼與轉檔。', 'type': 'str', 'category': '語音辨識與合成'}, 'MUSIC_FFMPEG_OPTIONS': {'label': '音樂 FFmpeg 轉碼參數', 'description': '播放 YouTube 或音訊串流時傳遞給 FFmpeg 的音量與標準化參數。', 'type': 'str', 'category': '音樂播放與隊列'}, 'MUSIC_FFMPEG_BEFORE_OPTIONS': {'label': '音樂 FFmpeg 串流重連參數', 'description': '確保網路波動時串流可自動重連的 FFmpeg 參數。', 'type': 'str', 'category': '音樂播放與隊列'}, 'MUSIC_PLAYLIST_MAX_ITEMS': {'label': '單次匯入歌單最大首數', 'description': '使用 YouTube 播放清單時一次最多允許載入的歌曲數量。', 'type': 'int', 'min': 5, 'max': 200, 'category': '音樂播放與隊列'}, 'MUSIC_QUEUE_VIEW_TIMEOUT': {'label': '音樂介面按鈕逾時（秒）', 'description': '音樂點歌介面按鈕（上一首/下一首/暫停）過多長秒數後自動停用。', 'type': 'int', 'min': 30, 'max': 600, 'category': '音樂播放與隊列'}, 'POLLINATIONS_API_URL': {'label': 'Pollinations 圖片 API 網址', 'description': '使用 Pollinations 進行免費二次元/寫實圖片生成時的請求端點。', 'type': 'str', 'category': '圖片生成'}, 'POLLINATIONS_TIMEOUT_SECONDS': {'label': 'Pollinations 生成逾時秒數', 'description': '等待 Pollinations 返回圖片的最長等待時間。', 'type': 'int', 'min': 10, 'max': 120, 'category': '圖片生成'}, 'GEMINI_IMAGE_TIMEOUT_SECONDS': {'label': 'Gemini 生圖逾時秒數', 'description': '呼叫 Google Gemini 圖片生成模型的最大逾時限制。', 'type': 'int', 'min': 10, 'max': 120, 'category': '圖片生成'}, 'HF_IMAGE_MODEL': {'label': 'HuggingFace 繪圖模型 ID', 'description': '若啟用 HF API 繪圖，採用之模型名稱（如 animagine-xl-3.1）。', 'type': 'str', 'category': '圖片生成'}, 'HF_IMAGE_TIMEOUT_SECONDS': {'label': 'HuggingFace 生圖逾時秒數', 'description': '調用 HF API 繪圖等待的最大限制時間。', 'type': 'int', 'min': 10, 'max': 300, 'category': '圖片生成'}, 'SD_DEFAULT_SAMPLER': {'label': 'SD 預設採樣器 (Sampler)', 'description': 'Stable Diffusion WebUI 預設採樣器名稱（例如 DPM++ 2M Karras）。', 'type': 'str', 'category': '圖片生成'}, 'SD_NEGATIVE_PROMPT_BASE': {'label': 'SD 預設負面提示詞', 'description': '生成圖片時自動帶入的負面過濾提示，防崩壞與低畫質。', 'type': 'str', 'category': '圖片生成'}, 'SD_TIMEOUT_SECONDS': {'label': 'SD WebUI 生圖逾時（秒）', 'description': '本機 Stable Diffusion WebUI 最多允許生成的秒數。', 'type': 'int', 'min': 30, 'max': 300, 'category': '圖片生成'}, 'DANBOORU_API_URL': {'label': 'Danbooru 圖庫 API 網址', 'description': '找圖功能使用的 Danbooru 標籤檢索端點。', 'type': 'str', 'category': '二次元圖庫 API'}, 'SAFEBOORU_API_URL': {'label': 'Safebooru API 檢索網址', 'description': '安全全齡向動漫圖庫 Safebooru 的 XML/JSON 查詢 API 網址。', 'type': 'str', 'category': '二次元圖庫 API'}, 'SAFEBOORU_IMAGE_BASE_URL': {'label': 'Safebooru 圖片來源 URL', 'description': 'Safebooru 下載與展示圖片的基底 URL。', 'type': 'str', 'category': '二次元圖庫 API'}, 'SAFEBOORU_HTTP_TIMEOUT': {'label': 'Safebooru 請求逾時（秒）', 'description': '抓取 Safebooru 圖片時的 HTTP 連線逾時限制。', 'type': 'int', 'min': 5, 'max': 60, 'category': '二次元圖庫 API'}, 'PIXIV_TAG_MIN_POST_COUNT': {'label': 'Pixiv 標籤最低作品門檻', 'description': '在 Pixiv 找圖時，標籤必須具有的基本作品數，確保圖片熱度品質。', 'type': 'int', 'min': 10, 'max': 10000, 'category': '二次元圖庫 API'}, 'PIXIV_TAG_MAX_PAGES': {'label': 'Pixiv 搜尋最大翻頁數', 'description': '在 Pixiv 搜尋標籤作品時最多允許翻看的頁數。', 'type': 'int', 'min': 1, 'max': 100, 'category': '二次元圖庫 API'}, 'PIXIV_TAG_REQUEST_DELAY': {'label': 'Pixiv API 請求間隔（秒）', 'description': '連續抓取 Pixiv 時的防護等待秒數，避免被伺服器限流。', 'type': 'float', 'min': 0.1, 'max': 5.0, 'step': 0.1, 'category': '二次元圖庫 API'}, 'DUCKDUCKGO_SEARCH_URL': {'label': 'DuckDuckGo 搜尋網址端點', 'description': '雪莉進行即時時事與情報檢索所呼叫的搜尋網址。', 'type': 'str', 'category': '外部資訊檢索'}, 'OPENWEATHERMAP_API_URL': {'label': 'OpenWeatherMap 天氣 API', 'description': '詢問各地區氣象預報所呼叫之 OpenWeatherMap 網址。', 'type': 'str', 'category': '外部資訊檢索'}, 'WEATHER_EXTRACT_TIMEOUT': {'label': '天氣資料分析逾時（秒）', 'description': '處理天氣 API 回傳資訊的最大逾時時間。', 'type': 'int', 'min': 5, 'max': 60, 'category': '外部資訊檢索'}, 'WEATHER_REPLY_TIMEOUT': {'label': '天氣對話生成逾時（秒）', 'description': '雪莉根據氣象預報產生對話的推論逾時秒數。', 'type': 'int', 'min': 10, 'max': 120, 'category': '外部資訊檢索'}, 'STOCK_EXTRACT_TIMEOUT': {'label': '股市報價解析逾時（秒）', 'description': '抓取與解析台股、美股行情資訊的逾時限制。', 'type': 'int', 'min': 5, 'max': 60, 'category': '外部資訊檢索'}, 'STOCK_REPLY_TIMEOUT': {'label': '股市分析回覆逾時（秒）', 'description': '雪莉產生股價走勢與名偵探評語對話的推論限制。', 'type': 'int', 'min': 10, 'max': 120, 'category': '外部資訊檢索'}, 'YOUTUBE_SEARCH_API_URL': {'label': 'YouTube 搜尋 API URL', 'description': 'Google YouTube v3 搜尋 API 端點。', 'type': 'str', 'category': 'YouTube 爬蟲'}, 'YOUTUBE_RSS_FEED_URL': {'label': 'YouTube RSS 訂閱端點 URL', 'description': '透過 RSS 快訊檢查特定頻道最新發片的 XML 基底網址。', 'type': 'str', 'category': 'YouTube 爬蟲'}, 'YOUTUBE_RSS_NS': {'label': 'YouTube RSS Atom 命名空間', 'description': '解析 YouTube Feed 用的 XML Atom Namespace。', 'type': 'str', 'category': 'YouTube 爬蟲'}, 'YOUTUBE_EXPLORER_TIMEOUT': {'label': 'YouTube 爬蟲執行逾時（秒）', 'description': '執行單次 YouTube 最新上傳檢查的最大限制秒數。', 'type': 'int', 'min': 5, 'max': 120, 'category': 'YouTube 爬蟲'}, 'PRIORITY_TAG_RESPONSE': {'label': '對話回覆優先權 (Priority)', 'description': '真人點名與主動聊天的佇列優先序（數值越小越優先）。預設 1（最高）。', 'type': 'int', 'min': 1, 'max': 100, 'category': '任務佇列優先級'}, 'PRIORITY_INTERJECT': {'label': '主動插話優先權 (Priority)', 'description': '雪莉插話推論在 BotBrain 中的優先等級。預設 10。', 'type': 'int', 'min': 1, 'max': 100, 'category': '任務佇列優先級'}, 'PRIORITY_HEARTBEAT': {'label': '日常心跳聊天優先權', 'description': '主動巡邏聊天推論任務優先等第。預設 20。', 'type': 'int', 'min': 1, 'max': 100, 'category': '任務佇列優先級'}, 'PRIORITY_VIBE_UPDATE': {'label': '話題氛圍萃取優先權', 'description': '背景萃取聊天室話題與氣氛推論優先等第。預設 50。', 'type': 'int', 'min': 1, 'max': 100, 'category': '任務佇列優先級'}, 'PRIORITY_DRAW': {'label': '二次元生圖與修圖優先權', 'description': '繪圖與圖片描述推論優先級別。預設 80。', 'type': 'int', 'min': 1, 'max': 100, 'category': '任務佇列優先級'}, 'PRIORITY_WEB_EXPLORER': {'label': '閒置網路爬蟲優先權', 'description': '後台網路時事爬蟲推論任務優先等第。預設 99（最低）。', 'type': 'int', 'min': 1, 'max': 100, 'category': '任務佇列優先級'}, 'BOT_BRAIN_MAX_RETRIES': {'label': 'BotBrain LLM 重試次數', 'description': '如果模型推論發生異常或空訊，自動重試的最多次數。', 'type': 'int', 'min': 1, 'max': 10, 'category': '系統與網路'}, 'BOT_BRAIN_RETRY_DELAY': {'label': 'BotBrain 重試等候秒數', 'description': '每次失敗後等待幾秒鐘再重新發起推論。', 'type': 'int', 'min': 1, 'max': 30, 'category': '系統與網路'}, 'COMPOUND_PARSER_TIMEOUT': {'label': '複合意圖解析逾時（秒）', 'description': '解析使用者複雜多句對話語境意圖的上限秒數。', 'type': 'int', 'min': 3, 'max': 60, 'category': '系統與網路'}, 'DEFAULT_HTTP_TIMEOUT': {'label': '預設對外 HTTP 請求逾時', 'description': '發起對外網路 API 呼叫（如搜尋、抓圖）的預設秒數門檻。', 'type': 'int', 'min': 3, 'max': 60, 'category': '系統與網路'}, 'DEFAULT_USER_AGENT': {'label': '對外爬蟲請求 User-Agent', 'description': '爬取網頁與 API 時所宣告之瀏覽器/機器人識別字串。', 'type': 'str', 'category': '系統與網路'}, 'DISCORD_UI_VIEW_TIMEOUT': {'label': 'Discord 互動選單按鈕逾時', 'description': '發布至 Discord 的按鈕與選單最長可維持可點擊狀態的時間（秒）。', 'type': 'int', 'min': 30, 'max': 1800, 'category': '系統與網路'}, 'DRAW_RAW_TIMEOUT': {'label': '原圖描述生成逾時（秒）', 'description': '將自然對話文字轉換為 SD 或繪圖提示詞推論的時間上限。', 'type': 'int', 'min': 10, 'max': 120, 'category': '系統與網路'}, 'DRAW_EXPAND_TIMEOUT': {'label': '繪圖提示詞擴充逾時（秒）', 'description': '擴充美術畫風細節提示詞的推理最長等候時間。', 'type': 'int', 'min': 5, 'max': 60, 'category': '系統與網路'}, 'INTERJECT_SCORE_TIMEOUT': {'label': '插話評分推論逾時（秒）', 'description': '判斷當前話題是否適合雪莉插話的推論逾時限制。', 'type': 'int', 'min': 5, 'max': 60, 'category': '系統與網路'}, 'INTERJECT_REPLY_TIMEOUT': {'label': '插話發文生成逾時（秒）', 'description': '判定為適合插話後，實際產生對話的最高逾時秒數。', 'type': 'int', 'min': 10, 'max': 120, 'category': '系統與網路'}, 'SCHEDULE_PARSE_TIMEOUT': {'label': '自然語言排程解析逾時', 'description': '把對話語句解讀為定時提醒或 Cron 任務的推理時間上限。', 'type': 'int', 'min': 5, 'max': 60, 'category': '系統與網路'}, 'VISION_ANALYSIS_TIMEOUT': {'label': '圖片視覺識別推論逾時', 'description': '把使用者上傳的圖片傳給 Vision 模型分析看懂的時間上限。', 'type': 'int', 'min': 10, 'max': 120, 'category': '系統與網路'}, 'HEALTH_CHECK_TIMEOUT': {'label': '健康檢查心跳逾時（秒）', 'description': '監控後端 Ollama 與 Discord 狀態的回應逾時判定秒數。', 'type': 'int', 'min': 2, 'max': 30, 'category': '健康監控'}, 'HEALTH_ALERT_CHANNEL_ID': {'label': '系統警報 Discord 頻道 ID', 'description': '當系統狀態異常或模型離線時，推播警報通知的頻道 ID。', 'type': 'int', 'category': '健康監控'}, 'RATE_LIMIT_REPLY_MESSAGE': {'label': '高頻速率限制提示訊息', 'description': '對手速太快或短時間頻繁送請求的使用者推播的溫馨冷卻文字。', 'type': 'str', 'category': '速率限制'}, 'WEB_UI_HOST': {'label': 'Web UI 監聽 Host IP', 'description': '網頁後端監聽之網路介面地址，預設 0.0.0.0 代表允許所有 IP 訪問。', 'type': 'str', 'category': '系統與網路'}, 'WEB_UI_PORT': {'label': 'Web UI 伺服器連接埠', 'description': '網頁控制台開啟的連接埠（Port），預設為 8763。', 'type': 'int', 'min': 1024, 'max': 65535, 'category': '系統與網路'}, 'WEB_UI_HTTPS': {'label': 'Web UI 啟用 HTTPS 加密', 'description': '是否啟用 SSL/TLS 證書提供加密 https:// 連線，強烈建議 ON。', 'type': 'bool', 'category': '系統與網路'}, 'WEB_UI_HTTP_TIMEOUT': {'label': 'Web UI 內部呼叫 API 逾時', 'description': '網頁伺服器請求 Ollama 與 LM Studio 模型清單的最大等待秒數。', 'type': 'int', 'min': 2, 'max': 30, 'category': '系統與網路'}, 'WEB_UI_RADMIN_IP': {'label': 'Radmin VPN 主機推薦 IP', 'description': '供介面上提示或快速連線參考的 Radmin VPN IP 位址。', 'type': 'str', 'category': '系統與網路'}}"
+        "value_repr": "{'PRIMARY_MODEL': {'label': '主力模型 (Primary Model)', 'description': '平衡智商與生成速度，用於日常深度對話與邏輯推演。格式：前綴:模型名（例：ollama:llama3.2 / lms:gemma-4）', 'type': 'model', 'category': '模型設定'}, 'NOMORAL_MODEL': {'label': '無道德限制模型 (No-Moral Model)', 'description': '專門處理橘雪莉缺乏倫理觀的瘋狂人設，通常使用 abliterated 版本模型。', 'type': 'model', 'category': '模型設定'}, 'QUICK_MODEL': {'label': '快速回覆模型 (Quick Model)', 'description': '要求極速回覆時使用，需要足夠基礎智商。適合簡短互動。', 'type': 'model', 'category': '模型設定'}, 'CLASSIFIER_MODEL': {'label': '分類輕量模型 (Classifier Model)', 'description': '用於插話評分與 YouTube 影片篩選，輕量優先（如 qwen2.5:3b）。', 'type': 'model', 'category': '模型設定'}, 'VIBE_MODEL': {'label': '氛圍萃取模型 (Vibe Model)', 'description': '從聊天記錄中萃取當前話題氛圍，輕量模型即可勝任。', 'type': 'model', 'category': '模型設定'}, 'VISION_MODEL': {'label': '視覺辨識模型 (Vision Model)', 'description': '多模態圖片理解，需要支援圖像的模型（如 minicpm-v）。', 'type': 'model', 'category': '模型設定'}, 'CLOUD_SEARCH_MODEL': {'label': '雲端搜尋模型 (Cloud Search Model)', 'description': '網路搜尋任務使用的雲端模型，需要良好的工具呼叫能力。', 'type': 'model', 'category': '模型設定'}, 'OLLAMA_TIMEOUT': {'label': 'Ollama 逾時秒數 (Timeout)', 'description': '等待 Ollama 回應的最長秒數，較大模型需要更長時間。建議 60–180。', 'type': 'int', 'min': 10, 'max': 600, 'category': 'LLM 參數'}, 'LLM_MAX_CONTEXT_TOKENS': {'label': '最大 Context Token 數', 'description': '送給 LLM 的最大上下文長度（包含 System Prompt + 歷史記錄）。越大越耗資源。', 'type': 'int', 'min': 1024, 'max': 131072, 'category': 'LLM 參數'}, 'LLM_MAX_OUTPUT_TOKENS': {'label': '最大輸出 Token 數', 'description': '模型單次生成的最大 token 數量。太少會截斷回覆，太多會降低速度。', 'type': 'int', 'min': 128, 'max': 8192, 'category': 'LLM 參數'}, 'LLM_TEMPERATURE': {'label': '生成溫度 (Temperature)', 'description': '控制輸出隨機性。0 = 完全確定性；1 = 高隨機創意。日常對話建議 0.7–0.9。', 'type': 'float', 'min': 0.0, 'max': 2.0, 'step': 0.05, 'category': 'LLM 參數'}, 'LLM_PRESENCE_PENALTY': {'label': 'Presence Penalty（話題多樣性）', 'description': '懲罰已出現過的 token，迫使模型引入新話題。建議 0.4–0.8。', 'type': 'float', 'min': -2.0, 'max': 2.0, 'step': 0.05, 'category': 'LLM 參數'}, 'LLM_FREQUENCY_PENALTY': {'label': 'Frequency Penalty（降低重複）', 'description': '懲罰重複出現的 token，降低跳針（重複生成相同句子）機率。建議 0.4–0.8。', 'type': 'float', 'min': -2.0, 'max': 2.0, 'step': 0.05, 'category': 'LLM 參數'}, 'LLM_NUM_BATCH': {'label': 'Prompt 批次處理量 (n_batch)', 'description': 'GPU 單次平行處理的 Prompt Token 批次大小（對應 llama.cpp n_batch）。數值越大首字延遲越低，但 VRAM 佔用略增。RTX A4000 (16GB) 建議 2048–4096。', 'type': 'int', 'min': 512, 'max': 8192, 'category': 'LLM 參數'}, 'OLLAMA_KEEP_ALIVE': {'label': 'Ollama 模型駐留時間 (Keep-Alive)', 'description': '推論完成後模型與 KV 快取在 VRAM 中保留多久。支援時間格式：\"60m\"（60 分鐘）、\"24h\"（24 小時）、\"0\"（立即卸載，停用快取）。建議設為 \"60m\" 以發揮 Prompt Caching 效益。', 'type': 'str', 'category': 'LLM 參數'}, 'OLLAMA_BASE_URL': {'label': 'Ollama 伺服器 URL', 'description': '本機 Ollama 服務的基礎 URL，預設為 http://localhost:11434。', 'type': 'url', 'category': '後端連線設定'}, 'LMS_BASE_URL': {'label': 'LM Studio 伺服器 URL', 'description': '本機 LM Studio 的 OpenAI 相容 API 位址，預設為 http://localhost:1234/v1。', 'type': 'url', 'category': '後端連線設定'}, 'OPENAI_BASE_URL': {'label': 'OpenAI API URL', 'description': 'OpenAI 相容 API 端點，可指向 OpenAI 或第三方代理。', 'type': 'url', 'category': '後端連線設定'}, 'DEEPSEEK_BASE_URL': {'label': 'DeepSeek API URL', 'description': 'DeepSeek API 端點 URL。', 'type': 'url', 'category': '後端連線設定'}, 'GEMINI_BASE_URL': {'label': 'Gemini API URL', 'description': 'Google Gemini OpenAI 相容端點 URL。', 'type': 'url', 'category': '後端連線設定'}, 'CLAUDE_BASE_URL': {'label': 'Claude API URL', 'description': 'Anthropic Claude Messages API 端點。', 'type': 'url', 'category': '後端連線設定'}, 'CONTEXT_HISTORY_LIMIT': {'label': '歷史記錄筆數限制', 'description': '注入 LLM Prompt 的最大對話輪數（USER+BOT 各算一輪）。越高記憶越長但越耗 token。', 'type': 'int', 'min': 2, 'max': 100, 'category': '記憶與上下文'}, 'CONTEXT_TIME_GAP_SECONDS': {'label': '上下文時間斷層門檻（秒）', 'description': '兩則訊息相差超過此秒數，視為對話斷層並截斷歷史。預設 900 秒（15 分鐘）。', 'type': 'int', 'min': 60, 'max': 86400, 'category': '記憶與上下文'}, 'VIBE_UPDATE_MESSAGE_THRESHOLD': {'label': '氛圍更新訊息門檻', 'description': '累積幾則訊息後才觸發氛圍（話題）萃取更新。', 'type': 'int', 'min': 5, 'max': 500, 'category': '氛圍系統'}, 'VIBE_TOP_N_TOPICS': {'label': '話題萃取數量 (Top N)', 'description': '每次氛圍萃取保留前 N 個主要話題注入 Prompt。', 'type': 'int', 'min': 1, 'max': 10, 'category': '氛圍系統'}, 'VIBE_DECAY_INTERVAL_SECONDS': {'label': '話題衰減間隔（秒）', 'description': '每隔多少秒話題權重自動降低一次，模擬話題逐漸淡忘。', 'type': 'int', 'min': 300, 'max': 86400, 'category': '氛圍系統'}, 'VIBE_DECAY_AMOUNT': {'label': '話題衰減量', 'description': '每次衰減時話題權重減少的數值。', 'type': 'int', 'min': 1, 'max': 10, 'category': '氛圍系統'}, 'VIBE_MIN_WEIGHT_TO_INJECT': {'label': '話題注入最低權重', 'description': '低於此權重的話題不會注入 Prompt（避免注入過時或無關話題）。', 'type': 'int', 'min': 1, 'max': 20, 'category': '氛圍系統'}, 'VIBE_REINFORCE_MAX_WEIGHT': {'label': '話題強化最高權重上限', 'description': '話題再次出現時可補滿到的最高權重值。', 'type': 'int', 'min': 5, 'max': 50, 'category': '氛圍系統'}, 'INTERJECT_EVAL_THRESHOLD': {'label': '插話觸發門檻（訊息數）', 'description': '每累積幾則真人訊息，觸發一次插話評分。', 'type': 'int', 'min': 1, 'max': 100, 'category': '插話引擎'}, 'INTERJECT_COOLDOWN_SECONDS': {'label': '插話冷卻時間（秒）', 'description': '插話後的冷卻秒數，冷卻期間不再觸發插話評估。', 'type': 'int', 'min': 0, 'max': 600, 'category': '插話引擎'}, 'INTERJECT_MAX_CONSECUTIVE': {'label': '最大連續插話次數', 'description': '同一冷卻週期內最多允許連續插話幾次，超過後需等下一週期。', 'type': 'int', 'min': 1, 'max': 20, 'category': '插話引擎'}, 'INTERJECT_SCORE_THRESHOLD': {'label': '插話評分門檻 (1–10)', 'description': 'LLM 插話評分 >= 此值才實際插話。設為 10 = 幾乎不主動插話。', 'type': 'int', 'min': 1, 'max': 10, 'category': '插話引擎'}, 'RATE_LIMIT_MAX_REQUESTS': {'label': '速率限制：最大請求數', 'description': '在時間窗口內，同一用戶最多可以發送的請求數量。', 'type': 'int', 'min': 1, 'max': 100, 'category': '速率限制'}, 'RATE_LIMIT_WINDOW_SECONDS': {'label': '速率限制：時間窗口（秒）', 'description': '速率限制的統計時間窗口長度（秒）。', 'type': 'int', 'min': 5, 'max': 3600, 'category': '速率限制'}, 'TYPING_BASE_DELAY': {'label': '打字延遲基礎值（秒）', 'description': '雪莉開始打字前的最小等待秒數，模擬人類思考時間。', 'type': 'float', 'min': 0.0, 'max': 10.0, 'step': 0.1, 'category': '打字模擬'}, 'TYPING_DELAY_PER_50_CHARS': {'label': '每 50 字打字追加延遲（秒）', 'description': '回覆每 50 個字增加的打字延遲，模擬長文打字速度。', 'type': 'float', 'min': 0.0, 'max': 5.0, 'step': 0.1, 'category': '打字模擬'}, 'MICRO_COT_ENABLED': {'label': '啟用 Micro Chain-of-Thought', 'description': '開啟後，雪莉在每次回覆前先輸出內心推理 <thought>。會增加推理品質但略微降低速度。', 'type': 'bool', 'category': 'Chain-of-Thought'}, 'USE_ONLINE_IMAGE_MODEL': {'label': '使用線上圖片生成模型', 'description': 'True = 優先使用 Gemini/HF/Pollinations 線上生成；False = 使用本機 SD WebUI。', 'type': 'bool', 'category': '圖片生成'}, 'POLLINATIONS_MODEL': {'label': 'Pollinations 圖片模型', 'description': 'Pollinations.ai 使用的模型名稱。推薦：flux-anime（二次元）、z-image-turbo（寫實）。', 'type': 'str', 'category': '圖片生成'}, 'GEMINI_IMAGE_MODEL': {'label': 'Gemini 圖片生成模型', 'description': 'Google Gemini 圖片生成使用的模型 ID。', 'type': 'str', 'category': '圖片生成'}, 'SD_WEBUI_URL': {'label': 'Stable Diffusion WebUI URL', 'description': '本機 SD WebUI（AUTOMATIC1111）的服務位址，作為圖片生成後備方案。', 'type': 'url', 'category': '圖片生成'}, 'SD_DEFAULT_WIDTH': {'label': 'SD 預設圖片寬度（px）', 'description': 'Stable Diffusion 生成圖片的預設寬度，建議為 64 的倍數。', 'type': 'int', 'min': 256, 'max': 2048, 'category': '圖片生成'}, 'SD_DEFAULT_HEIGHT': {'label': 'SD 預設圖片高度（px）', 'description': 'Stable Diffusion 生成圖片的預設高度，建議為 64 的倍數。', 'type': 'int', 'min': 256, 'max': 2048, 'category': '圖片生成'}, 'SD_DEFAULT_STEPS': {'label': 'SD 推理步數 (Steps)', 'description': '步數越多品質越高但速度越慢，一般推薦 20–30 步。', 'type': 'int', 'min': 5, 'max': 150, 'category': '圖片生成'}, 'SD_DEFAULT_CFG_SCALE': {'label': 'SD CFG Scale（提示詞遵從度）', 'description': '越高越嚴格遵從 Prompt，過高會過度飽和。建議 5–9。', 'type': 'float', 'min': 1.0, 'max': 30.0, 'step': 0.5, 'category': '圖片生成'}, 'HEALTH_CHECK_INTERVAL_SECONDS': {'label': '健康監控間隔（秒）', 'description': 'Bot 健康狀態檢查的頻率，單位為秒。', 'type': 'int', 'min': 30, 'max': 3600, 'category': '健康監控'}, 'DISCORD_LOG_LEVEL': {'label': 'Discord 日誌等級', 'description': 'discord.py 的日誌輸出等級。可選：DEBUG、INFO、WARNING、ERROR、CRITICAL。', 'type': 'str', 'category': '健康監控'}, 'EXPLORER_INTERVAL_SECONDS': {'label': '爬蟲執行間隔（秒）', 'description': '閒置爬蟲（Web Explorer）的觸發間隔。', 'type': 'int', 'min': 60, 'max': 86400, 'category': 'Web 爬蟲'}, 'YOUTUBE_MAX_RESULTS': {'label': 'YouTube 搜尋最大結果數', 'description': '每次 YouTube 搜尋的最大候選影片數量。', 'type': 'int', 'min': 1, 'max': 50, 'category': 'Web 爬蟲'}, 'NIGHTLY_DIGEST_HOUR': {'label': '深夜整合觸發時間（小時）', 'description': '每天深夜幾點觸發記憶整合任務（台灣時間 UTC+8）。預設 3（凌晨 3 點）。', 'type': 'int', 'min': 0, 'max': 23, 'category': '深夜記憶整合'}, 'NIGHTLY_MAX_MSGS_PER_USER': {'label': '深夜整合每用戶最大訊息數', 'description': '每位使用者最多送入 LLM 進行整合的訊息數量，過多會超出 context。', 'type': 'int', 'min': 10, 'max': 2000, 'category': '深夜記憶整合'}, 'NIGHTLY_DIGEST_MODEL': {'label': '深夜記憶整合模型', 'description': '進行每日深夜對話記憶摘要與精煉的模型前綴與名稱。', 'type': 'model', 'category': '深夜記憶整合'}, 'NIGHTLY_DIGEST_TIMEOUT': {'label': '深夜整合逾時秒數', 'description': '深夜記憶整合任務的最長執行等待秒數。', 'type': 'int', 'min': 30, 'max': 600, 'category': '深夜記憶整合'}, 'NIGHTLY_MIN_MSGS_THRESHOLD': {'label': '深夜整合最低訊息門檻', 'description': '使用者當日發送超過此數量訊息時，才會觸發該用戶的深夜記憶總結。', 'type': 'int', 'min': 1, 'max': 50, 'category': '深夜記憶整合'}, 'BOT_NAME': {'label': '雪莉稱呼名稱 (Bot Name)', 'description': '橘雪莉對外顯示與對話中被稱呼的名字。', 'type': 'str', 'category': '雪莉人設與心跳'}, 'CORE_PERSONA': {'label': '橘雪莉核心人設 Prompt', 'description': '設定橘雪莉為 15 歲活潑台灣女高中生及自稱名偵探的核心靈魂設定。', 'type': 'str', 'category': '雪莉人設與心跳'}, 'DEFAULT_HEARTBEAT_CHANNEL_ID': {'label': '預設心跳主動發言頻道 ID', 'description': '當雪莉主動觸發心跳聊天或日常閒聊時，預設發布的 Discord 頻道 ID。', 'type': 'int', 'category': '雪莉人設與心跳'}, 'HEARTBEAT_CHECK_INTERVAL_MINUTES': {'label': '心跳巡邏檢查間隔（分鐘）', 'description': '系統多久檢查一次是否該在頻道中主動發起問候或閒聊。', 'type': 'int', 'min': 5, 'max': 1440, 'category': '雪莉人設與心跳'}, 'HEARTBEAT_CONDITION_START_HOUR': {'label': '心跳活躍起始時間（時）', 'description': '每天幾點開始允許橘雪莉主動在頻道裡說話（0-23）。', 'type': 'int', 'min': 0, 'max': 23, 'category': '雪莉人設與心跳'}, 'HEARTBEAT_CONDITION_END_HOUR': {'label': '心跳活躍結束時間（時）', 'description': '每天幾點後停止主動在頻道發言，進入夜晚休息（0-23）。', 'type': 'int', 'min': 0, 'max': 23, 'category': '雪莉人設與心跳'}, 'HEARTBEAT_CONDITION_MIN_GAP_SECONDS': {'label': '心跳兩次主動發言最短間隔（秒）', 'description': '兩次主動閒聊之間的最短間隔，預設 7200 秒（2 小時），避免洗版。', 'type': 'int', 'min': 600, 'max': 86400, 'category': '雪莉人設與心跳'}, 'MEMORY_MAX_FACTS_IN_CONTEXT': {'label': '單次對話注入事實上限', 'description': '每次與用戶對話時，自資料庫取出並注入 Prompt 的用戶個人記憶上限筆數。', 'type': 'int', 'min': 1, 'max': 20, 'category': '記憶與上下文'}, 'MEMORY_MAX_FACTS_PER_USER': {'label': '每用戶最多記憶事實數', 'description': '每位 Discord 使用者在資料庫中最多儲存的事實記憶上限。', 'type': 'int', 'min': 5, 'max': 100, 'category': '記憶與上下文'}, 'MEMORY_PERMANENT_FACT_THRESHOLD': {'label': '記憶轉為永久保留門檻', 'description': '當事實權重超過此數值，將轉為永久記憶不被淘汰。', 'type': 'int', 'min': 1, 'max': 20, 'category': '記憶與上下文'}, 'VOICE_STT_MODEL': {'label': '語音辨識 STT 本地模型路徑', 'description': '本機 Nemotron-3.5 語音轉文字模型的存放資料夾路徑。', 'type': 'str', 'category': '語音辨識與合成'}, 'VOICE_STT_REPO_ID': {'label': 'STT 於 HuggingFace Repo ID', 'description': 'Nemotron 語音辨識於 Hugging Face 的模型名稱。', 'type': 'str', 'category': '語音辨識與合成'}, 'VOICE_STT_LANGUAGE': {'label': '語音辨識目標語言', 'description': \"STT 辨識預設語言代碼，例如 'zh' 代表中文。\", 'type': 'str', 'category': '語音辨識與合成'}, 'VOICE_STT_DEVICE': {'label': 'STT 運算設備', 'description': \"執行語音辨識的設備（'cpu' 或 'cuda'）。\", 'type': 'str', 'category': '語音辨識與合成'}, 'VOICE_STT_COMPUTE_TYPE': {'label': 'STT 運算精度', 'description': \"模型推論使用的浮點數精度（如 'float32', 'float16'）。\", 'type': 'str', 'category': '語音辨識與合成'}, 'VOICE_TTS_MODEL_NAME': {'label': '語音合成 TTS 模型名稱', 'description': '發音合成模型，預設採用 XTTS v2 進行多語情感合成。', 'type': 'str', 'category': '語音辨識與合成'}, 'VOICE_TTS_LANGUAGE': {'label': 'TTS 語音發音語言', 'description': \"語音合成目標發音語言（例如 'zh-cn'）。\", 'type': 'str', 'category': '語音辨識與合成'}, 'VOICE_TTS_SPEAKER_WAV': {'label': 'TTS 參考音訊樣本檔路徑', 'description': '用於聲音音色選用之樣本檔案（如 shiry_voice_sample.wav）。', 'type': 'str', 'category': '語音辨識與合成'}, 'VOICE_VAD_MODEL_NAME': {'label': 'VAD 靜音檢測模型名稱', 'description': '用於判斷使用者說話起止的 VAD 引擎名稱（如 silero_vad）。', 'type': 'str', 'category': '語音辨識與合成'}, 'VOICE_VAD_THRESHOLD': {'label': 'VAD 靜音檢測靈敏度', 'description': '判定是否為人聲的聲音強度閥值（0.1–1.0），越高越不易誤判噪音。', 'type': 'float', 'min': 0.1, 'max': 1.0, 'step': 0.05, 'category': '語音辨識與合成'}, 'VOICE_VAD_MIN_SILENCE_MS': {'label': '判定說話結束之靜音毫秒數', 'description': '持續靜音超過幾毫秒後，認定使用者講話完畢並開始回復。', 'type': 'int', 'min': 100, 'max': 3000, 'category': '語音辨識與合成'}, 'VOICE_MAX_RECORD_SECONDS': {'label': '單次語音最長錄製秒數', 'description': '每次錄製使用者語音的最長秒數限制，防呆與防濫用。', 'type': 'int', 'min': 5, 'max': 120, 'category': '語音辨識與合成'}, 'VOICE_SILENCE_TIMEOUT_SECONDS': {'label': '語音對話靜音逾時秒數', 'description': '當通話中持續沉靜多久（秒）判定為發話間隔結尾。', 'type': 'float', 'min': 0.5, 'max': 10.0, 'step': 0.5, 'category': '語音辨識與合成'}, 'FFMPEG': {'label': 'FFmpeg 執行檔路徑', 'description': '系統中的 FFmpeg 執行檔位址，用於音訊解碼與轉檔。', 'type': 'str', 'category': '語音辨識與合成'}, 'MUSIC_FFMPEG_OPTIONS': {'label': '音樂 FFmpeg 轉碼參數', 'description': '播放 YouTube 或音訊串流時傳遞給 FFmpeg 的音量與標準化參數。', 'type': 'str', 'category': '音樂播放與隊列'}, 'MUSIC_FFMPEG_BEFORE_OPTIONS': {'label': '音樂 FFmpeg 串流重連參數', 'description': '確保網路波動時串流可自動重連的 FFmpeg 參數。', 'type': 'str', 'category': '音樂播放與隊列'}, 'MUSIC_PLAYLIST_MAX_ITEMS': {'label': '單次匯入歌單最大首數', 'description': '使用 YouTube 播放清單時一次最多允許載入的歌曲數量。', 'type': 'int', 'min': 5, 'max': 200, 'category': '音樂播放與隊列'}, 'MUSIC_QUEUE_VIEW_TIMEOUT': {'label': '音樂介面按鈕逾時（秒）', 'description': '音樂點歌介面按鈕（上一首/下一首/暫停）過多長秒數後自動停用。', 'type': 'int', 'min': 30, 'max': 600, 'category': '音樂播放與隊列'}, 'POLLINATIONS_API_URL': {'label': 'Pollinations 圖片 API 網址', 'description': '使用 Pollinations 進行免費二次元/寫實圖片生成時的請求端點。', 'type': 'str', 'category': '圖片生成'}, 'POLLINATIONS_TIMEOUT_SECONDS': {'label': 'Pollinations 生成逾時秒數', 'description': '等待 Pollinations 返回圖片的最長等待時間。', 'type': 'int', 'min': 10, 'max': 120, 'category': '圖片生成'}, 'GEMINI_IMAGE_TIMEOUT_SECONDS': {'label': 'Gemini 生圖逾時秒數', 'description': '呼叫 Google Gemini 圖片生成模型的最大逾時限制。', 'type': 'int', 'min': 10, 'max': 120, 'category': '圖片生成'}, 'HF_IMAGE_MODEL': {'label': 'HuggingFace 繪圖模型 ID', 'description': '若啟用 HF API 繪圖，採用之模型名稱（如 animagine-xl-3.1）。', 'type': 'str', 'category': '圖片生成'}, 'HF_IMAGE_TIMEOUT_SECONDS': {'label': 'HuggingFace 生圖逾時秒數', 'description': '調用 HF API 繪圖等待的最大限制時間。', 'type': 'int', 'min': 10, 'max': 300, 'category': '圖片生成'}, 'SD_DEFAULT_SAMPLER': {'label': 'SD 預設採樣器 (Sampler)', 'description': 'Stable Diffusion WebUI 預設採樣器名稱（例如 DPM++ 2M Karras）。', 'type': 'str', 'category': '圖片生成'}, 'SD_NEGATIVE_PROMPT_BASE': {'label': 'SD 預設負面提示詞', 'description': '生成圖片時自動帶入的負面過濾提示，防崩壞與低畫質。', 'type': 'str', 'category': '圖片生成'}, 'SD_TIMEOUT_SECONDS': {'label': 'SD WebUI 生圖逾時（秒）', 'description': '本機 Stable Diffusion WebUI 最多允許生成的秒數。', 'type': 'int', 'min': 30, 'max': 300, 'category': '圖片生成'}, 'DANBOORU_API_URL': {'label': 'Danbooru 圖庫 API 網址', 'description': '找圖功能使用的 Danbooru 標籤檢索端點。', 'type': 'str', 'category': '二次元圖庫 API'}, 'SAFEBOORU_API_URL': {'label': 'Safebooru API 檢索網址', 'description': '安全全齡向動漫圖庫 Safebooru 的 XML/JSON 查詢 API 網址。', 'type': 'str', 'category': '二次元圖庫 API'}, 'SAFEBOORU_IMAGE_BASE_URL': {'label': 'Safebooru 圖片來源 URL', 'description': 'Safebooru 下載與展示圖片的基底 URL。', 'type': 'str', 'category': '二次元圖庫 API'}, 'SAFEBOORU_HTTP_TIMEOUT': {'label': 'Safebooru 請求逾時（秒）', 'description': '抓取 Safebooru 圖片時的 HTTP 連線逾時限制。', 'type': 'int', 'min': 5, 'max': 60, 'category': '二次元圖庫 API'}, 'PIXIV_TAG_MIN_POST_COUNT': {'label': 'Pixiv 標籤最低作品門檻', 'description': '在 Pixiv 找圖時，標籤必須具有的基本作品數，確保圖片熱度品質。', 'type': 'int', 'min': 10, 'max': 10000, 'category': '二次元圖庫 API'}, 'PIXIV_TAG_MAX_PAGES': {'label': 'Pixiv 搜尋最大翻頁數', 'description': '在 Pixiv 搜尋標籤作品時最多允許翻看的頁數。', 'type': 'int', 'min': 1, 'max': 100, 'category': '二次元圖庫 API'}, 'PIXIV_TAG_REQUEST_DELAY': {'label': 'Pixiv API 請求間隔（秒）', 'description': '連續抓取 Pixiv 時的防護等待秒數，避免被伺服器限流。', 'type': 'float', 'min': 0.1, 'max': 5.0, 'step': 0.1, 'category': '二次元圖庫 API'}, 'DUCKDUCKGO_SEARCH_URL': {'label': 'DuckDuckGo 搜尋網址端點', 'description': '雪莉進行即時時事與情報檢索所呼叫的搜尋網址。', 'type': 'str', 'category': '外部資訊檢索'}, 'OPENWEATHERMAP_API_URL': {'label': 'OpenWeatherMap 天氣 API', 'description': '詢問各地區氣象預報所呼叫之 OpenWeatherMap 網址。', 'type': 'str', 'category': '外部資訊檢索'}, 'WEATHER_EXTRACT_TIMEOUT': {'label': '天氣資料分析逾時（秒）', 'description': '處理天氣 API 回傳資訊的最大逾時時間。', 'type': 'int', 'min': 5, 'max': 60, 'category': '外部資訊檢索'}, 'WEATHER_REPLY_TIMEOUT': {'label': '天氣對話生成逾時（秒）', 'description': '雪莉根據氣象預報產生對話的推論逾時秒數。', 'type': 'int', 'min': 10, 'max': 120, 'category': '外部資訊檢索'}, 'STOCK_EXTRACT_TIMEOUT': {'label': '股市報價解析逾時（秒）', 'description': '抓取與解析台股、美股行情資訊的逾時限制。', 'type': 'int', 'min': 5, 'max': 60, 'category': '外部資訊檢索'}, 'STOCK_REPLY_TIMEOUT': {'label': '股市分析回覆逾時（秒）', 'description': '雪莉產生股價走勢與名偵探評語對話的推論限制。', 'type': 'int', 'min': 10, 'max': 120, 'category': '外部資訊檢索'}, 'YOUTUBE_SEARCH_API_URL': {'label': 'YouTube 搜尋 API URL', 'description': 'Google YouTube v3 搜尋 API 端點。', 'type': 'str', 'category': 'YouTube 爬蟲'}, 'YOUTUBE_RSS_FEED_URL': {'label': 'YouTube RSS 訂閱端點 URL', 'description': '透過 RSS 快訊檢查特定頻道最新發片的 XML 基底網址。', 'type': 'str', 'category': 'YouTube 爬蟲'}, 'YOUTUBE_RSS_NS': {'label': 'YouTube RSS Atom 命名空間', 'description': '解析 YouTube Feed 用的 XML Atom Namespace。', 'type': 'str', 'category': 'YouTube 爬蟲'}, 'YOUTUBE_EXPLORER_TIMEOUT': {'label': 'YouTube 爬蟲執行逾時（秒）', 'description': '執行單次 YouTube 最新上傳檢查的最大限制秒數。', 'type': 'int', 'min': 5, 'max': 120, 'category': 'YouTube 爬蟲'}, 'PRIORITY_TAG_RESPONSE': {'label': '對話回覆優先權 (Priority)', 'description': '真人點名與主動聊天的佇列優先序（數值越小越優先）。預設 1（最高）。', 'type': 'int', 'min': 1, 'max': 100, 'category': '任務佇列優先級'}, 'PRIORITY_INTERJECT': {'label': '主動插話優先權 (Priority)', 'description': '雪莉插話推論在 BotBrain 中的優先等級。預設 10。', 'type': 'int', 'min': 1, 'max': 100, 'category': '任務佇列優先級'}, 'PRIORITY_HEARTBEAT': {'label': '日常心跳聊天優先權', 'description': '主動巡邏聊天推論任務優先等第。預設 20。', 'type': 'int', 'min': 1, 'max': 100, 'category': '任務佇列優先級'}, 'PRIORITY_VIBE_UPDATE': {'label': '話題氛圍萃取優先權', 'description': '背景萃取聊天室話題與氣氛推論優先等第。預設 50。', 'type': 'int', 'min': 1, 'max': 100, 'category': '任務佇列優先級'}, 'PRIORITY_DRAW': {'label': '二次元生圖與修圖優先權', 'description': '繪圖與圖片描述推論優先級別。預設 80。', 'type': 'int', 'min': 1, 'max': 100, 'category': '任務佇列優先級'}, 'PRIORITY_WEB_EXPLORER': {'label': '閒置網路爬蟲優先權', 'description': '後台網路時事爬蟲推論任務優先等第。預設 99（最低）。', 'type': 'int', 'min': 1, 'max': 100, 'category': '任務佇列優先級'}, 'BOT_BRAIN_MAX_RETRIES': {'label': 'BotBrain LLM 重試次數', 'description': '如果模型推論發生異常或空訊，自動重試的最多次數。', 'type': 'int', 'min': 1, 'max': 10, 'category': '系統與網路'}, 'BOT_BRAIN_RETRY_DELAY': {'label': 'BotBrain 重試等候秒數', 'description': '每次失敗後等待幾秒鐘再重新發起推論。', 'type': 'int', 'min': 1, 'max': 30, 'category': '系統與網路'}, 'COMPOUND_PARSER_TIMEOUT': {'label': '複合意圖解析逾時（秒）', 'description': '解析使用者複雜多句對話語境意圖的上限秒數。', 'type': 'int', 'min': 3, 'max': 60, 'category': '系統與網路'}, 'DEFAULT_HTTP_TIMEOUT': {'label': '預設對外 HTTP 請求逾時', 'description': '發起對外網路 API 呼叫（如搜尋、抓圖）的預設秒數門檻。', 'type': 'int', 'min': 3, 'max': 60, 'category': '系統與網路'}, 'DEFAULT_USER_AGENT': {'label': '對外爬蟲請求 User-Agent', 'description': '爬取網頁與 API 時所宣告之瀏覽器/機器人識別字串。', 'type': 'str', 'category': '系統與網路'}, 'DISCORD_UI_VIEW_TIMEOUT': {'label': 'Discord 互動選單按鈕逾時', 'description': '發布至 Discord 的按鈕與選單最長可維持可點擊狀態的時間（秒）。', 'type': 'int', 'min': 30, 'max': 1800, 'category': '系統與網路'}, 'DRAW_RAW_TIMEOUT': {'label': '原圖描述生成逾時（秒）', 'description': '將自然對話文字轉換為 SD 或繪圖提示詞推論的時間上限。', 'type': 'int', 'min': 10, 'max': 120, 'category': '系統與網路'}, 'DRAW_EXPAND_TIMEOUT': {'label': '繪圖提示詞擴充逾時（秒）', 'description': '擴充美術畫風細節提示詞的推理最長等候時間。', 'type': 'int', 'min': 5, 'max': 60, 'category': '系統與網路'}, 'INTERJECT_SCORE_TIMEOUT': {'label': '插話評分推論逾時（秒）', 'description': '判斷當前話題是否適合雪莉插話的推論逾時限制。', 'type': 'int', 'min': 5, 'max': 60, 'category': '系統與網路'}, 'INTERJECT_REPLY_TIMEOUT': {'label': '插話發文生成逾時（秒）', 'description': '判定為適合插話後，實際產生對話的最高逾時秒數。', 'type': 'int', 'min': 10, 'max': 120, 'category': '系統與網路'}, 'SCHEDULE_PARSE_TIMEOUT': {'label': '自然語言排程解析逾時', 'description': '把對話語句解讀為定時提醒或 Cron 任務的推理時間上限。', 'type': 'int', 'min': 5, 'max': 60, 'category': '系統與網路'}, 'VISION_ANALYSIS_TIMEOUT': {'label': '圖片視覺識別推論逾時', 'description': '把使用者上傳的圖片傳給 Vision 模型分析看懂的時間上限。', 'type': 'int', 'min': 10, 'max': 120, 'category': '系統與網路'}, 'HEALTH_CHECK_TIMEOUT': {'label': '健康檢查心跳逾時（秒）', 'description': '監控後端 Ollama 與 Discord 狀態的回應逾時判定秒數。', 'type': 'int', 'min': 2, 'max': 30, 'category': '健康監控'}, 'HEALTH_ALERT_CHANNEL_ID': {'label': '系統警報 Discord 頻道 ID', 'description': '當系統狀態異常或模型離線時，推播警報通知的頻道 ID。', 'type': 'int', 'category': '健康監控'}, 'RATE_LIMIT_REPLY_MESSAGE': {'label': '高頻速率限制提示訊息', 'description': '對手速太快或短時間頻繁送請求的使用者推播的溫馨冷卻文字。', 'type': 'str', 'category': '速率限制'}, 'WEB_UI_HOST': {'label': 'Web UI 監聽 Host IP', 'description': '網頁後端監聽之網路介面地址，預設 0.0.0.0 代表允許所有 IP 訪問。', 'type': 'str', 'category': '系統與網路'}, 'WEB_UI_PORT': {'label': 'Web UI 伺服器連接埠', 'description': '網頁控制台開啟的連接埠（Port），預設為 8763。', 'type': 'int', 'min': 1024, 'max': 65535, 'category': '系統與網路'}, 'WEB_UI_HTTPS': {'label': 'Web UI 啟用 HTTPS 加密', 'description': '是否啟用 SSL/TLS 證書提供加密 https:// 連線，強烈建議 ON。', 'type': 'bool', 'category': '系統與網路'}, 'WEB_UI_HTTP_TIMEOUT': {'label': 'Web UI 內部呼叫 API 逾時', 'description': '網頁伺服器請求 Ollama 與 LM Studio 模型清單的最大等待秒數。', 'type': 'int', 'min': 2, 'max': 30, 'category': '系統與網路'}, 'WEB_UI_RADMIN_IP': {'label': 'Radmin VPN 主機推薦 IP', 'description': '供介面上提示或快速連線參考的 Radmin VPN IP 位址。', 'type': 'str', 'category': '系統與網路'}}"
       }
     ],
     "classes": [],
     "functions": [
       {
         "name": "update_setting",
-        "line": 410,
+        "line": 433,
         "is_async": false,
         "decorators": [],
         "params": [
@@ -13068,7 +14546,7 @@
       },
       {
         "name": "get_editable_settings",
-        "line": 1436,
+        "line": 1473,
         "is_async": false,
         "decorators": [],
         "params": [],
@@ -13441,6 +14919,63 @@
     ]
   },
   {
+    "path": "tests/unit/test_game_center.py",
+    "module_docstring": "tests.unit.test_game_center\n============================\nUnit tests for Sherry Game Center (.mod).",
+    "global_vars": [],
+    "classes": [],
+    "functions": [
+      {
+        "name": "test_rock_paper_scissors_rules",
+        "line": 21,
+        "is_async": false,
+        "decorators": [],
+        "params": [],
+        "return_type": "None",
+        "docstring": "Test Rock Paper Scissors engine outcome logic."
+      },
+      {
+        "name": "test_blackjack_engine_flow",
+        "line": 30,
+        "is_async": false,
+        "decorators": [],
+        "params": [],
+        "return_type": "None",
+        "docstring": "Test Blackjack card dealing, hitting, and standing."
+      },
+      {
+        "name": "test_minesweeper_engine_flow",
+        "line": 50,
+        "is_async": false,
+        "decorators": [],
+        "params": [],
+        "return_type": "None",
+        "docstring": "Test Minesweeper board generation and reveal/flag interactions."
+      },
+      {
+        "name": "test_new_games_flow",
+        "line": 70,
+        "is_async": false,
+        "decorators": [],
+        "params": [],
+        "return_type": "None",
+        "docstring": "Test Turtle Soup, Akinator, Escape Room, and Tic-Tac-Toe engines."
+      }
+    ],
+    "imports": [
+      "__future__.annotations",
+      "pytest",
+      "mod.game_center.akinator_20q.AkinatorEngine",
+      "mod.game_center.blackjack.BlackjackEngine",
+      "mod.game_center.escape_room.EscapeRoomEngine",
+      "mod.game_center.minesweeper.MinesweeperEngine",
+      "mod.game_center.models.GameResultStatus",
+      "mod.game_center.models.RPSChoice",
+      "mod.game_center.rock_paper_scissors.RockPaperScissorsEngine",
+      "mod.game_center.tic_tac_toe.TicTacToeEngine",
+      "mod.game_center.turtle_soup.TurtleSoupEngine"
+    ]
+  },
+  {
     "path": "tests/unit/test_gemini_image.py",
     "module_docstring": "Unit tests for GeminiImageClient (mod/clients/gemini_image_client.py).",
     "global_vars": [],
@@ -13641,8 +15176,56 @@
       },
       {
         "name": "_last_net_bytes",
-        "line": 856,
+        "line": 931,
         "type": "tuple[int, int, float] | None",
+        "value_repr": "None"
+      },
+      {
+        "name": "_MOD_REGISTRY",
+        "line": 1269,
+        "type": "dict[str, dict[str, Any]]",
+        "value_repr": "{'game_center': {'display_name': '🎮 小遊戲遊樂場', 'description': '與雪莉名偵探使用地端 LLM 進行 21 點、猜拳、踩地雷等對弈互動！', 'category': '娛樂 / Entertainment', 'nav_id': 'nav-games', 'python_pkg': 'mod.game_center', 'info_attr': 'MOD_INFO'}, 'dnd': {'display_name': '🐉 D&D 跑團引擎', 'description': 'Discord 桌上角色扮演遊戲引擎，支援骰子、NPC 生成、世界模擬與戰鬥系統。', 'category': '娛樂 / Entertainment', 'nav_id': None, 'python_pkg': 'mod.dnd', 'info_attr': None}, 'market_plugin': {'display_name': '📈 市場資料分析外掛', 'description': '股市、PTCG 卡牌市場即時行情追蹤與 AI 分析報告生成器。', 'category': '資料 / Data', 'nav_id': None, 'python_pkg': 'mod.market_plugin', 'info_attr': None}}"
+      },
+      {
+        "name": "_MOD_CONFIG_PATH",
+        "line": 1296,
+        "type": "Path",
+        "value_repr": "settings.DATA_DIR / 'mod_config.json'"
+      },
+      {
+        "name": "_blackjack_engine",
+        "line": 1451,
+        "type": "Any",
+        "value_repr": "None"
+      },
+      {
+        "name": "_minesweeper_engine",
+        "line": 1452,
+        "type": "Any",
+        "value_repr": "None"
+      },
+      {
+        "name": "_turtle_soup_engine",
+        "line": 1670,
+        "type": "Any",
+        "value_repr": "None"
+      },
+      {
+        "name": "_akinator_engine",
+        "line": 1671,
+        "type": "Any",
+        "value_repr": "None"
+      },
+      {
+        "name": "_escape_room_engine",
+        "line": 1672,
+        "type": "Any",
+        "value_repr": "None"
+      },
+      {
+        "name": "_ttt_engine",
+        "line": 1673,
+        "type": "Any",
         "value_repr": "None"
       }
     ],
@@ -13814,8 +15397,19 @@
         "docstring": "Proxy LM Studio /v1/models to retrieve locally loaded model names."
       },
       {
+        "name": "get_vllm_models",
+        "line": 391,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/models/vllm', methods=['GET'])"
+        ],
+        "params": [],
+        "return_type": "Response",
+        "docstring": "Proxy vLLM /v1/models to retrieve locally loaded model names."
+      },
+      {
         "name": "auth_login",
-        "line": 395,
+        "line": 409,
         "is_async": true,
         "decorators": [
           "app.route('/api/auth/login', methods=['POST'])"
@@ -13826,7 +15420,7 @@
       },
       {
         "name": "auth_logout",
-        "line": 488,
+        "line": 502,
         "is_async": true,
         "decorators": [
           "app.route('/api/auth/logout', methods=['POST'])"
@@ -13837,7 +15431,7 @@
       },
       {
         "name": "auth_check",
-        "line": 509,
+        "line": 523,
         "is_async": true,
         "decorators": [
           "app.route('/api/auth/check', methods=['GET'])"
@@ -13848,7 +15442,7 @@
       },
       {
         "name": "get_services_status",
-        "line": 519,
+        "line": 533,
         "is_async": true,
         "decorators": [
           "app.route('/api/services/status', methods=['GET'])"
@@ -13859,7 +15453,7 @@
       },
       {
         "name": "get_audit_logs",
-        "line": 601,
+        "line": 615,
         "is_async": true,
         "decorators": [
           "app.route('/api/audit/logs', methods=['GET'])"
@@ -13870,7 +15464,7 @@
       },
       {
         "name": "handle_settings",
-        "line": 615,
+        "line": 629,
         "is_async": true,
         "decorators": [
           "app.route('/api/settings', methods=['GET', 'POST'])"
@@ -13881,18 +15475,29 @@
       },
       {
         "name": "restart_bot",
-        "line": 674,
+        "line": 688,
         "is_async": true,
         "decorators": [
           "app.route('/api/restart', methods=['POST'])"
         ],
         "params": [],
-        "return_type": "Response",
+        "return_type": "Response | tuple[Response, int]",
         "docstring": "Trigger a self-restart via bat launcher (conda-env safe, VS Code compatible)."
       },
       {
+        "name": "stop_bot",
+        "line": 743,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/stop', methods=['POST'])"
+        ],
+        "params": [],
+        "return_type": "Response | tuple[Response, int]",
+        "docstring": "Trigger a self-shutdown of the Sherry bot process. Admin-only."
+      },
+      {
         "name": "update_and_restart",
-        "line": 712,
+        "line": 773,
         "is_async": true,
         "decorators": [
           "app.route('/api/update', methods=['POST'])"
@@ -13903,7 +15508,7 @@
       },
       {
         "name": "test_chat",
-        "line": 747,
+        "line": 822,
         "is_async": true,
         "decorators": [
           "app.route('/api/chat/test', methods=['POST'])"
@@ -13914,7 +15519,7 @@
       },
       {
         "name": "_get_system_metrics",
-        "line": 859,
+        "line": 934,
         "is_async": false,
         "decorators": [],
         "params": [],
@@ -13923,7 +15528,7 @@
       },
       {
         "name": "get_system_metrics",
-        "line": 959,
+        "line": 1034,
         "is_async": true,
         "decorators": [
           "app.route('/api/system/metrics', methods=['GET'])"
@@ -13934,7 +15539,7 @@
       },
       {
         "name": "get_scheduled_tasks",
-        "line": 965,
+        "line": 1040,
         "is_async": true,
         "decorators": [
           "app.route('/api/system/tasks', methods=['GET'])"
@@ -13945,7 +15550,7 @@
       },
       {
         "name": "delete_scheduled_task",
-        "line": 990,
+        "line": 1065,
         "is_async": true,
         "decorators": [
           "app.route('/api/system/tasks/<task_id>', methods=['DELETE'])"
@@ -13961,7 +15566,7 @@
       },
       {
         "name": "get_dashboard_data",
-        "line": 1003,
+        "line": 1078,
         "is_async": true,
         "decorators": [
           "app.route('/api/system/dashboard', methods=['GET'])"
@@ -13972,7 +15577,7 @@
       },
       {
         "name": "get_brain_inference_queue",
-        "line": 1087,
+        "line": 1162,
         "is_async": true,
         "decorators": [
           "app.route('/api/brain/queue', methods=['GET'])"
@@ -13983,7 +15588,7 @@
       },
       {
         "name": "get_bot_live_status",
-        "line": 1104,
+        "line": 1179,
         "is_async": true,
         "decorators": [
           "app.route('/api/bot/status', methods=['GET'])"
@@ -13993,8 +15598,265 @@
         "docstring": "Return real-time Discord Bot connection, voice channels, and music status."
       },
       {
+        "name": "_load_mod_config",
+        "line": 1299,
+        "is_async": false,
+        "decorators": [],
+        "params": [],
+        "return_type": "dict[str, bool]",
+        "docstring": "Load mod enabled/disabled state from data/mod_config.json.\n\n    Returns:\n        dict[str, bool]: Mapping of mod_key -> enabled (True = enabled)."
+      },
+      {
+        "name": "_save_mod_config",
+        "line": 1316,
+        "is_async": false,
+        "decorators": [],
+        "params": [
+          {
+            "name": "config",
+            "type": "dict[str, bool]"
+          }
+        ],
+        "return_type": "None",
+        "docstring": "Persist mod enabled/disabled state to data/mod_config.json.\n\n    Args:\n        config: Mapping of mod_key -> enabled."
+      },
+      {
+        "name": "_is_mod_enabled",
+        "line": 1329,
+        "is_async": false,
+        "decorators": [],
+        "params": [
+          {
+            "name": "mod_key",
+            "type": "str"
+          },
+          {
+            "name": "config",
+            "type": "dict[str, bool]"
+          }
+        ],
+        "return_type": "bool",
+        "docstring": "Check if a mod is enabled in the config (defaults to True if not set).\n\n    Args:\n        mod_key: The mod identifier string.\n        config: The loaded mod config dict.\n\n    Returns:\n        bool: True if enabled (default), False if explicitly disabled."
+      },
+      {
+        "name": "get_dynamic_modules",
+        "line": 1343,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/modules', methods=['GET'])"
+        ],
+        "params": [],
+        "return_type": "Response",
+        "docstring": "Return available optional modules detected under ./mod/.\n\n    Combines on-disk discovery with persisted enabled/disabled state.\n    Includes rich metadata from the module registry."
+      },
+      {
+        "name": "toggle_module",
+        "line": 1396,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/modules/toggle', methods=['POST'])"
+        ],
+        "params": [],
+        "return_type": "tuple[Response, int] | Response",
+        "docstring": "Enable or disable a mod module. Admin-only.\n\n    Expects JSON body: { \"mod_key\": str, \"enabled\": bool }\n\n    Returns:\n        Response: JSON status response."
+      },
+      {
+        "name": "_get_blackjack_engine",
+        "line": 1455,
+        "is_async": false,
+        "decorators": [],
+        "params": [],
+        "return_type": "Any",
+        "docstring": null
+      },
+      {
+        "name": "_get_minesweeper_engine",
+        "line": 1463,
+        "is_async": false,
+        "decorators": [],
+        "params": [],
+        "return_type": "Any",
+        "docstring": null
+      },
+      {
+        "name": "play_rock_paper_scissors",
+        "line": 1472,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/games/rps/play', methods=['POST'])"
+        ],
+        "params": [],
+        "return_type": "Response",
+        "docstring": "Play Rock Paper Scissors against Sherry with LLM persona commentary."
+      },
+      {
+        "name": "start_blackjack",
+        "line": 1497,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/games/blackjack/start', methods=['POST'])"
+        ],
+        "params": [],
+        "return_type": "Response",
+        "docstring": "Start a new Blackjack game against Sherry."
+      },
+      {
+        "name": "hit_blackjack",
+        "line": 1522,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/games/blackjack/hit', methods=['POST'])"
+        ],
+        "params": [],
+        "return_type": "Response",
+        "docstring": "Hit a card in Blackjack."
+      },
+      {
+        "name": "stand_blackjack",
+        "line": 1551,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/games/blackjack/stand', methods=['POST'])"
+        ],
+        "params": [],
+        "return_type": "Response",
+        "docstring": "Stand turn in Blackjack."
+      },
+      {
+        "name": "start_minesweeper",
+        "line": 1580,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/games/minesweeper/start', methods=['POST'])"
+        ],
+        "params": [],
+        "return_type": "Response",
+        "docstring": "Start a Minesweeper game."
+      },
+      {
+        "name": "reveal_minesweeper",
+        "line": 1597,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/games/minesweeper/reveal', methods=['POST'])"
+        ],
+        "params": [],
+        "return_type": "Response",
+        "docstring": "Reveal a Minesweeper cell."
+      },
+      {
+        "name": "flag_minesweeper",
+        "line": 1617,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/games/minesweeper/flag', methods=['POST'])"
+        ],
+        "params": [],
+        "return_type": "Response",
+        "docstring": "Toggle flag on Minesweeper cell."
+      },
+      {
+        "name": "hint_minesweeper",
+        "line": 1637,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/games/minesweeper/hint', methods=['POST'])"
+        ],
+        "params": [],
+        "return_type": "Response",
+        "docstring": "Get Sherry LLM detective hint for Minesweeper."
+      },
+      {
+        "name": "start_turtle_soup",
+        "line": 1677,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/games/turtle_soup/start', methods=['POST'])"
+        ],
+        "params": [],
+        "return_type": "Response",
+        "docstring": "Start Turtle Soup game."
+      },
+      {
+        "name": "ask_turtle_soup",
+        "line": 1693,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/games/turtle_soup/ask', methods=['POST'])"
+        ],
+        "params": [],
+        "return_type": "Response",
+        "docstring": "Ask question to Sherry Turtle Soup host."
+      },
+      {
+        "name": "start_akinator",
+        "line": 1725,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/games/akinator/start', methods=['POST'])"
+        ],
+        "params": [],
+        "return_type": "Response",
+        "docstring": "Start Akinator 20 Questions."
+      },
+      {
+        "name": "answer_akinator",
+        "line": 1741,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/games/akinator/answer', methods=['POST'])"
+        ],
+        "params": [],
+        "return_type": "Response",
+        "docstring": "Submit answer to 20 Questions."
+      },
+      {
+        "name": "start_escape_room",
+        "line": 1771,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/games/escape_room/start', methods=['POST'])"
+        ],
+        "params": [],
+        "return_type": "Response",
+        "docstring": "Start Detective Escape Room."
+      },
+      {
+        "name": "action_escape_room",
+        "line": 1787,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/games/escape_room/action', methods=['POST'])"
+        ],
+        "params": [],
+        "return_type": "Response",
+        "docstring": "Investigate target in escape room."
+      },
+      {
+        "name": "start_ttt",
+        "line": 1820,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/games/ttt/start', methods=['POST'])"
+        ],
+        "params": [],
+        "return_type": "Response",
+        "docstring": "Start Tic-Tac-Toe."
+      },
+      {
+        "name": "move_ttt",
+        "line": 1836,
+        "is_async": true,
+        "decorators": [
+          "app.route('/api/games/ttt/move', methods=['POST'])"
+        ],
+        "params": [],
+        "return_type": "Response",
+        "docstring": "Make move in Tic-Tac-Toe."
+      },
+      {
         "name": "_ensure_self_signed_cert",
-        "line": 1192,
+        "line": 1868,
         "is_async": false,
         "decorators": [],
         "params": [],
@@ -14003,7 +15865,7 @@
       },
       {
         "name": "start_server_async",
-        "line": 1253,
+        "line": 1929,
         "is_async": true,
         "decorators": [],
         "params": [

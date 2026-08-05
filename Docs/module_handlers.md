@@ -1,6 +1,6 @@
 # ⚙️ module_handlers — `handlers/` 所有子模組文件
 
-> 最後更新：2026-08-03 17:38  |  自動生成自 AST 掃描
+> 最後更新：2026-08-05 16:43  |  自動生成自 AST 掃描
 
 ## 📑 子模組目錄
 
@@ -344,24 +344,134 @@ async def setup(bot: commands.Bot) -> None
 ###### `__init__`  (L26)
 
 ```python
-def __init__(self, base_url: str = settings.OLLAMA_BASE_URL, lms_base_url: str = settings.LMS_BASE_URL, openai_base_url: str = settings.OPENAI_BASE_URL, openai_api_key: str = settings.OPENAI_API_KEY, deepseek_base_url: str = settings.DEEPSEEK_BASE_URL, deepseek_api_key: str = settings.DEEPSEEK_API_KEY, gemini_base_url: str = settings.GEMINI_BASE_URL, gemini_api_key: str = settings.GEMINI_API_KEY, claude_base_url: str = settings.CLAUDE_BASE_URL, claude_api_key: str = settings.CLAUDE_API_KEY) -> None
+def __init__(self, base_url: str | None = None, lms_base_url: str | None = None, openai_base_url: str | None = None, openai_api_key: str | None = None, deepseek_base_url: str | None = None, deepseek_api_key: str | None = None, gemini_base_url: str | None = None, gemini_api_key: str | None = None, claude_base_url: str | None = None, claude_api_key: str | None = None) -> None
 ```
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `self` | `—` | `—` |
-| `base_url` | `str` | `settings.OLLAMA_BASE_URL` |
-| `lms_base_url` | `str` | `settings.LMS_BASE_URL` |
-| `openai_base_url` | `str` | `settings.OPENAI_BASE_URL` |
-| `openai_api_key` | `str` | `settings.OPENAI_API_KEY` |
-| `deepseek_base_url` | `str` | `settings.DEEPSEEK_BASE_URL` |
-| `deepseek_api_key` | `str` | `settings.DEEPSEEK_API_KEY` |
-| `gemini_base_url` | `str` | `settings.GEMINI_BASE_URL` |
-| `gemini_api_key` | `str` | `settings.GEMINI_API_KEY` |
-| `claude_base_url` | `str` | `settings.CLAUDE_BASE_URL` |
-| `claude_api_key` | `str` | `settings.CLAUDE_API_KEY` |
+| `base_url` | `str | None` | `None` |
+| `lms_base_url` | `str | None` | `None` |
+| `openai_base_url` | `str | None` | `None` |
+| `openai_api_key` | `str | None` | `None` |
+| `deepseek_base_url` | `str | None` | `None` |
+| `deepseek_api_key` | `str | None` | `None` |
+| `gemini_base_url` | `str | None` | `None` |
+| `gemini_api_key` | `str | None` | `None` |
+| `claude_base_url` | `str | None` | `None` |
+| `claude_api_key` | `str | None` | `None` |
 
-###### `_get_session`  (L57)
+###### `_base_url`  (L54)
+
+```python
+@property
+def _base_url(self) -> str
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `_lms_base_url`  (L59)
+
+```python
+@property
+def _lms_base_url(self) -> str
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `_openai_base_url`  (L64)
+
+```python
+@property
+def _openai_base_url(self) -> str
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `_openai_api_key`  (L69)
+
+```python
+@property
+def _openai_api_key(self) -> str
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `_deepseek_base_url`  (L73)
+
+```python
+@property
+def _deepseek_base_url(self) -> str
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `_deepseek_api_key`  (L78)
+
+```python
+@property
+def _deepseek_api_key(self) -> str
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `_gemini_base_url`  (L82)
+
+```python
+@property
+def _gemini_base_url(self) -> str
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `_gemini_api_key`  (L87)
+
+```python
+@property
+def _gemini_api_key(self) -> str
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `_claude_base_url`  (L91)
+
+```python
+@property
+def _claude_base_url(self) -> str
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `_claude_api_key`  (L96)
+
+```python
+@property
+def _claude_api_key(self) -> str
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `_get_session`  (L101)
 
 ```python
 async def _get_session(self) -> aiohttp.ClientSession
@@ -371,7 +481,18 @@ async def _get_session(self) -> aiohttp.ClientSession
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `_parse_model`  (L68)
+###### `_vllm_base_url`  (L112)
+
+```python
+@property
+def _vllm_base_url(self) -> str
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `_parse_model`  (L117)
 
 ```python
 @staticmethod
@@ -384,7 +505,7 @@ def _parse_model(model: str) -> tuple[str, str]
 |---|---|---|
 | `model` | `str` | `—` |
 
-###### `_request_openai_compatible`  (L87)
+###### `_request_openai_compatible`  (L137)
 
 ```python
 async def _request_openai_compatible(self, session: aiohttp.ClientSession, base_url: str, api_key: str, actual_model: str, system_prompt: str, user_prompt: str, backend_label: str, images: list[str] | None = None) -> str
@@ -404,7 +525,7 @@ async def _request_openai_compatible(self, session: aiohttp.ClientSession, base_
 | `backend_label` | `str` | `—` |
 | `images` | `list[str] | None` | `None` |
 
-###### `_request_claude`  (L145)
+###### `_request_claude`  (L198)
 
 ```python
 async def _request_claude(self, session: aiohttp.ClientSession, actual_model: str, system_prompt: str, user_prompt: str) -> str
@@ -420,7 +541,7 @@ async def _request_claude(self, session: aiohttp.ClientSession, actual_model: st
 | `system_prompt` | `str` | `—` |
 | `user_prompt` | `str` | `—` |
 
-###### `chat`  (L189)
+###### `chat`  (L242)
 
 ```python
 async def chat(self, model: str, system_prompt: str, user_prompt: str, images: list[str] | None = None) -> str
@@ -436,7 +557,7 @@ async def chat(self, model: str, system_prompt: str, user_prompt: str, images: l
 | `user_prompt` | `str` | `—` |
 | `images` | `list[str] | None` | `None` |
 
-###### `close`  (L301)
+###### `close`  (L383)
 
 ```python
 async def close(self) -> None
@@ -3635,11 +3756,11 @@ async def play_command(self, interaction: discord.Interaction, play_type: str, c
 | 名稱 | 型別 | 值（摘要） | 行號 |
 |---|---|---|---|
 | `logger` | `—` | `logging.getLogger(__name__)` | L6 |
-| `FFMPEG_EXE_PATH` | `—` | `os.path.join(settings.FFMPEG, 'ffmpeg.exe')` | L8 |
-| `FFMPEG_OPTIONS` | `—` | `{'before_options': getattr(settings, 'MUSIC_FFMPEG_BEFORE_OPTIONS', '-reconnect ...` | L12 |
-| `_COOKIE_PATH` | `—` | `getattr(settings, 'YOUTUBE_COOKIES_PATH', os.path.join(settings.DATA_DIR, 'cooki...` | L19 |
-| `YTDL_OPTIONS` | `—` | `{'format': 'bestaudio/best', 'noplaylist': False, 'playlistend': getattr(setting...` | L22 |
-| `ytdl_client` | `—` | `yt_dlp.YoutubeDL(YTDL_OPTIONS)` | L43 |
+| `_system_ffmpeg` | `—` | `shutil.which('ffmpeg')` | L11 |
+| `FFMPEG_OPTIONS` | `—` | `{'before_options': getattr(settings, 'MUSIC_FFMPEG_BEFORE_OPTIONS', '-reconnect ...` | L21 |
+| `_COOKIE_PATH` | `—` | `getattr(settings, 'YOUTUBE_COOKIES_PATH', os.path.join(settings.DATA_DIR, 'cooki...` | L28 |
+| `YTDL_OPTIONS` | `—` | `{'format': 'bestaudio/best', 'noplaylist': False, 'playlistend': getattr(setting...` | L31 |
+| `ytdl_client` | `—` | `yt_dlp.YoutubeDL(YTDL_OPTIONS)` | L52 |
 
 
 ---

@@ -16,6 +16,10 @@ class GameType(str, Enum):
     RPS = "rps"
     BLACKJACK = "blackjack"
     MINESWEEPER = "minesweeper"
+    TURTLE_SOUP = "turtle_soup"
+    AKINATOR = "akinator"
+    ESCAPE_ROOM = "escape_room"
+    TIC_TAC_TOE = "tic_tac_toe"
 
 
 class RPSChoice(str, Enum):
@@ -126,4 +130,87 @@ class MinesweeperState:
                 [cell.to_dict(reveal_all=reveal_all) for cell in row_cells]
                 for row_cells in self.board
             ],
+        }
+
+
+@dataclass
+class TurtleSoupState:
+    """State for Situation Puzzle (Turtle Soup)."""
+    game_id: str
+    title: str
+    surface_story: str
+    truth: str
+    dialogue_history: list[dict[str, str]] = field(default_factory=list)
+    status: GameResultStatus = GameResultStatus.ONGOING
+    sherry_reply: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "game_id": self.game_id,
+            "title": self.title,
+            "surface_story": self.surface_story,
+            "dialogue_history": self.dialogue_history,
+            "status": self.status.value,
+            "sherry_reply": self.sherry_reply,
+        }
+
+
+@dataclass
+class AkinatorState:
+    """State for 20 Questions / Sherry Akinator Game."""
+    game_id: str
+    question_count: int = 0
+    max_questions: int = 20
+    history: list[dict[str, str]] = field(default_factory=list)
+    current_question: str = ""
+    sherry_guess: str = ""
+    status: GameResultStatus = GameResultStatus.ONGOING
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "game_id": self.game_id,
+            "question_count": self.question_count,
+            "max_questions": self.max_questions,
+            "history": self.history,
+            "current_question": self.current_question,
+            "sherry_guess": self.sherry_guess,
+            "status": self.status.value,
+        }
+
+
+@dataclass
+class EscapeRoomState:
+    """State for Detective Escape Room Text Adventure."""
+    game_id: str
+    current_room: str = "密室中央"
+    inventory: list[str] = field(default_factory=list)
+    unlocked_clues: list[str] = field(default_factory=list)
+    status: GameResultStatus = GameResultStatus.ONGOING
+    sherry_narration: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "game_id": self.game_id,
+            "current_room": self.current_room,
+            "inventory": self.inventory,
+            "unlocked_clues": self.unlocked_clues,
+            "status": self.status.value,
+            "sherry_narration": self.sherry_narration,
+        }
+
+
+@dataclass
+class TicTacToeState:
+    """State for Tic-Tac-Toe (3x3 grid)."""
+    game_id: str
+    board: list[str] = field(default_factory=lambda: [""] * 9)  # "", "X", "O"
+    status: GameResultStatus = GameResultStatus.ONGOING
+    sherry_dialogue: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "game_id": self.game_id,
+            "board": self.board,
+            "status": self.status.value,
+            "sherry_dialogue": self.sherry_dialogue,
         }

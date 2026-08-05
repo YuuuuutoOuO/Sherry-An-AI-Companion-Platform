@@ -44,7 +44,10 @@ async function checkDynamicModules() {
   try {
     const res = await fetch('/api/modules');
     const data = await res.json();
-    if (data.modules && data.modules.game_center && data.modules.game_center.enabled) {
+    const mods = data.modules || {};
+
+    // game_center: inject/remove nav button based on enabled flag
+    if (mods.game_center && mods.game_center.enabled) {
       const nav = document.querySelector('.sidebar-nav');
       if (nav && !document.getElementById('nav-games')) {
         const btn = document.createElement('button');
@@ -86,6 +89,8 @@ function switchView(view) {
   if (bTb) bTb.classList.add('hidden');
   const aTb = document.getElementById('audit-toolbar');
   if (aTb) aTb.classList.add('hidden');
+  const mmTb = document.getElementById('mod-manager-toolbar');
+  if (mmTb) mmTb.classList.add('hidden');
 
   if (state.metricsTimer) {
     clearInterval(state.metricsTimer);
@@ -167,6 +172,14 @@ function switchView(view) {
     const viewGames = document.getElementById('view-games');
     if (viewGames) viewGames.classList.remove('hidden');
     document.getElementById('view-title').textContent = '🎮 雪莉小遊戲遊樂場 (Mod)';
+  } else if (view === 'mod-manager') {
+    const navMM = document.getElementById('nav-mod-manager');
+    if (navMM) navMM.classList.add('active');
+    const viewMM = document.getElementById('view-mod-manager');
+    if (viewMM) viewMM.classList.remove('hidden');
+    if (mmTb) mmTb.classList.remove('hidden');
+    document.getElementById('view-title').textContent = '🧩 功能模組管理中心';
+    loadModManager();
   } else {
     document.getElementById('nav-settings').classList.add('active');
     document.getElementById('view-settings').classList.remove('hidden');
@@ -534,7 +547,7 @@ function buildSettingItem({ key, value, label, description, type, min, max, step
 }
 
 function buildModelPicker(key, value) {
-  const PREFIXES = ['ollama', 'lms', 'openai', 'deepseek', 'gemini', 'claude'];
+  const PREFIXES = ['ollama', 'lms', 'vllm', 'openai', 'deepseek', 'gemini', 'claude'];
   // Parse current value
   const colonIdx = (value || '').indexOf(':');
   const currentPrefix = colonIdx > -1 ? (value || '').slice(0, colonIdx) : 'ollama';
@@ -594,7 +607,7 @@ async function fetchModelsForPicker(key) {
   const inp    = document.getElementById(`inp-${key}`);
   if (!sel) return;
 
-  const isLocal = prefix === 'ollama' || prefix === 'lms';
+  const isLocal = prefix === 'ollama' || prefix === 'lms' || prefix === 'vllm';
   if (!isLocal) {
     // Cloud providers: hide select, show text input only
     sel.classList.add('hidden');
@@ -606,7 +619,9 @@ async function fetchModelsForPicker(key) {
   sel.classList.remove('hidden');
 
   try {
-    const endpoint = prefix === 'ollama' ? '/api/models/ollama' : '/api/models/lms';
+    let endpoint = '/api/models/lms';
+    if (prefix === 'ollama') endpoint = '/api/models/ollama';
+    else if (prefix === 'vllm') endpoint = '/api/models/vllm';
     const resp = await fetch(endpoint);
     const data = await resp.json();
     const models = data.models || [];
@@ -1921,6 +1936,183 @@ async function flagMinesweeperCell(e, r, c) {
   }
 }
 
+// ── Turtle Soup ───────────────────────────────────────────
+let currentTurtleSoupId = null;
+
+async function startTurtleSoup() {
+  try {
+    const res = await fetch('/api/games/turtle_soup/start', { method: 'POST' });
+    const data = await res.json();
+    currentTurtleSoupId = data.game_id;
+
+    document.getElementById('ts-title').textContent = `湯面：${data.title}`;
+    document.getElementById('ts-surface').textContent = data.surface_story;
+    document.getElementById('ts-dialogue-history').innerHTML = '';
+
+    const dialogueEl = document.getElementById('sherry-game-dialogue');
+    if (dialogueEl && data.sherry_reply) dialogueEl.textContent = `「${data.sherry_reply}」`;
+  } catch (e) {
+    showToast(`開啟海龜湯失敗: ${e}`, 'error');
+  }
+}
+
+async function askTurtleSoup() {
+  const inputEl = document.getElementById('ts-input');
+  if (!inputEl || !inputEl.value.trim() || !currentTurtleSoupId) return;
+  const question = inputEl.value.trim();
+  inputEl.value = '';
+
+  const dialogueEl = document.getElementById('sherry-game-dialogue');
+  if (dialogueEl) dialogueEl.textContent = '「名偵探湯主推理審查中……🔍✨」';
+
+  try {
+    const res = await fetch('/api/games/turtle_soup/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ game_id: currentTurtleSoupId, question }),
+    });
+    const data = await res.json();
+
+    const historyEl = document.getElementById('ts-dialogue-history');
+    if (historyEl) {
+      historyEl.innerHTML += `
+        <div style="background: rgba(255,255,255,0.05); padding: 8px 12px; border-radius: 6px; font-size: 0.9rem;">
+          <div style="color: var(--text-main); font-weight: 600;">❓ 問：${escHtml(question)}</div>
+          <div style="color: #00e5ff; margin-top: 4px;">🍊 雪莉：${escHtml(data.sherry_reply)}</div>
+        </div>
+      `;
+      historyEl.scrollTop = historyEl.scrollHeight;
+    }
+
+    if (dialogueEl && data.sherry_reply) dialogueEl.textContent = `「${data.sherry_reply}」`;
+  } catch (e) {
+    showToast(`提問失敗: ${e}`, 'error');
+  }
+}
+
+// ── Akinator 20 Questions ──────────────────────────────────
+let currentAkinatorId = null;
+
+async function startAkinator() {
+  try {
+    const res = await fetch('/api/games/akinator/start', { method: 'POST' });
+    const data = await res.json();
+    currentAkinatorId = data.game_id;
+
+    document.getElementById('aki-q-num').textContent = `第 ${data.question_count} / ${data.max_questions} 題`;
+    document.getElementById('aki-question').textContent = data.current_question;
+  } catch (e) {
+    showToast(`開始讀心術失敗: ${e}`, 'error');
+  }
+}
+
+async function answerAkinator(ans) {
+  if (!currentAkinatorId) return;
+  const dialogueEl = document.getElementById('sherry-game-dialogue');
+  if (dialogueEl) dialogueEl.textContent = '「搜集情報中……名偵探鎖定範圍中！🧠✨」';
+
+  try {
+    const res = await fetch('/api/games/akinator/answer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ game_id: currentAkinatorId, answer: ans }),
+    });
+    const data = await res.json();
+
+    document.getElementById('aki-q-num').textContent = `第 ${data.question_count} / ${data.max_questions} 題`;
+    document.getElementById('aki-question').textContent = data.current_question;
+
+    if (dialogueEl && data.current_question) {
+      dialogueEl.textContent = `「名偵探推導出下一題：${data.current_question}」`;
+    }
+  } catch (e) {
+    showToast(`回答失敗: ${e}`, 'error');
+  }
+}
+
+// ── Escape Room ───────────────────────────────────────────
+let currentEscapeRoomId = null;
+
+async function startEscapeRoom() {
+  try {
+    const res = await fetch('/api/games/escape_room/start', { method: 'POST' });
+    const data = await res.json();
+    currentEscapeRoomId = data.game_id;
+
+    document.getElementById('er-narration').textContent = data.sherry_narration;
+    const dialogueEl = document.getElementById('sherry-game-dialogue');
+    if (dialogueEl && data.sherry_narration) dialogueEl.textContent = `「${data.sherry_narration}」`;
+  } catch (e) {
+    showToast(`開啟密室失敗: ${e}`, 'error');
+  }
+}
+
+async function actionEscapeRoom(target) {
+  if (!currentEscapeRoomId) return;
+  const dialogueEl = document.getElementById('sherry-game-dialogue');
+  if (dialogueEl) dialogueEl.textContent = `「名偵探與你一同搜索『${target}』中……🔍✨」`;
+
+  try {
+    const res = await fetch('/api/games/escape_room/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ game_id: currentEscapeRoomId, target }),
+    });
+    const data = await res.json();
+
+    document.getElementById('er-narration').textContent = data.sherry_narration;
+    if (dialogueEl && data.sherry_narration) dialogueEl.textContent = `「${data.sherry_narration}」`;
+  } catch (e) {
+    showToast(`調查失敗: ${e}`, 'error');
+  }
+}
+
+// ── Tic Tac Toe ────────────────────────────────────────────
+let currentTTTId = null;
+
+async function startTTT() {
+  try {
+    const res = await fetch('/api/games/ttt/start', { method: 'POST' });
+    const data = await res.json();
+    currentTTTId = data.game_id;
+    renderTTTBoard(data);
+  } catch (e) {
+    showToast(`圈圈叉叉開局失敗: ${e}`, 'error');
+  }
+}
+
+async function moveTTT(index) {
+  if (!currentTTTId) return;
+  try {
+    const res = await fetch('/api/games/ttt/move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ game_id: currentTTTId, index }),
+    });
+    const data = await res.json();
+    renderTTTBoard(data);
+  } catch (e) {
+    showToast(`下棋失敗: ${e}`, 'error');
+  }
+}
+
+function renderTTTBoard(data) {
+  const boardEl = document.getElementById('ttt-board');
+  if (!boardEl) return;
+
+  boardEl.innerHTML = data.board.map((val, idx) => `
+    <button onclick="moveTTT(${idx})" style="width:70px; height:70px; font-size:1.8rem; font-weight:800; border-radius:10px; border:1px solid var(--accent-color); background:#2a2d3d; color:${val === 'X' ? '#ff007f' : '#00e5ff'}; cursor:pointer;" ${val !== '' || data.status !== 'ongoing' ? 'disabled' : ''}>
+      ${val}
+    </button>
+  `).join('');
+
+  const dialogueEl = document.getElementById('sherry-game-dialogue');
+  if (dialogueEl && data.sherry_dialogue) {
+    dialogueEl.textContent = `「${data.sherry_dialogue}」`;
+  }
+}
+
+
 async function hintMinesweeper() {
   if (!currentMinesweeperId) {
     showToast('請先開局踩地雷！', 'info');
@@ -1990,3 +2182,191 @@ function renderMinesweeperBoard(data) {
 }
 
 
+
+
+// =========================================================
+// MOD MANAGER
+// =========================================================
+
+/**
+ * Load and render the Mod Manager view.
+ * Fetches /api/modules and builds the module card grid.
+ */
+async function loadModManager() {
+  const grid = document.getElementById('mod-grid');
+  if (!grid) return;
+  grid.innerHTML = `<div class="mod-loading"><div class="mod-loading-spinner"></div><span>正在掃描模組清單...</span></div>`;
+  try {
+    const res = await fetch('/api/modules', { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderModManager(data.modules || {});
+  } catch (e) {
+    grid.innerHTML = `<div class="mod-empty">❌ 載入模組清單失敗: ${e}</div>`;
+  }
+}
+
+/**
+ * Render module cards from the modules dict.
+ * @param {Object} modules - keyed by mod_key, value has enabled/display_name/description/category
+ */
+function renderModManager(modules) {
+  const grid = document.getElementById('mod-grid');
+  if (!grid) return;
+
+  const keys = Object.keys(modules);
+  if (keys.length === 0) {
+    grid.innerHTML = '<div class="mod-empty">尚未發現任何可用模組。</div>';
+    return;
+  }
+
+  grid.innerHTML = '';
+  for (const key of keys) {
+    const mod = modules[key];
+    const enabled = mod.enabled !== false;
+    const card = document.createElement('div');
+    card.className = `mod-card ${enabled ? 'mod-card-enabled' : 'mod-card-disabled'}`;
+    card.id = `mod-card-${key}`;
+
+    const badgeClass = enabled ? 'mod-badge mod-badge-enabled' : 'mod-badge mod-badge-disabled';
+    const badgeText = enabled ? '🟢 啟用中' : '🔴 已停用';
+
+    const gamesCount = (mod.info && mod.info.games)
+      ? `<div class="mod-meta">內包 ${mod.info.games.length} 個小遊戲</div>` : '';
+
+    card.innerHTML = `
+      <div class="mod-card-header">
+        <div class="mod-card-name">${mod.display_name || key}</div>
+        <span class="${badgeClass}">${badgeText}</span>
+      </div>
+      <div class="mod-card-desc">${mod.description || ''}</div>
+      ${gamesCount}
+      <div class="mod-card-meta">
+        <span class="mod-category-tag">${mod.category || '自訂'}</span>
+        <span class="mod-key-tag"><code>${key}</code></span>
+      </div>
+      <div class="mod-card-actions">
+        <button
+          class="mod-toggle-btn ${enabled ? 'mod-toggle-disable' : 'mod-toggle-enable'}"
+          onclick="toggleModuleStatus('${key}', ${!enabled})"
+          id="toggle-btn-${key}"
+        >
+          ${enabled ? '🔴 停用此模組' : '🟢 啟用此模組'}
+        </button>
+      </div>
+    `;
+    grid.appendChild(card);
+  }
+}
+
+/**
+ * Toggle a module's enabled/disabled state via POST /api/modules/toggle.
+ * Shows a toast and reveals the notice bar prompting restart.
+ * @param {string} modKey - The mod identifier
+ * @param {boolean} enable - Whether to enable (true) or disable (false)
+ */
+async function toggleModuleStatus(modKey, enable) {
+  if (!state.isAdmin) {
+    showToast('請先登入管理員才能操作模組！', 'error');
+    openLoginModal();
+    return;
+  }
+
+  const btn = document.getElementById(`toggle-btn-${modKey}`);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '處理中...';
+  }
+
+  try {
+    const res = await fetch('/api/modules/toggle', {
+      method: 'POST',
+      headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mod_key: modKey, enabled: enable }),
+    });
+    const data = await res.json();
+
+    if (res.ok && data.status === 'success') {
+      const actionZh = enable ? '啟用' : '停用';
+      showToast(`✅ 模組「${modKey}」已${actionZh}，請重啟雪莉生效！`, 'success');
+
+      // Show pending changes notice bar
+      const noticeBar = document.getElementById('mod-notice-bar');
+      if (noticeBar) noticeBar.style.display = 'flex';
+
+      // Sync nav button for game_center immediately
+      if (modKey === 'game_center') {
+        const nav = document.querySelector('.sidebar-nav');
+        if (nav) {
+          if (enable) {
+            if (!document.getElementById('nav-games')) {
+              const gameBtn = document.createElement('button');
+              gameBtn.className = 'nav-btn';
+              gameBtn.id = 'nav-games';
+              gameBtn.onclick = () => switchView('games');
+              gameBtn.innerHTML = `<span class="nav-icon">🎮</span><span>小遊戲遊樂場</span>`;
+              const modManagerBtn = document.getElementById('nav-mod-manager');
+              const settingsBtn = document.getElementById('nav-settings');
+              const anchor = modManagerBtn || settingsBtn;
+              if (anchor) nav.insertBefore(gameBtn, anchor);
+              else nav.appendChild(gameBtn);
+            }
+          } else {
+            const existingGamesBtn = document.getElementById('nav-games');
+            if (existingGamesBtn) existingGamesBtn.remove();
+          }
+        }
+      }
+
+      // Refresh the mod cards
+      await loadModManager();
+    } else {
+      showToast(`❌ ${data.message || '操作失敗'}`, 'error');
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = enable ? '🟢 啟用此模組' : '🔴 停用此模組';
+      }
+    }
+  } catch (e) {
+    showToast(`❌ 網路錯誤: ${e}`, 'error');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = enable ? '🟢 啟用此模組' : '🔴 停用此模組';
+    }
+  }
+}
+
+
+
+// =========================================================
+// STOP BOT (關閉/停止雪莉)
+// =========================================================
+function requestStop() {
+  if (!state.isAdmin) {
+    showToast('關閉雪莉僅限管理員使用，請先登入！', 'warning');
+    openLoginModal();
+    return;
+  }
+  const backdrop = document.getElementById('stop-modal-backdrop');
+  if (backdrop) backdrop.classList.remove('hidden');
+}
+
+function closeStopModal() {
+  const backdrop = document.getElementById('stop-modal-backdrop');
+  if (backdrop) backdrop.classList.add('hidden');
+}
+
+async function executeStop() {
+  closeStopModal();
+  const overlay = document.getElementById('stop-overlay');
+  if (overlay) overlay.classList.remove('hidden');
+
+  try {
+    await fetch('/api/stop', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    });
+  } catch (e) {}
+
+  showToast('🛑 雪莉已傳送關閉指令並停止運行。', 'info');
+}
