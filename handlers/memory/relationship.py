@@ -54,12 +54,22 @@ class RelationshipManager:
         path: Path = settings.USER_RELATIONS_PATH
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
+        store_copy = dict(self.store)
+
+        def _do_write():
+            try:
+                with tmp.open("w", encoding="utf-8") as f:
+                    json.dump(store_copy, f, ensure_ascii=False, indent=2)
+                tmp.replace(path)
+            except Exception as e:
+                logger.error("寫入 relationship 失敗: %s", e)
+
         try:
-            with tmp.open("w", encoding="utf-8") as f:
-                json.dump(self.store, f, ensure_ascii=False, indent=2)
-            tmp.replace(path)
-        except Exception as e:
-            logger.error("寫入 relationship 失敗: %s", e)
+            import asyncio
+            loop = asyncio.get_running_loop()
+            loop.run_in_executor(None, _do_write)
+        except RuntimeError:
+            _do_write()
 
     def get_affinity(self, uid: int) -> float:
         """回傳目前好感度（float，保留小數精度）。"""

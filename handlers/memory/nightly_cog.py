@@ -53,22 +53,29 @@ _NIGHTLY_SYSTEM_PROMPT = (
     "內容遠比平時的片段更完整。\n\n"
     "---任務指令---\n"
     "請從這份完整記錄中，萃取關於「這位群友本人」的長期記憶。\n"
-    "你有更多資訊可以推斷，請盡量找出有意義的人格特質、興趣、習慣、"
-    "以及他與雪莉（橘雪莉）的互動模式。\n\n"
-    "⚠️【絕對禁止事項】：\n"
-    "1. 絕對不可將「橘雪莉」或 [某群友] 的名稱記入 aliases！\n"
-    "   [某群友] 代表發話者在訊息中提及的「其他人」，不是發話者本人。\n"
-    "2. aliases 只填入這個人真正的自稱、綽號（若無則空陣列）。\n"
-    "3. 把完整句子或他說給別人的話記成 alias 或 fact 是嚴重錯誤。\n"
-    "4. 若今日發言皆為普通幹話、無具體資訊，留下空陣列，寧缺勿濫。\n"
-    "5. 每條 fact 必須附上 importance（1~5整數）：\n"
+    "請找出有意義且真實的人格特質、興趣愛好、生活習慣，"
+    "以及他與雪莉（橘雪莉）的長期互動模式。\n\n"
+    "⚠️【核心禁止事項（違規將導致嚴重人格錯亂）】：\n"
+    "1. 【嚴格禁止主客體顛倒】：發話者對其他人說的話（例如叫別人吃大便、罵別人、開玩笑說『你只能...』、『你去死』），"
+    "是發話者對『其他人』的祈使或嘴砲句，絕對不可記為發話者本人的喜好或特質！\n"
+    "2. 【嚴格過濾嘴砲與幹話】：群聊中的打鬧、互相嘲諷、無厘頭幹話或情緒發洩，請一律忽略，留下空陣列，寧缺勿濫！\n"
+    "3. 【嚴格別名判定】：只有發話者明確自我介紹（例如：『我叫XX』、『可以叫我XX』）才記入 aliases。"
+    "絕對禁止將遊戲名稱（如賽爾號）、伺服器房號、動漫名、代號、泛稱（如群友、大家）或整句話記為 aliases！\n"
+    "4. 發言紀錄中出現的「[某群友]」是發話者在訊息中 TAG 的其他人，絕對不是發話者本人！\n"
+    "5. 分類規範（category）：\n"
+    "   - identity: 真實身份/職業/居住地/個人自稱\n"
+    "   - interest: 明確熱愛的遊戲/動漫/技術/興趣\n"
+    "   - habit: 穩固生活作息/口頭禪\n"
+    "   - relationship: 與雪莉（橘雪莉）的長期互動模式\n"
+    "   - opinion: 對重要事物的穩定看法\n"
+    "6. 每條 fact 必須附上 importance（1~5整數）：\n"
     "   1=短暫狀態  2=一般偏好  3=穩固習慣  4=重要特質  5=核心身份\n\n"
     "目前已知長期屬性（請勿重複，但可升級 importance）：\n"
     "{current_facts}\n\n"
     "請只返回 JSON 格式，不可有任何其他文字：\n"
     '```json\n'
-    '{{"aliases": ["真實的綽號或自稱"],\n'
-    ' "facts": [{{"fact": "他喜歡XX", "importance": 3}}]}}\n'
+    '{{"aliases": ["真實的綽號或自稱(若無則空陣列)"],\n'
+    ' "facts": [{{"fact": "他平時喜歡寫Python", "importance": 3, "category": "interest"}}]}}\n'
     '```'
 )
 
@@ -94,8 +101,9 @@ class NightlyDigest(commands.Cog):
     @tasks.loop(minutes=1)
     async def _nightly_loop(self) -> None:
         now = datetime.now(_TZ_TW)
-        # 凌晨 3:00 ~ 3:09 的 10 分鐘視窗
-        if now.hour != settings.NIGHTLY_DIGEST_HOUR or now.minute >= 10:
+        # 凌晨 4:30 ~ 4:39 的 10 分鐘視窗
+        target_minute = getattr(settings, "NIGHTLY_DIGEST_MINUTE", 30)
+        if now.hour != settings.NIGHTLY_DIGEST_HOUR or not (target_minute <= now.minute < target_minute + 10):
             return
         yesterday = get_yesterday_str()
         if is_date_processed(yesterday):

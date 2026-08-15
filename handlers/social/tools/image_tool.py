@@ -17,11 +17,36 @@ from discord.ext import commands
 
 import settings
 from handlers.bot_brain import BotBrain, InferenceTask
-from handlers.social.tool_base import BaseTool
+from handlers.social.tool_base import BaseTool, ToolResponseMode
 from handlers.social.utils import simulate_typing_and_send
 from handlers.social.persona import build_dynamic_persona
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# 共用 Tag 常數
+# ---------------------------------------------------------------------------
+_TAG_ALIASES: dict[str, str] = {
+    "huge_boobs": "large_breasts",
+    "big_boobs": "large_breasts",
+    "medium_breasts": "large_breasts",
+    "huge_breasts": "large_breasts",
+    "breasts": "large_breasts",
+    "oppai": "large_breasts",
+    "flat_chest": "small_breasts",
+    "pettanko": "small_breasts",
+    "loli": "small_breasts",
+    "bikini": "swimsuit",
+    "nude": "naked",
+    "bottomless": "naked",
+    "undress": "naked",
+}
+
+_CONFLICT_ROOTS: list[list[str]] = [
+    ["large_breasts", "small_breasts"],
+    ["naked", "swimsuit", "underwear"],
+]
 
 
 class ImageSearchTool(BaseTool):
@@ -34,6 +59,10 @@ class ImageSearchTool(BaseTool):
     def llm_description(self) -> str:
         return "明確要求『看圖、給圖、找照片』時才選。如果只是言語調戲、肢體接觸（如親吻、摸），絕對不可選此項，請選 CHAT！"
 
+    @property
+    def response_mode(self) -> ToolResponseMode:
+        return ToolResponseMode.DIRECT_UI
+
     def can_handle_by_regex(self, text: str) -> bool:
         action_regex = (
             r"(寫真|照片|畫像|pixiv|本子"
@@ -44,17 +73,202 @@ class ImageSearchTool(BaseTool):
 
         return bool(re.search(action_regex, text, re.IGNORECASE)) or eng_tags
 
-    def __init__(self):
+    def __init__(self) -> None:
         # 在初始化時載入一次即可，不必每次搜圖都重讀磁碟
         dict_path = settings.PIXIV_TAG_PATH
-        self._pixiv_dict: dict = {}
+        self._pixiv_dict: dict[str, str] = {}
         if dict_path.exists():
             try:
                 with open(dict_path, "r", encoding="utf-8") as f:
                     self._pixiv_dict = json.load(f)
             except Exception as e:
-                logger.error(f"Image 尋圖字庫讀取異常: {e}")
+                logger.error("Image 尋圖字庫讀取異常: %s", e)
+        self._sorted_pixiv_keys: list[str] = sorted(
+            self._pixiv_dict.keys(), key=len, reverse=True
+        )
 
+    # ------------------------------------------------------------------
+    # 私有方法（可被 execute 和 search 共用）
+    # ------------------------------------------------------------------
+
+    def _build_tag_pool(self, user_query: str, raw_llm_reply: str = "") -> list[str]:
+        """字典掃描 + 正則 + LLM 補充，合建原始 tag 集合。
+
+        Args:
+            user_query: 使用者原始輸入。
+            raw_llm_reply: LLM 翻譯結果（若無則留空，Agent 模式下不走 LLM）。
+
+        Returns:
+            原始 tag 列表（未去重 / 未消解衝突）。
+        """
+        tag_pool: list[str] = []
+        lower_query = user_query.lower()
+        scan_query = lower_query
+
+        # 1. pixiv_tag.json 字典（最長匹配優先）
+        for dk in self._sorted_pixiv_keys:
+            if len(dk) >= 2 and dk in scan_query:
+                tag_pool.append(self._pixiv_dict[dk])
+                scan_query = scan_query.replace(dk, "")
+
+        # 2. 英文 snake_case 直接萃取（如 large_breasts 等已是合法 tag）
+        eng_tags = re.findall(r"[a-zA-Z]+_[a-zA-Z0-9]+", scan_query)
+        tag_pool.extend(eng_tags)
+
+        # 3. 內建關鍵字正則映射
+        _KEYWORD_MAPS: list[tuple[str, str]] = [
+            (r"(巨乳|大胸|大奶|huge boobs)", "large_breasts"),
+            (r"(貧乳|平胸|微乳|ちっぱい)", "small_breasts"),
+            (r"(尻|臀|屁股|お尻)", "ass"),
+            (r"(裸|沒穿|脫衣|全裸|naked|色)", "naked"),
+            (r"(泳裝|水着|泳衣|swimsuit)", "swimsuit"),
+            (r"(女體|極上の女体)", "female"),
+        ]
+        for pattern, tag in _KEYWORD_MAPS:
+            if re.search(pattern, lower_query):
+                tag_pool.append(tag)
+
+        # 4. LLM 翻譯結果（僅在 execute 模式下提供，Agent 模式略過）
+        if raw_llm_reply:
+            raw_llm_reply = raw_llm_reply.replace("\n", "").strip()
+            is_refused = bool(re.search(
+                r"(抱歉|無法|不能|對不起|不能幫忙|Sorry|cannot|Assistance|限制|違規|幫助)",
+                raw_llm_reply, re.IGNORECASE
+            ))
+            if not is_refused and len(raw_llm_reply) <= 80:
+                for lp in raw_llm_reply.split(","):
+                    clp = lp.strip().lower()
+                    bad_combos = ["large_breasts", "small_breasts", "huge_boobs", "swimsuit", "naked", "ass"]
+                    for bad_combo in bad_combos:
+                        if bad_combo in clp and clp != bad_combo:
+                            clp = clp.replace(f"_{bad_combo}", "").replace(f"{bad_combo}_", "")
+                    if re.match(r"^[a-z0-9_\(\)]+$", clp) and len(clp) > 2:
+                        tag_pool.append(clp)
+
+        return tag_pool
+
+    def _normalize_tags(
+        self,
+        tag_pool: list[str],
+        is_nsfw_requested: bool = False,
+    ) -> list[str]:
+        """去重、別名正規化、衝突消解、保底補充。
+
+        Args:
+            tag_pool: 由 _build_tag_pool 回傳的原始 tag 列表。
+            is_nsfw_requested: 若為 True 且 tag_pool 為空，保底加入 ['1girl', 'naked']；
+                               否則保底使用 ['1girl', 'solo']（較安全）。
+
+        Returns:
+            最終正規化後的 tag 列表（上限 3 個）。
+        """
+        normalized_tags: list[str] = []
+        for raw_tag in tag_pool:
+            cln = raw_tag.strip().lower()
+            cln = _TAG_ALIASES.get(cln, cln)
+
+            if cln in normalized_tags:
+                continue
+
+            is_conflict = False
+            for group in _CONFLICT_ROOTS:
+                if cln in group:
+                    if any(existing_tag in group for existing_tag in normalized_tags):
+                        is_conflict = True
+                        break
+
+            if not is_conflict:
+                normalized_tags.append(cln)
+
+        if normalized_tags:
+            return normalized_tags[:3]
+
+        # 保底策略
+        if is_nsfw_requested:
+            return ["1girl", "naked"]
+        return ["1girl", "solo"]
+
+    async def _booru_search(self, working_list: list[str]) -> tuple[str, bool]:
+        """向 Safebooru API 搜圖，支援 tag 逐步退避。
+
+        Args:
+            working_list: 正規化後的 tag 列表（會被就地修改以退避）。
+
+        Returns:
+            (img_url, fallback_attempted)
+        """
+        img_url = ""
+        fallback_attempted = False
+        original_length = len(working_list)
+        headers = {"User-Agent": "Mozilla/5.0"}
+
+        while len(working_list) > 0 and not img_url:
+            final_tags = "+".join(working_list)
+            search_pages = [random.randint(0, 3), 0]
+
+            try:
+                async with aiohttp.ClientSession(headers=headers) as session:
+                    for pid in search_pages:
+                        url_string = urllib.parse.quote_plus(final_tags, safe="+")
+                        api_url = (
+                            f"{settings.SAFEBOORU_API_URL}"
+                            f"&q=index&json=1&limit=50&pid={pid}&tags={url_string}"
+                        )
+                        async with session.get(
+                            api_url,
+                            timeout=aiohttp.ClientTimeout(total=settings.SAFEBOORU_HTTP_TIMEOUT),
+                        ) as r:
+                            if r.status == 200:
+                                posts = await r.json(content_type=None)
+                                if posts and isinstance(posts, list):
+                                    random.shuffle(posts)
+                                    for post in posts:
+                                        if "directory" in post and "image" in post:
+                                            img_url = (
+                                                f"{settings.SAFEBOORU_IMAGE_BASE_URL}"
+                                                f"{post['directory']}/{post['image']}"
+                                            )
+                                            if len(working_list) < original_length:
+                                                fallback_attempted = True
+                                            break
+                        if img_url:
+                            break
+            except aiohttp.ClientError as e:
+                logger.error("Image 尋圖網路錯誤: %s", e)
+            except Exception as e:
+                logger.error("Image 尋圖停擺: %s", e)
+
+            if not img_url:
+                working_list.pop()
+
+        return img_url, fallback_attempted
+
+    async def search(self, user_query: str) -> tuple[str, list[str], bool]:
+        """ReAct Agent 專用公開搜圖介面（純本機，不走 LLM 翻譯）。
+
+        Args:
+            user_query: 使用者的搜圖描述（中文或英文均可）。
+
+        Returns:
+            (img_url, used_tags, is_fallback)
+        """
+        is_nsfw = bool(re.search(
+            r"(裸|大奶|巨乳|色圖|naked|large_breasts|small_breasts|大胸|貧乳|nude)",
+            user_query, re.IGNORECASE,
+        ))
+
+        tag_pool = self._build_tag_pool(user_query, raw_llm_reply="")
+        working_list = self._normalize_tags(tag_pool, is_nsfw_requested=is_nsfw)
+        original_tags = list(working_list)
+
+        logger.info("⚡ [ReAct search] 搜圖 tags => %s", working_list)
+
+        img_url, fallback_attempted = await self._booru_search(working_list)
+        return img_url, original_tags, fallback_attempted
+
+    # ------------------------------------------------------------------
+    # BaseTool.execute（原有路徑，行為不變）
+    # ------------------------------------------------------------------
 
     async def execute(
         self,
@@ -63,6 +277,7 @@ class ImageSearchTool(BaseTool):
         user_query: str,
         vibe_snippet: str,
         full_context: str,
+        **kwargs: object,
     ) -> None:
         brain: BotBrain | None = bot.get_cog("BotBrain")
         if not brain:
@@ -82,130 +297,18 @@ class ImageSearchTool(BaseTool):
         )
 
         async def _fetch_safe_booru(raw_reply: str) -> None:
-            tag_pool = []
-            lower_query = user_query.lower()
-
-            pixiv_dict = self._pixiv_dict
-            dict_keys = sorted(pixiv_dict.keys(), key=len, reverse=True)
-            scan_query = lower_query
-            for dk in dict_keys:
-                if len(dk) >= 2 and dk in scan_query:
-                    tag_pool.append(pixiv_dict[dk])
-                    scan_query = scan_query.replace(dk, "")
-
-            english_tags = re.findall(r"[a-zA-Z]+_[a-zA-Z0-9]+", scan_query)
-            tag_pool.extend(english_tags)
-
-            if re.search(r"(巨乳|大胸|大奶|huge boobs)", lower_query):
-                tag_pool.append("large_breasts")
-            if re.search(r"(貧乳|平胸|微乳|ちっぱい)", lower_query):
-                tag_pool.append("small_breasts")
-            if re.search(r"(尻|臀|屁股|お尻)", lower_query):
-                tag_pool.append("ass")
-            if re.search(r"(裸|沒穿|脫衣|全裸|naked|色)", lower_query):
-                tag_pool.append("naked")
-            if re.search(r"(泳裝|水着|泳衣|swimsuit)", lower_query):
-                tag_pool.append("swimsuit")
-            if re.search(r"(女體|極上の女体)", lower_query):
-                tag_pool.append("female")
-
-            raw_reply = raw_reply.replace("\n", "").strip()
-            is_refused = bool(re.search(
-                r"(抱歉|無法|不能|對不起|不能幫忙|Sorry|cannot|Assistance|限制|違規|幫助)",
-                raw_reply, re.IGNORECASE
+            is_nsfw = bool(re.search(
+                r"(裸|大奶|巨乳|色圖|naked|large_breasts|small_breasts|大胸|貧乳|nude)",
+                user_query, re.IGNORECASE,
             ))
-            if not is_refused and len(raw_reply) <= 80:
-                for lp in raw_reply.split(","):
-                    clp = lp.strip().lower()
-                    bad_combos = ["large_breasts", "small_breasts", "huge_boobs", "swimsuit", "naked", "ass"]
-                    for bad_combo in bad_combos:
-                        if bad_combo in clp and clp != bad_combo:
-                            clp = clp.replace(f"_{bad_combo}", "").replace(f"{bad_combo}_", "")
 
-                    if re.match(r"^[a-z0-9_\(\)]+$", clp) and len(clp) > 2:
-                        tag_pool.append(clp)
+            tag_pool = self._build_tag_pool(user_query, raw_llm_reply=raw_reply)
+            normalized_tags = self._normalize_tags(tag_pool, is_nsfw_requested=is_nsfw)
+            working_list = list(normalized_tags)
 
-            TAG_ALIASES = {
-                "huge_boobs": "large_breasts",
-                "big_boobs": "large_breasts",
-                "medium_breasts": "large_breasts",
-                "huge_breasts": "large_breasts",
-                "breasts": "large_breasts",
-                "oppai": "large_breasts",
-                "flat_chest": "small_breasts",
-                "pettanko": "small_breasts",
-                "loli": "small_breasts",
-                "bikini": "swimsuit",
-                "nude": "naked",
-                "bottomless": "naked",
-                "undress": "naked",
-            }
+            logger.info("⚡ [解析完全部集結戰術準備] Booru 智能消重合過濾出巡隊伍 => %s", working_list)
 
-            CONFLICT_ROOTS = [
-                ["large_breasts", "small_breasts"],
-                ["naked", "swimsuit", "underwear"],
-            ]
-
-            normalized_tags = []
-            for raw_tag in tag_pool:
-                cln = raw_tag.strip().lower()
-                cln = TAG_ALIASES.get(cln, cln)
-
-                if cln in normalized_tags:
-                    continue
-
-                is_conflict = False
-                for group in CONFLICT_ROOTS:
-                    if cln in group:
-                        if any(existing_tag in group for existing_tag in normalized_tags):
-                            is_conflict = True
-                            break
-
-                if not is_conflict:
-                    normalized_tags.append(cln)
-
-            working_list = normalized_tags[:3] if normalized_tags else ["1girl", "naked"]
-            logger.info(f"⚡ [解析完全部集結戰術準備] Booru 智能消重合過濾出巡隊伍 => {working_list}")
-
-            img_url = ""
-            fallback_attempted = False
-            headers = {"User-Agent": "Mozilla/5.0"}
-
-            while len(working_list) > 0 and not img_url:
-                final_tags = "+".join(working_list)
-                search_pages = [random.randint(0, 3), 0]
-
-                try:
-                    async with aiohttp.ClientSession(headers=headers) as session:
-                        for pid in search_pages:
-                            url_string = urllib.parse.quote_plus(final_tags, safe="+")
-                            api_url = (
-                                f"{settings.SAFEBOORU_API_URL}"
-                                f"&q=index&json=1&limit=50&pid={pid}&tags={url_string}"
-                            )
-                            async with session.get(api_url, timeout=aiohttp.ClientTimeout(total=settings.SAFEBOORU_HTTP_TIMEOUT)) as r:
-                                if r.status == 200:
-                                    posts = await r.json(content_type=None)
-                                    if posts and isinstance(posts, list):
-                                        random.shuffle(posts)
-                                        for post in posts:
-                                            if "directory" in post and "image" in post:
-                                                img_url = (
-                                                    f"{settings.SAFEBOORU_IMAGE_BASE_URL}"
-                                                    f"{post['directory']}/{post['image']}"
-                                                )
-                                                if len(working_list) < len(normalized_tags[:3]):
-                                                    fallback_attempted = True
-                                                break
-                            if img_url:
-                                break
-                except aiohttp.ClientError as e:
-                    logger.error(f"Image 尋圖網路錯誤: {e}")
-                except Exception as e:
-                    logger.error(f"Image 尋圖停擺: {e}")
-
-                if not img_url:
-                    working_list.pop()
+            img_url, fallback_attempted = await self._booru_search(working_list)
 
             if not img_url:
                 await simulate_typing_and_send(
@@ -214,8 +317,6 @@ class ImageSearchTool(BaseTool):
                 )
                 return
 
-            # ── 跨模組自我感知橋接 ──────────────────────────────────────────
-            # 偵測使用者搜的是不是「雪莉自己」的圖
             _is_self_search = bool(re.search(
                 r"(橘雪莉|雪莉|sherry|tachibana)",
                 user_query, re.IGNORECASE
@@ -228,13 +329,10 @@ class ImageSearchTool(BaseTool):
             embed_msg.set_image(url=img_url)
 
             if _is_self_search:
-                # 自我感知模式：在 user_query 加入觸發詞，讓 Lorebook 啟動自我感知
                 self_aware_query = f"橘雪莉的圖 {user_query}"
                 head_persona, _tail = build_dynamic_persona(self_aware_query, "PIXIV", channel_id=message.channel.id)
-                dynamic_persona = head_persona
 
                 async def _on_self_reply(reply: str) -> None:
-                    # 先傳圖，再附上有自我感知的一句話
                     clean_reply = re.sub(r'\(.*?\)|（.*?）|\*.*?\*', '', reply).strip()
                     try:
                         await message.reply(clean_reply, embed=embed_msg, mention_author=False)
@@ -244,7 +342,7 @@ class ImageSearchTool(BaseTool):
                 await brain.enqueue_task(InferenceTask(
                     priority=settings.PRIORITY_TAG_RESPONSE,
                     system_prompt=(
-                        f"{dynamic_persona}\n\n"
+                        f"{head_persona}\n\n"
                         "【任務】：有人找了一張妳自己（橘雪莉）的圖，現在把圖發給他。"
                         "請以名偵探的口吻說一句話（一句就好！），表達妳對『自己的圖被人翻出來』這件事的真實反應。"
                         "不要加動作描寫，直接說話。"

@@ -48,6 +48,7 @@ class URLSummaryTool(BaseTool):
         user_query: str,
         vibe_snippet: str,
         full_context: str,
+        **kwargs: object,
     ) -> None:
         brain: BotBrain | None = bot.get_cog("BotBrain")
         if not brain:
@@ -96,16 +97,33 @@ class URLSummaryTool(BaseTool):
             "請用妳的語氣，盡可能詳細、豐富地為大家總結這篇網頁的核心內容！"
         )
 
+        loop = asyncio.get_running_loop()
+        summary_future: asyncio.Future[None] = loop.create_future()
+
+        async def _on_summary_reply(reply: str) -> None:
+            try:
+                await simulate_typing_and_send(message, reply)
+            except Exception as e:
+                logger.error("URLSummaryTool: 回覆發送失敗: %s", e, exc_info=True)
+            finally:
+                if not summary_future.done():
+                    summary_future.set_result(None)
+
         await brain.enqueue_task(
             InferenceTask(
                 priority=settings.PRIORITY_TAG_RESPONSE,
                 system_prompt=sys_prompt,
                 user_prompt="這篇網頁的大意是什麼呢？",
-                callback=lambda reply: simulate_typing_and_send(message, reply),
+                callback=_on_summary_reply,
                 model=settings.PRIMARY_MODEL,
-                task_id="url-summary",
+                task_id=f"url-summary-{message.id}",
             )
         )
+
+        try:
+            await asyncio.wait_for(summary_future, timeout=float(settings.OLLAMA_TIMEOUT))
+        except asyncio.TimeoutError:
+            logger.warning("URLSummaryTool: 等待總結發送逾時 (%ds)", settings.OLLAMA_TIMEOUT)
 
 
 async def fetch_web_and_entity_context(user_query: str) -> tuple[str, str]:
@@ -274,6 +292,7 @@ class AdvancedSearchTool(BaseTool):
         user_query: str,
         vibe_snippet: str,
         full_context: str,
+        **kwargs: object,
     ) -> None:
         from handlers.social.registry import get_fallback_tool
 

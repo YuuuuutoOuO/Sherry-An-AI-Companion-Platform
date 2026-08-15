@@ -1316,6 +1316,14 @@ _MOD_REGISTRY: dict[str, dict[str, Any]] = {
         "python_pkg": "mod.market_plugin",
         "info_attr": None,
     },
+    "stock_trader": {
+        "display_name": "📈 雪莉美股虛擬量化交易",
+        "description": "23:00~04:00 自動看盤、03:50 AM 強看盤、$10,000 美金虛擬量化下單與 Web UI 1個月盈餘率走勢圖。",
+        "category": "金融 / Quant Trading",
+        "nav_id": "nav-stock-trader",
+        "python_pkg": "mod.stock_trader",
+        "info_attr": None,
+    },
 }
 
 _MOD_CONFIG_PATH: Path = settings.DATA_DIR / "mod_config.json"
@@ -1949,6 +1957,235 @@ def _ensure_self_signed_cert() -> tuple[str, str]:
         f.write(cert.public_bytes(serialization.Encoding.PEM))
 
     return str(cert_path), str(key_path)
+
+
+# ---------------------------------------------------------------------------
+# Stock Trader Web UI API Endpoints
+# ---------------------------------------------------------------------------
+
+@app.route("/api/stock_trader/overview", methods=["GET"])
+async def get_stock_trader_overview() -> Response:
+    """Return Stock Trader account balance and summary metrics."""
+    from mod.stock_trader.repository import StockRepository
+    repo = StockRepository()
+    account = repo.load_portfolio()
+
+    # Get day PnL from latest snapshot if available
+    history = repo.load_daily_history()
+    day_pnl = history[-1].day_pnl if history else 0.0
+
+    return jsonify({
+        "status": "success",
+        "data": {
+            "initial_capital": account.initial_capital,
+            "cash": account.cash,
+            "total_asset_value": account.get_total_asset_value(),
+            "total_pnl": account.get_total_pnl(),
+            "total_pnl_pct": account.get_total_pnl_pct(),
+            "day_pnl": day_pnl,
+            "realized_pnl": account.realized_pnl,
+            "win_rate_pct": account.get_win_rate_pct(),
+            "total_trades_count": account.total_trades_count,
+            "winning_trades_count": account.winning_trades_count,
+            "positions_count": len(account.positions),
+            "updated_at": account.updated_at,
+        }
+    })
+
+
+@app.route("/api/stock_trader/chart", methods=["GET"])
+async def get_stock_trader_chart() -> Response:
+    """Return last 30 days daily asset snapshots for return rate line chart."""
+    from mod.stock_trader.repository import StockRepository
+    repo = StockRepository()
+    history = repo.load_daily_history()
+
+    # Limit to last 30 snapshots
+    history_30d = history[-30:] if len(history) > 30 else history
+
+    chart_data = [
+        {
+            "date": s.date,
+            "total_asset_value": s.total_asset_value,
+            "cash": s.cash,
+            "total_pnl": s.total_pnl,
+            "return_rate_pct": s.return_rate_pct,
+            "day_pnl": s.day_pnl,
+        }
+        for s in history_30d
+    ]
+
+    return jsonify({
+        "status": "success",
+        "count": len(chart_data),
+        "data": chart_data,
+    })
+
+
+@app.route("/api/stock_trader/holdings", methods=["GET"])
+async def get_stock_trader_holdings() -> Response:
+    """Return current portfolio stock positions."""
+    from mod.stock_trader.repository import StockRepository
+    repo = StockRepository()
+    account = repo.load_portfolio()
+
+    holdings_list = []
+    for ticker, pos in account.positions.items():
+        holdings_list.append({
+            "ticker": pos.ticker,
+            "shares": pos.shares,
+            "avg_cost": pos.avg_cost,
+            "current_price": pos.current_price,
+            "total_cost": pos.total_cost,
+            "market_value": pos.market_value,
+            "unrealized_pnl": pos.unrealized_pnl,
+            "unrealized_pnl_pct": pos.unrealized_pnl_pct,
+        })
+
+    return jsonify({
+        "status": "success",
+        "data": holdings_list,
+    })
+
+
+@app.route("/api/stock_trader/trades", methods=["GET"])
+async def get_stock_trader_trades() -> Response:
+    """Return trade history records."""
+    from mod.stock_trader.repository import StockRepository
+    repo = StockRepository()
+    trades = repo.load_trades(limit=100)
+
+    trade_list = [
+        {
+            "trade_id": t.trade_id,
+            "timestamp": t.timestamp,
+            "ticker": t.ticker,
+            "action": t.action,
+            "shares": t.shares,
+            "execution_price": t.execution_price,
+            "fee": t.fee,
+            "total_amount": t.total_amount,
+            "realized_pnl": t.realized_pnl,
+            "reason": t.reason,
+        }
+        for t in trades
+    ]
+
+    return jsonify({
+        "status": "success",
+        "data": trade_list,
+    })
+
+
+@app.route("/api/stock_trader/thoughts", methods=["GET"])
+async def get_stock_trader_thoughts() -> Response:
+    """Return Sherry CoT thinking process logs."""
+    from mod.stock_trader.repository import StockRepository
+    repo = StockRepository()
+    thoughts = repo.load_thoughts(limit=30)
+
+    thought_list = [
+        {
+            "timestamp": th.timestamp,
+            "trigger_type": th.trigger_type,
+            "thought_process": th.thought_process,
+            "decision_summary": th.decision_summary,
+            "recommended_actions": th.recommended_actions,
+        }
+        for th in thoughts
+    ]
+
+    return jsonify({
+        "status": "success",
+        "data": thought_list,
+    })
+
+
+@app.route("/api/stock_trader/targets", methods=["GET"])
+async def get_stock_trader_targets() -> Response:
+    """Return target stocks with latest technical indicators."""
+    from mod.market_plugin.data_fetcher import DataFetcher
+    fetcher = DataFetcher()
+    tickers = ["NVDA", "AAPL", "MSFT", "GOOG", "AMZN", "META", "TSLA", "TSM", "AVGO", "AMD"]
+
+    if _bot_instance and hasattr(_bot_instance, "_stock_trader_cog"):
+        cog = _bot_instance._stock_trader_cog
+        if hasattr(cog, "get_watch_tickers"):
+            tickers = cog.get_watch_tickers()
+
+    import asyncio
+    loop = asyncio.get_running_loop()
+    indicators = await loop.run_in_executor(None, fetcher.get_stock_info_raw, tickers)
+
+    return jsonify({
+        "status": "success",
+        "data": indicators,
+    })
+
+
+@app.route("/api/stock_trader/trigger", methods=["POST"])
+async def trigger_stock_trader_eval() -> Response:
+    """Manually trigger a Stock Trader evaluation & decision cycle (Admin only)."""
+    if not _is_admin_request(request):
+        return jsonify({"status": "error", "message": "手動看盤評估僅限登入管理員使用，請先登入！"}), 403
+
+    cog = getattr(_bot_instance, "_stock_trader_cog", None) if _bot_instance else None
+
+    try:
+        if cog and hasattr(cog, "run_evaluation_cycle"):
+            res = await cog.run_evaluation_cycle(trigger_type="MANUAL")
+        else:
+            from mod.stock_trader.cog import StockTraderCog
+            temp_cog = StockTraderCog(bot=_bot_instance)
+            res = await temp_cog.run_evaluation_cycle(trigger_type="MANUAL")
+        return jsonify({"status": "success", "result": res})
+    except Exception as exc:
+        logger.exception("[stock_trader] 手動觸發看盤發生異常: %s", exc)
+        return jsonify({"status": "error", "message": f"觸發異常: {exc}"}), 500
+
+
+@app.route("/api/stock_trader/refresh_prices", methods=["POST"])
+async def refresh_stock_trader_prices() -> Response:
+    """Manually refresh real-time stock prices & portfolio unrealized PnL via yfinance without AI trading (Admin only)."""
+    if not _is_admin_request(request):
+        return jsonify({"status": "error", "message": "刷新最新行情僅限登入管理員使用，請先登入！"}), 403
+
+    cog = getattr(_bot_instance, "_stock_trader_cog", None) if _bot_instance else None
+
+    try:
+        if cog and hasattr(cog, "fetcher"):
+            tickers = cog.get_watch_tickers()
+            loop = asyncio.get_running_loop()
+            indicators = await loop.run_in_executor(None, cog.fetcher.get_stock_info_raw, tickers)
+            price_map = {item["ticker"]: item["close"] for item in indicators} if indicators else {}
+            account = cog.algo.update_prices(price_map)
+            return jsonify({
+                "status": "success",
+                "message": f"已成功連線 yfinance 刷新 {len(indicators)} 檔標的之最新行情與持倉損益！",
+                "total_asset_value": account.get_total_asset_value(),
+                "total_pnl": account.get_total_pnl(),
+            })
+        else:
+            from mod.market_plugin.data_fetcher import DataFetcher
+            from mod.stock_trader.engine.algo_trader import AlgoTrader
+            from mod.stock_trader.repository import StockRepository
+            repo = StockRepository()
+            algo = AlgoTrader(repo=repo)
+            fetcher = DataFetcher()
+            tickers = ["NVDA", "AAPL", "MSFT", "GOOG", "AMZN", "META", "TSLA", "TSM", "AVGO", "AMD"]
+            loop = asyncio.get_running_loop()
+            indicators = await loop.run_in_executor(None, fetcher.get_stock_info_raw, tickers)
+            price_map = {item["ticker"]: item["close"] for item in indicators} if indicators else {}
+            account = algo.update_prices(price_map)
+            return jsonify({
+                "status": "success",
+                "message": f"已成功連線 yfinance 刷新 {len(indicators)} 檔標的之最新行情與持倉損益！",
+                "total_asset_value": account.get_total_asset_value(),
+                "total_pnl": account.get_total_pnl(),
+            })
+    except Exception as exc:
+        logger.exception("[stock_trader] 手動刷新美股行情發生異常: %s", exc)
+        return jsonify({"status": "error", "message": f"刷新異常: {exc}"}), 500
 
 
 async def start_server_async(bot: Any = None) -> None:

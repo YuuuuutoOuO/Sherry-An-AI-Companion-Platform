@@ -91,6 +91,8 @@ function switchView(view) {
   if (aTb) aTb.classList.add('hidden');
   const mmTb = document.getElementById('mod-manager-toolbar');
   if (mmTb) mmTb.classList.add('hidden');
+  const stTb = document.getElementById('stock-trader-toolbar');
+  if (stTb) stTb.classList.add('hidden');
 
   if (state.metricsTimer) {
     clearInterval(state.metricsTimer);
@@ -180,7 +182,15 @@ function switchView(view) {
     if (mmTb) mmTb.classList.remove('hidden');
     document.getElementById('view-title').textContent = '🧩 功能模組管理中心';
     loadModManager();
-  } else {
+  } else if (view === 'stock-trader') {
+    const navSt = document.getElementById('nav-stock-trader');
+    if (navSt) navSt.classList.add('active');
+    const viewSt = document.getElementById('view-stock-trader');
+    if (viewSt) viewSt.classList.remove('hidden');
+    if (stTb) stTb.classList.remove('hidden');
+    document.getElementById('view-title').textContent = '📈 橘雪莉 美股虛擬量化交易控制台';
+    loadStockTraderData();
+  } else if (view === 'settings') {
     document.getElementById('nav-settings').classList.add('active');
     document.getElementById('view-settings').classList.remove('hidden');
     document.getElementById('settings-toolbar').classList.remove('hidden');
@@ -296,23 +306,30 @@ function renderLogs(entries) {
 function buildLogHTML(log, event) {
   const ts = log.ts || log.timestamp || '—';
   const badgeClass = {
-    chat_reply: 'badge-chat',
-    interject:  'badge-interject',
-    error:      'badge-error',
+    chat_reply:        'badge-chat',
+    react_agent_done:  'badge-chat',
+    interject:         'badge-interject',
+    error:             'badge-error',
   }[event] || 'badge-default';
   const badgeLabel = {
-    chat_reply: 'CHAT',
-    interject:  'INTERJECT',
-    error:      'ERROR',
+    chat_reply:        log.intent || 'CHAT',
+    react_agent_done:  log.intent || 'REACT',
+    interject:         'INTERJECT',
+    error:             'ERROR',
   }[event] || event.toUpperCase();
 
   let body = '';
-  if (event === 'chat_reply') {
+  if (event === 'chat_reply' || event === 'react_agent_done') {
     body += `<div class="log-user-text">👤 ${escHtml(log.raw_input || '')}</div>`;
     const latStr = log.latency_ms ? ` • ⚡ 耗時 ${log.latency_ms} ms` : '';
-    if (log.intent) body += `<div class="log-intent">Intent: ${escHtml(log.intent)}${latStr}</div>`;
+    const modelStr = log.model_used ? ` • 🤖 ${escHtml(log.model_used)}` : '';
+    const toolsStr = (log.tools_invoked && log.tools_invoked.length) ? ` • 🛠️ [${log.tools_invoked.join(', ')}]` : '';
+    if (log.intent) body += `<div class="log-intent">Intent: ${escHtml(log.intent)}${latStr}${modelStr}${toolsStr}</div>`;
     if (log.reply_preview) body += `<div class="log-reply-text">🤖 ${escHtml(log.reply_preview)}</div>`;
-    if (log.cot_thought) body += `<div class="log-thought-text">💭 ${escHtml(log.cot_thought)}</div>`;
+    if (log.cot_thought) {
+      const formattedThought = escHtml(log.cot_thought).replace(/\n/g, '<br>');
+      body += `<div class="log-thought-text">💭 ${formattedThought}</div>`;
+    }
   } else if (event === 'interject') {
     const score = log.extra?.extra_score ?? log.score ?? '';
     const reason = log.extra?.extra_reasoning ?? log.reasoning ?? '';
@@ -481,7 +498,7 @@ function renderSettings() {
   });
 }
 
-function buildSettingItem({ key, value, label, description, type, min, max, step }) {
+function buildSettingItem({ key, value, label, description, type, min, max, step, options }) {
   const keyAttr = `data-key="${escAttr(key)}"`;
   const descHtml = description
     ? `<div class="setting-desc">${escHtml(description)}</div>`
@@ -500,6 +517,19 @@ function buildSettingItem({ key, value, label, description, type, min, max, step
         </label>
         <span class="bool-value-label" id="bool-label-${escAttr(key)}">${value ? 'ON' : 'OFF'}</span>
       </div>`;
+  } else if (type === 'select') {
+    const opts = options || [];
+    const optHtml = opts.map(opt => {
+      const optVal = typeof opt === 'object' ? opt.value : opt;
+      const optLabel = typeof opt === 'object' ? opt.label : opt;
+      const selected = String(optVal).toUpperCase() === String(value).toUpperCase() ? 'selected' : '';
+      return `<option value="${escAttr(optVal)}" ${selected}>${escHtml(optLabel)}</option>`;
+    }).join('');
+    control = `
+      <select class="setting-input setting-select" id="inp-${escAttr(key)}" ${keyAttr}
+        onchange="markDirty('${escAttr(key)}', this.value)">
+        ${optHtml}
+      </select>`;
   } else if (type === 'model') {
     control = buildModelPicker(key, value);
   } else if (type === 'float' || type === 'int') {
@@ -591,14 +621,30 @@ function onPrefixChange(key) {
 function onModelSelectChange(key) {
   const sel = document.getElementById(`sel-${key}`);
   const inp = document.getElementById(`inp-${key}`);
-  if (inp) inp.value = sel.value;
+  if (sel && sel.value === '__manual__') {
+    sel.classList.add('hidden');
+    if (inp) {
+      inp.classList.remove('hidden');
+      inp.focus();
+    }
+  } else if (inp && sel) {
+    inp.value = sel.value;
+  }
   markDirty(key, getModelValue(key));
 }
 
 function getModelValue(key) {
   const prefix = document.getElementById(`prefix-${key}`)?.value || '';
+  const sel    = document.getElementById(`sel-${key}`);
   const inp    = document.getElementById(`inp-${key}`);
-  return `${prefix}:${(inp?.value || '').trim()}`;
+
+  let modelName = '';
+  if (sel && !sel.classList.contains('hidden') && sel.value && sel.value !== '__manual__') {
+    modelName = sel.value;
+  } else {
+    modelName = inp?.value || '';
+  }
+  return `${prefix}:${modelName.trim()}`;
 }
 
 async function fetchModelsForPicker(key) {
@@ -1280,6 +1326,93 @@ async function sendTestChat() {
   }
 }
 
+function renderChatMessageContent(text) {
+  if (!text) return '';
+
+  const hasThought = /<thought>[\s\S]*?<\/thought>/i.test(text);
+  const hasAction = /<action>[\s\S]*?<\/action>/i.test(text);
+  const hasFinal = /<final_answer>[\s\S]*?<\/final_answer>/i.test(text);
+  const hasObs = /<observation>[\s\S]*?<\/observation>/i.test(text);
+
+  if (!hasThought && !hasAction && !hasFinal && !hasObs) {
+    return text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;")
+      .replace(/\n/g, "<br>");
+  }
+
+  let stepsHtml = '';
+  let speechText = text;
+
+  // 1. 萃取 Thought
+  const thoughtMatches = [...text.matchAll(/<thought>([\s\S]*?)<\/thought>/gi)];
+  thoughtMatches.forEach((m, idx) => {
+    const content = m[1].trim()
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
+    stepsHtml += `<div class="react-thought-step"><span class="react-step-badge react-badge-thought">🧠 思考 #${idx+1}</span> ${content}</div>`;
+  });
+
+  // 2. 萃取 Action & Action Input
+  const actionMatches = [...text.matchAll(/<action>([\s\S]*?)<\/action>(?:\s*<action_input>([\s\S]*?)<\/action_input>)?/gi)];
+  actionMatches.forEach((m) => {
+    const act = m[1].trim();
+    const actIn = (m[2] || '').trim();
+    stepsHtml += `<div class="react-thought-step"><span class="react-step-badge react-badge-action">⚡ 發動工具 [${act}]</span> 指令: <code>${actIn || '無參數'}</code></div>`;
+  });
+
+  // 3. 萃取 Observation
+  const obsMatches = [...text.matchAll(/<observation>([\s\S]*?)<\/observation>/gi)];
+  obsMatches.forEach((m) => {
+    const obsContent = m[1].trim()
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
+    stepsHtml += `<div class="react-thought-step"><span class="react-step-badge react-badge-obs">👁️ 觀察結果</span> ${obsContent.slice(0, 300)}</div>`;
+  });
+
+  // 4. 萃取 Final Answer
+  const finalMatch = text.match(/<final_answer>([\s\S]*?)<\/final_answer>/i);
+  if (finalMatch) {
+    speechText = finalMatch[1].trim();
+  } else {
+    // 剝離所有 XML 標籤取得乾淨回覆文字
+    speechText = text
+      .replace(/<thought>[\s\S]*?<\/thought>/gi, '')
+      .replace(/<action>[\s\S]*?<\/action>/gi, '')
+      .replace(/<action_input>[\s\S]*?<\/action_input>/gi, '')
+      .replace(/<observation>[\s\S]*?<\/observation>/gi, '')
+      .replace(/<\/?final_answer>/gi, '')
+      .trim();
+  }
+
+  const cleanSpeechEscaped = speechText
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;")
+    .replace(/\n/g, "<br>");
+
+  let outputHtml = '';
+  if (stepsHtml) {
+    outputHtml += `
+      <details class="react-thought-block" open>
+        <summary class="react-thought-summary">🧠 ReAct 推理與工具調度歷程</summary>
+        <div class="react-thought-content">${stepsHtml}</div>
+      </details>
+    `;
+  }
+
+  if (cleanSpeechEscaped) {
+    outputHtml += `<div class="react-final-speech">${cleanSpeechEscaped}</div>`;
+  } else if (!stepsHtml) {
+    outputHtml += `<div class="react-final-speech">（無文字回覆）</div>`;
+  }
+
+  return outputHtml;
+}
+
 function appendChatMessage(senderName, avatar, text, extraClass = '', elementId = null, subTag = '') {
   const container = document.getElementById('chat-messages');
   if (!container) return;
@@ -1289,19 +1422,13 @@ function appendChatMessage(senderName, avatar, text, extraClass = '', elementId 
   if (elementId) msgDiv.id = elementId;
 
   const tagHtml = subTag ? `<span class="chat-tag">${subTag}</span>` : '';
-  const escapedText = text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;")
-    .replace(/\n/g, "<br>");
+  const renderedContent = renderChatMessageContent(text);
 
   msgDiv.innerHTML = `
     <div class="chat-avatar">${avatar}</div>
     <div class="chat-bubble">
       <div class="chat-sender">${senderName} ${tagHtml}</div>
-      <div class="chat-text">${escapedText}</div>
+      <div class="chat-text">${renderedContent}</div>
     </div>
   `;
 
@@ -2370,3 +2497,323 @@ async function executeStop() {
 
   showToast('🛑 雪莉已傳送關閉指令並停止運行。', 'info');
 }
+
+// =========================================================
+// SHERRY STOCK TRADER (美股虛擬量化交易 & 1個月盈餘率折線圖)
+// =========================================================
+let stReturnChart = null;
+
+async function loadStockTraderData() {
+  try {
+    // 1. Overview
+    const resOver = await fetch('/api/stock_trader/overview', { headers: getAuthHeaders() });
+    if (resOver.ok) {
+      const json = await resOver.json();
+      if (json.status === 'success') {
+        const d = json.data;
+        document.getElementById('st-total-asset').textContent = `$${d.total_asset_value.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        
+        const pnlColor = d.total_pnl >= 0 ? '#ff4444' : '#00ff88';
+        const pnlSign = d.total_pnl >= 0 ? '+' : '';
+        document.getElementById('st-total-pnl-sub').innerHTML = `<span style="color:${pnlColor}; font-weight:700;">${pnlSign}$${d.total_pnl.toFixed(2)} (${pnlSign}${d.total_pnl_pct.toFixed(2)}%)</span>`;
+        
+        document.getElementById('st-cash').textContent = `$${d.cash.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        document.getElementById('st-positions-count-sub').textContent = `${d.positions_count} 筆持倉標的`;
+        
+        document.getElementById('st-pnl-pct').textContent = `${pnlSign}${d.total_pnl_pct.toFixed(2)}%`;
+        document.getElementById('st-pnl-pct').style.color = pnlColor;
+        
+        const dayPnlColor = d.day_pnl >= 0 ? '#ff4444' : '#00ff88';
+        const daySign = d.day_pnl >= 0 ? '+' : '';
+        document.getElementById('st-day-pnl-sub').innerHTML = `當日損益: <span style="color:${dayPnlColor}; font-weight:600;">${daySign}$${d.day_pnl.toFixed(2)}</span>`;
+        
+        document.getElementById('st-win-rate').textContent = `${d.win_rate_pct.toFixed(1)}%`;
+        document.getElementById('st-trades-count-sub').textContent = `${d.winning_trades_count} / ${d.total_trades_count} 筆交易勝場`;
+      }
+    }
+
+    // 2. 1-Month Return Rate Line Chart
+    const resChart = await fetch('/api/stock_trader/chart', { headers: getAuthHeaders() });
+    if (resChart.ok) {
+      const json = await resChart.json();
+      if (json.status === 'success') {
+        renderStockReturnChart(json.data);
+      }
+    }
+
+    // 3. Holdings
+    const resHold = await fetch('/api/stock_trader/holdings', { headers: getAuthHeaders() });
+    if (resHold.ok) {
+      const json = await resHold.json();
+      const tbody = document.getElementById('st-holdings-tbody');
+      if (json.status === 'success' && json.data.length > 0) {
+        let html = '';
+        json.data.forEach(h => {
+          const color = h.unrealized_pnl >= 0 ? '#ff4444' : '#00ff88';
+          const sign = h.unrealized_pnl >= 0 ? '+' : '';
+          html += `
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+              <td style="padding: 10px; font-weight:700; color:#00e5ff;">${h.ticker}</td>
+              <td style="padding: 10px;">${h.shares.toFixed(4)}</td>
+              <td style="padding: 10px;">$${h.avg_cost.toFixed(2)}</td>
+              <td style="padding: 10px;">$${h.current_price.toFixed(2)}</td>
+              <td style="padding: 10px; color:${color}; font-weight:600;">${sign}$${h.unrealized_pnl.toFixed(2)} (${sign}${h.unrealized_pnl_pct.toFixed(2)}%)</td>
+            </tr>
+          `;
+        });
+        tbody.innerHTML = html;
+      } else {
+        tbody.innerHTML = '<tr><td colspan="5" style="padding: 16px; text-align: center; color: var(--text-muted);">無持倉標的 (全額現金)</td></tr>';
+      }
+    }
+
+    // 4. Trade History
+    const resTrades = await fetch('/api/stock_trader/trades', { headers: getAuthHeaders() });
+    if (resTrades.ok) {
+      const json = await resTrades.json();
+      const tbody = document.getElementById('st-trades-tbody');
+      if (json.status === 'success' && json.data.length > 0) {
+        let html = '';
+        json.data.forEach(t => {
+          const actColor = t.action === 'BUY' ? '#00e5ff' : '#ffab00';
+          const pnlColor = t.realized_pnl > 0 ? '#ff4444' : (t.realized_pnl < 0 ? '#00ff88' : 'var(--text-muted)');
+          const pnlStr = t.action === 'SELL' ? `${t.realized_pnl >= 0 ? '+' : ''}$${t.realized_pnl.toFixed(2)}` : '-';
+          html += `
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+              <td style="padding: 8px; color:var(--text-muted); font-size:0.8rem;">${t.timestamp}</td>
+              <td style="padding: 8px; font-weight:700;">${t.ticker}</td>
+              <td style="padding: 8px;"><span style="background:rgba(255,255,255,0.08); color:${actColor}; padding:2px 8px; border-radius:4px; font-weight:700; font-size:0.78rem;">${t.action}</span></td>
+              <td style="padding: 8px;">${t.shares.toFixed(4)}</td>
+              <td style="padding: 8px;">$${t.execution_price.toFixed(2)}</td>
+              <td style="padding: 8px; color:var(--text-muted);">$${t.fee.toFixed(2)}</td>
+              <td style="padding: 8px;">$${t.total_amount.toFixed(2)}</td>
+              <td style="padding: 8px; color:${pnlColor}; font-weight:600;">${pnlStr}</td>
+              <td style="padding: 8px; color:var(--text-muted); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${t.reason}">${t.reason}</td>
+            </tr>
+          `;
+        });
+        tbody.innerHTML = html;
+      } else {
+        tbody.innerHTML = '<tr><td colspan="9" style="padding: 20px; text-align: center; color: var(--text-muted);">尚無交易紀錄</td></tr>';
+      }
+    }
+
+    // 5. Sherry CoT Thoughts
+    const resThoughts = await fetch('/api/stock_trader/thoughts', { headers: getAuthHeaders() });
+    if (resThoughts.ok) {
+      const json = await resThoughts.json();
+      const container = document.getElementById('st-thought-container');
+      if (json.status === 'success' && json.data.length > 0) {
+        let html = '';
+        json.data.forEach(th => {
+          html += `
+            <div style="margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px dashed rgba(255,255,255,0.1);">
+              <div style="font-weight: 700; color: #00e5ff; margin-bottom: 4px; display: flex; justify-content: space-between;">
+                <span>⏱️ [${th.timestamp}] (${th.trigger_type})</span>
+              </div>
+              <div style="color: #bbb; margin-bottom: 6px; white-space: pre-wrap;">${th.thought_process}</div>
+              <div style="color: #00e5ff; font-weight: 600;">🎯 決策結論: ${th.decision_summary}</div>
+            </div>
+          `;
+        });
+        container.innerHTML = html;
+      } else {
+        container.innerHTML = '<div style="color: var(--text-muted);">尚無思考日誌。美股盤中時間 (23:00~04:00) 即可看到雪莉即時 CoT 推理！</div>';
+      }
+    }
+
+    // 6. Target Stock Indicators
+    const resTargets = await fetch('/api/stock_trader/targets', { headers: getAuthHeaders() });
+    if (resTargets.ok) {
+      const json = await resTargets.json();
+      const tbody = document.getElementById('st-targets-tbody');
+      if (json.status === 'success' && json.data.length > 0) {
+        let html = '';
+        json.data.forEach(t => {
+          const dayColor = t.day_pct >= 0 ? '#ff4444' : '#00ff88';
+          const monColor = t.mon_pct >= 0 ? '#ff4444' : '#00ff88';
+          const daySign = t.day_pct >= 0 ? '+' : '';
+          const monSign = t.mon_pct >= 0 ? '+' : '';
+            const macdColor = (t.macd_hist || 0) >= 0 ? '#ff4444' : '#00ff88';
+            const macdSign = (t.macd_hist || 0) >= 0 ? '+' : '';
+            html += `
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <td style="padding: 8px; font-weight:700; color:#00e5ff;">${t.ticker}</td>
+                <td style="padding: 8px; font-weight:600;">$${t.close.toFixed(2)}</td>
+                <td style="padding: 8px; color:${dayColor}; font-weight:600;">${daySign}${t.day_pct.toFixed(2)}%</td>
+                <td style="padding: 8px; color:${monColor}; font-weight:600;">${monSign}${t.mon_pct.toFixed(2)}%</td>
+                <td style="padding: 8px; font-weight:600;">${t.rsi}</td>
+                <td style="padding: 8px;">$${t.ma20 || 'N/A'}</td>
+                <td style="padding: 8px;">$${t.ma60 || 'N/A'}</td>
+                <td style="padding: 8px;">$${t.ema20 || 'N/A'}</td>
+                <td style="padding: 8px; font-size:0.8rem; color:var(--text-muted);">$${t.bb_upper || 'N/A'} / $${t.bb_lower || 'N/A'}</td>
+                <td style="padding: 8px; color:${macdColor}; font-weight:600;">${macdSign}${t.macd_hist || 0.0}</td>
+                <td style="padding: 8px; font-weight:600;">${t.volume_ratio || 1.0}x</td>
+              </tr>
+            `;
+          });
+          tbody.innerHTML = html;
+        } else {
+          tbody.innerHTML = '<tr><td colspan="11" style="padding: 20px; text-align: center; color: var(--text-muted);">指標抓取中或暫無數據</td></tr>';
+        }
+    }
+
+  } catch (e) {
+    console.error('Failed to load stock trader data:', e);
+  }
+}
+
+function renderStockReturnChart(chartData) {
+  const canvas = document.getElementById('st-return-chart');
+  if (!canvas) return;
+
+  if (stReturnChart) {
+    stReturnChart.destroy();
+    stReturnChart = null;
+  }
+
+  if (!chartData || chartData.length === 0) {
+    chartData = [
+      { date: '起初', return_rate_pct: 0.0, total_asset_value: 10000.0, day_pnl: 0.0 }
+    ];
+  }
+
+  const labels = chartData.map(d => d.date);
+  const values = chartData.map(d => d.return_rate_pct);
+
+  const ctx = canvas.getContext('2d');
+  const lastVal = values[values.length - 1] || 0;
+  const mainColor = lastVal >= 0 ? '#ff4444' : '#00ff88';
+
+  // 漸層背景 (紅/綠 台灣色彩習慣)
+  const gradient = ctx.createLinearGradient(0, 0, 0, 300);
+  gradient.addColorStop(0, lastVal >= 0 ? 'rgba(255, 68, 68, 0.35)' : 'rgba(0, 255, 136, 0.35)');
+  gradient.addColorStop(1, 'rgba(0, 0, 0, 0.0)');
+
+  stReturnChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [{
+        label: '近 1 個月盈餘率 (%)',
+        data: values,
+        borderColor: mainColor,
+        borderWidth: 3,
+        pointBackgroundColor: mainColor,
+        pointBorderColor: '#000',
+        pointRadius: 4,
+        pointHoverRadius: 7,
+        fill: true,
+        backgroundColor: gradient,
+        tension: 0.3
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: true,
+          labels: { color: '#e0e0e0', font: { family: 'Inter', size: 12 } }
+        },
+        tooltip: {
+          backgroundColor: 'rgba(15, 20, 30, 0.9)',
+          titleColor: '#00e5ff',
+          bodyColor: '#ffffff',
+          borderColor: 'rgba(0, 229, 255, 0.3)',
+          borderWidth: 1,
+          padding: 12,
+          callbacks: {
+            label: function(context) {
+              const index = context.dataIndex;
+              const item = chartData[index];
+              return [
+                `盈餘率: ${item.return_rate_pct >= 0 ? '+' : ''}${item.return_rate_pct.toFixed(2)}%`,
+                `總資產: $${item.total_asset_value.toLocaleString('en-US', {minimumFractionDigits: 2})}`,
+                `當日損益: ${item.day_pnl >= 0 ? '+' : ''}$${item.day_pnl.toFixed(2)}`
+              ];
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: 'rgba(255, 255, 255, 0.05)' },
+          ticks: { color: '#888888', font: { family: 'Inter', size: 11 } }
+        },
+        y: {
+          grid: { color: 'rgba(255, 255, 255, 0.05)' },
+          ticks: {
+            color: '#888888',
+            font: { family: 'Inter', size: 11 },
+            callback: function(val) { return val + '%'; }
+          }
+        }
+      }
+    }
+  });
+}
+
+async function triggerStockTraderEval() {
+  if (!state.isAdmin) {
+    showToast('手動觸發看盤僅限管理員使用，請先登入！', 'warning');
+    openLoginModal();
+    return;
+  }
+
+  showToast('🤖 已對雪莉發送手動看盤與量化評估請求...', 'info');
+
+  try {
+    const res = await fetch('/api/stock_trader/trigger', {
+      method: 'POST',
+      headers: getAuthHeaders()
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.status === 'success') {
+        showToast('✅ 雪莉完成看盤評估與演算法交易！', 'success');
+        loadStockTraderData();
+      } else {
+        showToast(`⚠️ 評估失敗: ${data.message || '未知錯誤'}`, 'error');
+      }
+    } else {
+      showToast('❌ 呼叫伺服器失敗', 'error');
+    }
+  } catch (e) {
+    showToast(`❌ 發生異常: ${e.message}`, 'error');
+  }
+}
+
+async function refreshStockTraderPrices() {
+  if (!state.isAdmin) {
+    showToast('手動刷新行情僅限管理員使用，請先登入！', 'warning');
+    openLoginModal();
+    return;
+  }
+
+  showToast('🔄 正在連線 yfinance 刷新美股最新行情與持倉損益...', 'info');
+
+  try {
+    const res = await fetch('/api/stock_trader/refresh_prices', {
+      method: 'POST',
+      headers: getAuthHeaders()
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.status === 'success') {
+        showToast(data.message || '✅ 最新美股行情與持倉損益刷新成功！', 'success');
+        loadStockTraderData();
+      } else {
+        showToast(`❌ 刷新失敗: ${data.message}`, 'error');
+      }
+    } else {
+      showToast('❌ 呼叫伺服器失敗', 'error');
+    }
+  } catch (e) {
+    console.error('Failed to refresh stock trader prices:', e);
+    showToast('❌ 網路請求發生錯誤', 'error');
+  }
+}
+

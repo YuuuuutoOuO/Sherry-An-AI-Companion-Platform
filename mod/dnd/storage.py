@@ -12,6 +12,7 @@ Provides atomic write operations and JSON/JSONL serialization for:
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
@@ -64,6 +65,7 @@ def _atomic_write_json(file_path: Path, data: Any) -> None:
 # World Setting (Static Skeleton)
 # ---------------------------------------------------------------------------
 
+@functools.lru_cache(maxsize=1)
 def load_world_setting() -> dict[str, Any]:
     """Load static world setting JSON skeleton.
 

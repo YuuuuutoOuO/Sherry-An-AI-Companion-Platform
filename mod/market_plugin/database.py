@@ -14,12 +14,17 @@ from datetime import datetime
 from mod.market_plugin import config as cfg
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 class Database:
-    def __init__(self):
+    def __init__(self) -> None:
         self.db_path = str(cfg.DB_PATH)
         cfg.DATA_DIR.mkdir(parents=True, exist_ok=True)
         self._create_tables()
-        print(f"[market_plugin] 🗄️ 資料庫路徑: {self.db_path}")
+        logger.info("[market_plugin] 資料庫路徑: %s", self.db_path)
 
     def _create_tables(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
@@ -78,7 +83,7 @@ class Database:
                         (today, ticker, item["price"], item["predicted_price"], score, reason),
                     )
             conn.commit()
-        print(f"[market_plugin] ✅ 資料庫更新完成 ({len(data_list)} 筆)")
+        logger.info("[market_plugin] 資料庫更新完成 (%d 筆)", len(data_list))
 
     def update_actual_prices(self, table_type: str, price_map: dict) -> int:
         """回填實際成交價（早晨驗收用）。"""

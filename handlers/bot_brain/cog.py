@@ -20,10 +20,24 @@ class BotBrain(commands.Cog):
         self._lock = asyncio.Lock()
         self._ollama = OllamaClient()
         self._worker_task: asyncio.Task[None] | None = None
-        # VRAM state flags
+        # VRAM state flags & Event
         self._sd_generating = False
+        self._sd_event = asyncio.Event()
+        self._sd_event.set()  # Initial state: SD is NOT generating
         self._voice_mode_active = False
         self._task_counter = 0
+
+    @property
+    def sd_generating(self) -> bool:
+        return self._sd_generating
+
+    @sd_generating.setter
+    def sd_generating(self, value: bool) -> None:
+        self._sd_generating = value
+        if value:
+            self._sd_event.clear()
+        else:
+            self._sd_event.set()
 
     async def cog_load(self) -> None:
         self._worker_task = asyncio.create_task(
@@ -70,8 +84,13 @@ class BotBrain(commands.Cog):
         logger.info("BotBrain: 大腦非同步心跳跳動中。等待新推斷任務注入。")
         while True:
             task: InferenceTask = await self._queue.get()
-            # 建立背景任務以實現真正的並行處理，特別是為了讓雲端模型無需等待
-            asyncio.create_task(self._process_task(task, MAX_RETRIES, RETRY_DELAY))
+            is_cloud = task.model.startswith(("openai:", "deepseek:", "gemini:", "claude:"))
+            if is_cloud:
+                # 雲端模型不佔用本地 GPU/Lock，背景並行放行
+                asyncio.create_task(self._process_task(task, MAX_RETRIES, RETRY_DELAY))
+            else:
+                # 本地模型依 PriorityQueue 優先級順序串行執行，落實 GPU 鎖與優先權
+                await self._process_task(task, MAX_RETRIES, RETRY_DELAY)
 
     async def _process_task(self, task: InferenceTask, max_retries: int, retry_delay: float) -> None:
         try:
@@ -92,19 +111,21 @@ class BotBrain(commands.Cog):
                 if current_model.startswith(("openai:", "deepseek:", "gemini:", "claude:")):
                     is_local = False
 
+                task_temp = getattr(task, "temperature", None)
                 if is_local:
-                    # 狀態三：圖片生成中，暫停本地 LLM 推理排程
-                    while getattr(self, "_sd_generating", False):
-                        await asyncio.sleep(0.5)
+                    # 狀態三：圖片生成中，等待 Event 通知（零 CPU 輪詢開銷）
+                    await self._sd_event.wait()
                         
                     async with self._lock: # [強保證:永遠僅存在一列單排等待處裡任務送往本地]
                         reply = await self._ollama.chat(
-                            model=current_model, system_prompt=task.system_prompt, user_prompt=task.user_prompt, images=task.images
+                            model=current_model, system_prompt=task.system_prompt, user_prompt=task.user_prompt, images=task.images,
+                            temperature=task_temp,
                         )
                 else:
                     # 雲端模型直接併發放行，不獲取鎖
                     reply = await self._ollama.chat(
-                        model=current_model, system_prompt=task.system_prompt, user_prompt=task.user_prompt, images=task.images
+                        model=current_model, system_prompt=task.system_prompt, user_prompt=task.user_prompt, images=task.images,
+                        temperature=task_temp,
                     )
 
                 if reply: break

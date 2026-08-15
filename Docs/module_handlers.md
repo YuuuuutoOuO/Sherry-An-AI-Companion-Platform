@@ -1,6 +1,6 @@
 # ⚙️ module_handlers — `handlers/` 所有子模組文件
 
-> 最後更新：2026-08-05 16:43  |  自動生成自 AST 掃描
+> 最後更新：2026-08-14 21:18  |  自動生成自 AST 掃描
 
 ## 📑 子模組目錄
 
@@ -471,7 +471,7 @@ def _claude_api_key(self) -> str
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `_get_session`  (L101)
+###### `_get_session`  (L99)
 
 ```python
 async def _get_session(self) -> aiohttp.ClientSession
@@ -481,7 +481,7 @@ async def _get_session(self) -> aiohttp.ClientSession
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `_vllm_base_url`  (L112)
+###### `_vllm_base_url`  (L110)
 
 ```python
 @property
@@ -492,7 +492,7 @@ def _vllm_base_url(self) -> str
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `_parse_model`  (L117)
+###### `_parse_model`  (L115)
 
 ```python
 @staticmethod
@@ -505,10 +505,10 @@ def _parse_model(model: str) -> tuple[str, str]
 |---|---|---|
 | `model` | `str` | `—` |
 
-###### `_request_openai_compatible`  (L137)
+###### `_request_openai_compatible`  (L135)
 
 ```python
-async def _request_openai_compatible(self, session: aiohttp.ClientSession, base_url: str, api_key: str, actual_model: str, system_prompt: str, user_prompt: str, backend_label: str, images: list[str] | None = None) -> str
+async def _request_openai_compatible(self, session: aiohttp.ClientSession, base_url: str, api_key: str, actual_model: str, system_prompt: str, user_prompt: str, backend_label: str, images: list[str] | None = None, temperature: float | None = None) -> str
 ```
 
 > Send a chat completion request to any OpenAI-compatible endpoint.
@@ -524,11 +524,12 @@ async def _request_openai_compatible(self, session: aiohttp.ClientSession, base_
 | `user_prompt` | `str` | `—` |
 | `backend_label` | `str` | `—` |
 | `images` | `list[str] | None` | `None` |
+| `temperature` | `float | None` | `None` |
 
-###### `_request_claude`  (L198)
+###### `_request_claude`  (L199)
 
 ```python
-async def _request_claude(self, session: aiohttp.ClientSession, actual_model: str, system_prompt: str, user_prompt: str) -> str
+async def _request_claude(self, session: aiohttp.ClientSession, actual_model: str, system_prompt: str, user_prompt: str, temperature: float | None = None) -> str
 ```
 
 > Send a request to Anthropic Claude Messages API.
@@ -540,11 +541,12 @@ async def _request_claude(self, session: aiohttp.ClientSession, actual_model: st
 | `actual_model` | `str` | `—` |
 | `system_prompt` | `str` | `—` |
 | `user_prompt` | `str` | `—` |
+| `temperature` | `float | None` | `None` |
 
-###### `chat`  (L242)
+###### `chat`  (L246)
 
 ```python
-async def chat(self, model: str, system_prompt: str, user_prompt: str, images: list[str] | None = None) -> str
+async def chat(self, model: str, system_prompt: str, user_prompt: str, images: list[str] | None = None, temperature: float | None = None) -> str
 ```
 
 > Route a chat request to the correct backend based on model prefix.
@@ -556,8 +558,9 @@ async def chat(self, model: str, system_prompt: str, user_prompt: str, images: l
 | `system_prompt` | `str` | `—` |
 | `user_prompt` | `str` | `—` |
 | `images` | `list[str] | None` | `None` |
+| `temperature` | `float | None` | `None` |
 
-###### `close`  (L383)
+###### `close`  (L395)
 
 ```python
 async def close(self) -> None
@@ -600,7 +603,30 @@ def __init__(self, bot: commands.Bot) -> None
 | `self` | `—` | `—` |
 | `bot` | `commands.Bot` | `—` |
 
-###### `cog_load`  (L28)
+###### `sd_generating`  (L31)
+
+```python
+@property
+def sd_generating(self) -> bool
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `sd_generating`  (L35)
+
+```python
+@sd_generating.setter
+def sd_generating(self, value: bool) -> None
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `value` | `bool` | `—` |
+
+###### `cog_load`  (L42)
 
 ```python
 async def cog_load(self) -> None
@@ -610,7 +636,7 @@ async def cog_load(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `cog_unload`  (L34)
+###### `cog_unload`  (L48)
 
 ```python
 async def cog_unload(self) -> None
@@ -620,7 +646,7 @@ async def cog_unload(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `enqueue_task`  (L42)
+###### `enqueue_task`  (L56)
 
 ```python
 async def enqueue_task(self, task: InferenceTask) -> None
@@ -631,7 +657,7 @@ async def enqueue_task(self, task: InferenceTask) -> None
 | `self` | `—` | `—` |
 | `task` | `InferenceTask` | `—` |
 
-###### `get_pending_tasks`  (L49)
+###### `get_pending_tasks`  (L63)
 
 ```python
 def get_pending_tasks(self) -> list[dict[str, Any]]
@@ -643,7 +669,7 @@ def get_pending_tasks(self) -> list[dict[str, Any]]
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `_inference_worker`  (L66)
+###### `_inference_worker`  (L80)
 
 ```python
 async def _inference_worker(self) -> None
@@ -653,7 +679,7 @@ async def _inference_worker(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `_process_task`  (L76)
+###### `_process_task`  (L95)
 
 ```python
 async def _process_task(self, task: InferenceTask, max_retries: int, retry_delay: float) -> None
@@ -745,7 +771,7 @@ async def cog_load(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `cog_unload`  (L58)
+###### `cog_unload`  (L59)
 
 ```python
 async def cog_unload(self) -> None
@@ -755,7 +781,7 @@ async def cog_unload(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `ping_ollama`  (L66)
+###### `ping_ollama`  (L70)
 
 ```python
 async def ping_ollama(self) -> bool
@@ -765,7 +791,7 @@ async def ping_ollama(self) -> bool
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `notify_admin`  (L74)
+###### `notify_admin`  (L79)
 
 ```python
 async def notify_admin(self, message: str) -> None
@@ -776,7 +802,7 @@ async def notify_admin(self, message: str) -> None
 | `self` | `—` | `—` |
 | `message` | `str` | `—` |
 
-###### `_health_loop`  (L84)
+###### `_health_loop`  (L89)
 
 ```python
 @tasks.loop(seconds=settings.HEALTH_CHECK_INTERVAL_SECONDS)
@@ -787,7 +813,7 @@ async def _health_loop(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `before_loop`  (L91)
+###### `before_loop`  (L96)
 
 ```python
 @_health_loop.before_loop
@@ -1125,6 +1151,215 @@ def make_timer() -> 'callable[[], int]'
 ---
 
 
+### 📄 `handlers/social/parallel_agent.py`
+
+> handlers/social/parallel_agent.py
+
+
+#### 全域變數 / 模組常數
+
+| 名稱 | 型別 | 值（摘要） | 行號 |
+|---|---|---|---|
+| `logger` | `—` | `logging.getLogger(__name__)` | L43 |
+| `_TOOL_ALIASES` | `dict[str, str]` | `{'PIXIV_SEARCH': 'PIXIV', 'PIXIV_TOOL': 'PIXIV', 'FIND_IMAGE': 'PIXIV', 'SEARCH_...` | L68 |
+| `_TOOL_DESC_TEMPLATE` | `—` | `'- **{name}**：{description}'` | L97 |
+| `_PARALLEL_PLANNER_SYSTEM_TEMPLATE` | `—` | `'[SYSTEM: PARALLEL TASK DISPATCH & CHAT SUPPRESSION ENGINE]\n你是一個高效率、極致冷靜的任務排程與對...` | L103 |
+| `_USER_MESSAGE_TEMPLATE` | `—` | `'使用者（{author}）說：「{content}」'` | L157 |
+
+
+#### Class `PlannedTask` ← `object`  (L50)
+
+> 規劃器輸出的單一工具任務。
+
+
+#### Class `ExecutionPlan` ← `object`  (L57)
+
+> 規劃器輸出的完整執行計畫。
+
+
+#### Class `ParallelAgentTool` ← `BaseTool`  (L239)
+
+> 高效能並行任務調度器，單次推論完成多工拆解並行發動。
+
+##### Methods
+
+###### `__init__`  (L242)
+
+```python
+def __init__(self, tool_registry: list[BaseTool]) -> None
+```
+
+> 初始化並行調度器。  \n>   \n>         Args:  \n>             tool_registry: 所有可用工具的列表。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `tool_registry` | `list[BaseTool]` | `—` |
+
+###### `intent_name`  (L257)
+
+```python
+@property
+def intent_name(self) -> str
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `llm_description`  (L261)
+
+```python
+@property
+def llm_description(self) -> str
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `can_handle_by_regex`  (L264)
+
+```python
+def can_handle_by_regex(self, text: str) -> bool
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `text` | `str` | `—` |
+
+###### `_build_tool_descriptions`  (L267)
+
+```python
+def _build_tool_descriptions(self) -> str
+```
+
+> 組裝工具描述清單（供 Planner Prompt 使用）。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `_build_system_prompt`  (L279)
+
+```python
+def _build_system_prompt(self) -> str
+```
+
+> 組裝極簡的 Planner 系統提示（專注結構化拆解與排程）。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `_call_planner_llm`  (L286)
+
+```python
+async def _call_planner_llm(self, brain: BotBrain, system_prompt: str, user_prompt: str, message_id: int) -> str
+```
+
+> 向 BotBrain 發送單次規劃推理任務。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `brain` | `BotBrain` | `—` |
+| `system_prompt` | `str` | `—` |
+| `user_prompt` | `str` | `—` |
+| `message_id` | `int` | `—` |
+
+###### `_execute_single_task`  (L321)
+
+```python
+async def _execute_single_task(self, task: PlannedTask, bot: commands.Bot, message: discord.Message, vibe_snippet: str, full_context: str) -> tuple[str, ToolResponseMode, str]
+```
+
+> 非同步執行單一工具任務。  \n>   \n>         Returns:  \n>             (canonical_tool_name, response_mode, observation_result)
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `task` | `PlannedTask` | `—` |
+| `bot` | `commands.Bot` | `—` |
+| `message` | `discord.Message` | `—` |
+| `vibe_snippet` | `str` | `—` |
+| `full_context` | `str` | `—` |
+
+###### `_should_early_terminate`  (L359)
+
+```python
+def _should_early_terminate(self, plan: ExecutionPlan, executed_results: list[tuple[str, ToolResponseMode, str]], user_query: str) -> bool
+```
+
+> 判定是否觸發行為自適應對話抑制（Action Early Termination）。  \n>   \n>         條件：  \n>           1. 全域開關 ACTION_EARLY_TERMINATION_ENABLED 為 True  \n>           2. 有執行工具任務且所有執行的工具皆為 DIRECT_UI  \n>           3. Planner 判定 needs_persona_reply 為 False  \n>           4. 使用者文字中未包含明確閒聊/觀點/心得關鍵字
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `plan` | `ExecutionPlan` | `—` |
+| `executed_results` | `list[tuple[str, ToolResponseMode, str]]` | `—` |
+| `user_query` | `str` | `—` |
+
+###### `_generate_final_response`  (L398)
+
+```python
+async def _generate_final_response(self, brain: BotBrain, user_query: str, channel_id: int | None, bot: commands.Bot, user_id: int, display_name: str, observations: list[tuple[str, str]], vibe_snippet: str = '', full_context: str = '') -> tuple[str, str, str, str]
+```
+
+> 使用 PRIMARY_MODEL 合成最終給使用者的對話文本。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `brain` | `BotBrain` | `—` |
+| `user_query` | `str` | `—` |
+| `channel_id` | `int | None` | `—` |
+| `bot` | `commands.Bot` | `—` |
+| `user_id` | `int` | `—` |
+| `display_name` | `str` | `—` |
+| `observations` | `list[tuple[str, str]]` | `—` |
+| `vibe_snippet` | `str` | `''` |
+| `full_context` | `str` | `''` |
+
+###### `execute`  (L489)
+
+```python
+async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str, **kwargs: object) -> None
+```
+
+> Parallel Agent 主執行入口。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `bot` | `commands.Bot` | `—` |
+| `message` | `discord.Message` | `—` |
+| `user_query` | `str` | `—` |
+| `vibe_snippet` | `str` | `—` |
+| `full_context` | `str` | `—` |
+| `**kwargs` | `object` | `—` |
+
+
+#### Functions
+
+##### `parse_plan_json`  (L163)
+
+```python
+def parse_plan_json(raw: str, default_query: str) -> ExecutionPlan
+```
+
+> 從 LLM 原始輸出中解析 ExecutionPlan，具備多層容錯回退機制。  \n>   \n>     Args:  \n>         raw: LLM 原始文字輸出。  \n>         default_query: 解析失敗時的兜底查詢文字。  \n>   \n>     Returns:  \n>         ExecutionPlan 實例。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `raw` | `str` | `—` |
+| `default_query` | `str` | `—` |
+
+
+---
+
+
 ### 📄 `handlers/social/persona.py`
 
 
@@ -1132,15 +1367,16 @@ def make_timer() -> 'callable[[], int]'
 
 | 名稱 | 型別 | 值（摘要） | 行號 |
 |---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L7 |
-| `_HIGH_PRIORITY_LORE_PATTERNS` | `—` | `frozenset(['(性暗示\|色色\|瑟瑟\|開車\|撩\|黃腔\|調情\|曖昧\|色\|做愛\|摸\|胸部?\|乳\|奶\|臀\|屁股\|下面\|裸\|脫\|舔\|插入?\|射精\|弄壞\|發情\|想...` | L11 |
+| `logger` | `—` | `logging.getLogger(__name__)` | L8 |
+| `_HIGH_PRIORITY_LORE_PATTERNS` | `—` | `frozenset(['(性暗示\|色色\|瑟瑟\|開車\|撩\|黃腔\|調情\|曖昧\|色\|做愛\|摸\|胸部?\|乳\|奶\|臀\|屁股\|下面\|裸\|脫\|舔\|插入?\|射精\|弄壞\|發情\|想...` | L12 |
 
 
 #### Functions
 
-##### `_load_soul_persona`  (L20)
+##### `_load_soul_persona`  (L22)
 
 ```python
+@functools.lru_cache(maxsize=4)
 def _load_soul_persona(channel_id: int | None = None) -> str
 ```
 
@@ -1150,7 +1386,7 @@ def _load_soul_persona(channel_id: int | None = None) -> str
 |---|---|---|
 | `channel_id` | `int | None` | `None` |
 
-##### `build_dynamic_persona`  (L42)
+##### `build_dynamic_persona`  (L44)
 
 ```python
 def build_dynamic_persona(current_text: str, intent_name: str, channel_id: int | None = None) -> tuple[str, str]
@@ -1229,6 +1465,212 @@ def cleanup_expired(self, uid: int) -> None
 ---
 
 
+### 📄 `handlers/social/react_agent.py`
+
+> handlers/social/react_agent.py
+
+
+#### 全域變數 / 模組常數
+
+| 名稱 | 型別 | 值（摘要） | 行號 |
+|---|---|---|---|
+| `logger` | `—` | `logging.getLogger(__name__)` | L39 |
+| `_REACT_SYSTEM_TEMPLATE` | `—` | `'[SYSTEM: TASK PLANNING & TOOL DISPATCH ENGINE]\n你是一個冷靜、精準的任務規劃與工具調度引擎。你的任務是分析使用...` | L45 |
+| `_TOOL_ALIASES` | `dict[str, str]` | `{'PIXIV_SEARCH': 'PIXIV', 'PIXIV_TOOL': 'PIXIV', 'FIND_IMAGE': 'PIXIV', 'SEARCH_...` | L92 |
+| `_TOOL_DESC_TEMPLATE` | `—` | `'- **{name}**：{description}'` | L119 |
+| `_USER_MESSAGE_TEMPLATE` | `—` | `'使用者（{author}）說：「{content}」'` | L121 |
+| `_OBSERVATION_TEMPLATE` | `—` | `'<observation>\n工具 [{tool}] 執行完畢，結果如下：\n{result}\n</observation>'` | L123 |
+| `_REACT_CONTINUATION_TEMPLATE` | `—` | `'以下是目前的對話歷史與工具執行記錄。請根據這些資訊繼續推理，決定下一步或給出最終答案：\n\n{transcript}\n\n現在輪到你回覆：'` | L128 |
+
+
+#### Class `ReactAgentTool` ← `BaseTool`  (L194)
+
+> ReAct 多步驟 Agent，作為 @Tag 訊息的統一入口。
+
+    本工具本身不直接呼叫外部 API，而是協調其他工具（ImageSearchTool、
+    DrawTool、MusicTool 等）以完成需要多個步驟的任務。
+
+##### Methods
+
+###### `__init__`  (L201)
+
+```python
+def __init__(self, tool_registry: list[BaseTool]) -> None
+```
+
+> 初始化 Agent。  \n>   \n>         Args:  \n>             tool_registry: 所有可用工具的列表（排除 ReactAgentTool 本身）。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `tool_registry` | `list[BaseTool]` | `—` |
+
+###### `intent_name`  (L216)
+
+```python
+@property
+def intent_name(self) -> str
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `llm_description`  (L220)
+
+```python
+@property
+def llm_description(self) -> str
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `can_handle_by_regex`  (L223)
+
+```python
+def can_handle_by_regex(self, text: str) -> bool
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `text` | `str` | `—` |
+
+###### `_build_tool_descriptions`  (L226)
+
+```python
+def _build_tool_descriptions(self) -> str
+```
+
+> 組裝工具描述清單（供 Agent Prompt 使用）。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `_build_system_prompt`  (L241)
+
+```python
+def _build_system_prompt(self) -> str
+```
+
+> 組裝極簡的 ReAct Agent 系統提示（零人設干擾、專注邏輯調度）。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `_call_llm`  (L248)
+
+```python
+async def _call_llm(self, brain: BotBrain, system_prompt: str, user_prompt: str, message_id: int, step: int, model: str | None = None, temperature: float | None = None) -> str
+```
+
+> 向 BotBrain 發送推理任務，等待並回傳結果。  \n>   \n>         Args:  \n>             brain: BotBrain Cog 實例。  \n>             system_prompt: Agent 系統提示。  \n>             user_prompt: 使用者提示（含對話歷史）。  \n>             message_id: 來源訊息 ID（用於 task_id）。  \n>             step: 當前步驟編號。  \n>             model: 指定使用之 LLM 模型名稱，未指定則使用 settings.REACT_MODEL。  \n>             temperature: 採樣溫度，ReAct 規劃階段預設 0.1。  \n>   \n>         Returns:  \n>             LLM 生成的文字。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `brain` | `BotBrain` | `—` |
+| `system_prompt` | `str` | `—` |
+| `user_prompt` | `str` | `—` |
+| `message_id` | `int` | `—` |
+| `step` | `int` | `—` |
+| `model` | `str | None` | `None` |
+| `temperature` | `float | None` | `None` |
+
+###### `_generate_final_response`  (L299)
+
+```python
+async def _generate_final_response(self, brain: BotBrain, user_query: str, channel_id: int | None, bot: commands.Bot, user_id: int, display_name: str, observations: list[tuple[str, str]], vibe_snippet: str = '', full_context: str = '', draft_answer: str = '') -> tuple[str, str, str, str]
+```
+
+> 使用 PRIMARY_MODEL（主力模型）合成最終給使用者的對話文本。  \n>   \n>         完整包含前文脈絡 (full_context)、頻道話題氛圍 (vibe_snippet)、  \n>         長期記憶 (memory_block) 與 15 歲台灣女高中生對話規則 (length_rule)。  \n>         回傳 (clean_speech, persona_thought, sys_prompt, user_prompt)。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `brain` | `BotBrain` | `—` |
+| `user_query` | `str` | `—` |
+| `channel_id` | `int | None` | `—` |
+| `bot` | `commands.Bot` | `—` |
+| `user_id` | `int` | `—` |
+| `display_name` | `str` | `—` |
+| `observations` | `list[tuple[str, str]]` | `—` |
+| `vibe_snippet` | `str` | `''` |
+| `full_context` | `str` | `''` |
+| `draft_answer` | `str` | `''` |
+
+###### `_execute_tool`  (L384)
+
+```python
+async def _execute_tool(self, tool_name: str, action_input: str, bot: commands.Bot, message: discord.Message, vibe_snippet: str, full_context: str) -> str
+```
+
+> 呼叫指定工具，以 silent=True 模式執行並收集結果。  \n>   \n>         Args:  \n>             tool_name: 工具名稱（大寫）。  \n>             action_input: 給工具的指令文字。  \n>             bot: Bot 實例。  \n>             message: 觸發訊息。  \n>             vibe_snippet: 氛圍摘要。  \n>             full_context: 完整上下文。  \n>   \n>         Returns:  \n>             工具執行的觀察結果字串。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `tool_name` | `str` | `—` |
+| `action_input` | `str` | `—` |
+| `bot` | `commands.Bot` | `—` |
+| `message` | `discord.Message` | `—` |
+| `vibe_snippet` | `str` | `—` |
+| `full_context` | `str` | `—` |
+
+###### `execute`  (L423)
+
+```python
+async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str, **kwargs: object) -> None
+```
+
+> ReAct Agent 主迴圈。  \n>   \n>         Args:  \n>             bot: Discord Bot 實例。  \n>             message: 觸發的 Discord 訊息。  \n>             user_query: 使用者的原始文字。  \n>             vibe_snippet: 頻道近期氛圍摘要。  \n>             full_context: 含上下文的完整提示文本。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `bot` | `commands.Bot` | `—` |
+| `message` | `discord.Message` | `—` |
+| `user_query` | `str` | `—` |
+| `vibe_snippet` | `str` | `—` |
+| `full_context` | `str` | `—` |
+| `**kwargs` | `object` | `—` |
+
+
+#### Functions
+
+##### `_extract_xml_tag`  (L139)
+
+```python
+def _extract_xml_tag(text: str, tag: str) -> str | None
+```
+
+> 從文字中提取 <tag>content</tag>。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `text` | `str` | `—` |
+| `tag` | `str` | `—` |
+
+##### `_parse_react_output`  (L147)
+
+```python
+def _parse_react_output(raw: str) -> dict[str, str]
+```
+
+> 解析 LLM 的 ReAct 格式輸出（支援 XML 標籤與標準文字 fallback）。  \n>   \n>     Returns:  \n>         dict with keys: thought (optional), action/action_input OR final_answer.  \n>         'type' key is 'action' | 'final'
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `raw` | `str` | `—` |
+
+
+---
+
+
 ### 📄 `handlers/social/registry.py`
 
 > handlers/social/registry.py
@@ -1262,12 +1704,12 @@ def get_fallback_tool() -> BaseTool
 
 | 名稱 | 型別 | 值（摘要） | 行號 |
 |---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L19 |
+| `logger` | `—` | `logging.getLogger(__name__)` | L20 |
 
 
 #### Functions
 
-##### `route_and_execute_tag`  (L21)
+##### `route_and_execute_tag`  (L22)
 
 ```python
 async def route_and_execute_tag(bot: commands.Bot, message: discord.Message) -> None
@@ -1284,14 +1726,31 @@ async def route_and_execute_tag(bot: commands.Bot, message: discord.Message) -> 
 
 ### 📄 `handlers/social/tool_base.py`
 
-> handlers/social/tool_base.py
+
+#### Class `ToolResponseMode` ← `str, Enum`  (L6)
+
+> 工具對話與回應模式。
+
+    DIRECT_UI:
+        工具執行時會直接向 Discord 頻道發送獨立 Embed/圖片/媒體或控制語音（例如 MusicTool, DrawTool, ImageSearchTool）。
+        若使用者無額外聊天/心得要求，可進行行為自適應終止（Early Termination）以避免多餘文字重複洗版。
+    DATA_ONLY:
+        工具執行時主要為查詢純資料、API 數據或文字摘要（例如 StockTool, WeatherTool, SearchTool）。
+        必須交由 PRIMARY_MODEL 進行最終的性格發言合成以傳達結果給使用者。
+
+##### 類別變數
+
+| 名稱 | 值（摘要） |
+|---|---|
+| `DIRECT_UI` | `'DIRECT_UI'` |
+| `DATA_ONLY` | `'DATA_ONLY'` |
 
 
-#### Class `BaseTool` ← `object`  (L9)
+#### Class `BaseTool` ← `object`  (L20)
 
 ##### Methods
 
-###### `intent_name`  (L11)
+###### `intent_name`  (L22)
 
 ```python
 @property
@@ -1304,7 +1763,7 @@ def intent_name(self) -> str
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `llm_description`  (L16)
+###### `llm_description`  (L27)
 
 ```python
 @property
@@ -1317,7 +1776,20 @@ def llm_description(self) -> str
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `can_handle_by_regex`  (L20)
+###### `response_mode`  (L32)
+
+```python
+@property
+def response_mode(self) -> ToolResponseMode
+```
+
+> 工具的回應模式，預設為 DATA_ONLY。自帶 Discord 渲染/語音的工具可覆寫為 DIRECT_UI。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `can_handle_by_regex`  (L36)
 
 ```python
 def can_handle_by_regex(self, text: str) -> bool
@@ -1330,13 +1802,13 @@ def can_handle_by_regex(self, text: str) -> bool
 | `self` | `—` | `—` |
 | `text` | `str` | `—` |
 
-###### `execute`  (L24)
+###### `execute`  (L40)
 
 ```python
-async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str) -> None
+async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str, **kwargs: object) -> str | None
 ```
 
-> 工具核心：此功能實際上的運作邏輯
+> 工具核心：此功能實際上的運作邏輯。  \n>   \n>         Args:  \n>             bot: Discord Bot 實例。  \n>             message: 觸發的 Discord 訊息。  \n>             user_query: 使用者的文字輸入。  \n>             vibe_snippet: 頻道近期話題氛圍摘要。  \n>             full_context: 含上下文的完整提示文本。  \n>             **kwargs: 擴充參數，例如 silent=True 使工具靜默執行並回傳狀態字串。  \n>   \n>         Returns:  \n>             None（直接回覆 Discord）或 str（silent 模式時回傳執行狀態字串）。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
@@ -1346,6 +1818,7 @@ async def execute(self, bot: commands.Bot, message: discord.Message, user_query:
 | `user_query` | `str` | `—` |
 | `vibe_snippet` | `str` | `—` |
 | `full_context` | `str` | `—` |
+| `**kwargs` | `object` | `—` |
 
 
 ---
@@ -1409,7 +1882,7 @@ def can_handle_by_regex(self, text: str) -> bool
 ###### `execute`  (L70)
 
 ```python
-async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str) -> None
+async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str, **kwargs: object) -> None
 ```
 
 | 參數 | 型別 | 預設值 |
@@ -1420,6 +1893,7 @@ async def execute(self, bot: commands.Bot, message: discord.Message, user_query:
 | `user_query` | `str` | `—` |
 | `vibe_snippet` | `str` | `—` |
 | `full_context` | `str` | `—` |
+| `**kwargs` | `object` | `—` |
 
 
 #### Functions
@@ -1514,7 +1988,7 @@ def __init__(self)
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `intent_name`  (L114)
+###### `intent_name`  (L115)
 
 ```python
 @property
@@ -1525,7 +1999,7 @@ def intent_name(self) -> str
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `llm_description`  (L118)
+###### `llm_description`  (L119)
 
 ```python
 @property
@@ -1536,7 +2010,18 @@ def llm_description(self) -> str
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `can_handle_by_regex`  (L121)
+###### `response_mode`  (L123)
+
+```python
+@property
+def response_mode(self) -> ToolResponseMode
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `can_handle_by_regex`  (L126)
 
 ```python
 def can_handle_by_regex(self, text: str) -> bool
@@ -1547,7 +2032,7 @@ def can_handle_by_regex(self, text: str) -> bool
 | `self` | `—` | `—` |
 | `text` | `str` | `—` |
 
-###### `_extract_danbooru_tags`  (L125)
+###### `_extract_danbooru_tags`  (L130)
 
 ```python
 def _extract_danbooru_tags(self, user_query: str) -> list[str]
@@ -1560,7 +2045,7 @@ def _extract_danbooru_tags(self, user_query: str) -> list[str]
 | `self` | `—` | `—` |
 | `user_query` | `str` | `—` |
 
-###### `_translate_to_sd_prompt`  (L153)
+###### `_translate_to_sd_prompt`  (L158)
 
 ```python
 async def _translate_to_sd_prompt(self, user_query: str, brain: BotBrain) -> tuple[str, str]
@@ -1574,7 +2059,7 @@ async def _translate_to_sd_prompt(self, user_query: str, brain: BotBrain) -> tup
 | `user_query` | `str` | `—` |
 | `brain` | `BotBrain` | `—` |
 
-###### `_expand_prompt`  (L208)
+###### `_expand_prompt`  (L213)
 
 ```python
 async def _expand_prompt(self, user_query: str, brain: BotBrain, seed_tags: list[str] | None = None) -> str
@@ -1589,7 +2074,7 @@ async def _expand_prompt(self, user_query: str, brain: BotBrain, seed_tags: list
 | `brain` | `BotBrain` | `—` |
 | `seed_tags` | `list[str] | None` | `None` |
 
-###### `_generate_gemini_image`  (L267)
+###### `_generate_gemini_image`  (L272)
 
 ```python
 async def _generate_gemini_image(self, prompt: str) -> bytes | None
@@ -1602,7 +2087,7 @@ async def _generate_gemini_image(self, prompt: str) -> bytes | None
 | `self` | `—` | `—` |
 | `prompt` | `str` | `—` |
 
-###### `_generate_hf_animagine`  (L279)
+###### `_generate_hf_animagine`  (L284)
 
 ```python
 async def _generate_hf_animagine(self, positive_prompt: str, negative_prompt: str = '') -> bytes | None
@@ -1616,7 +2101,7 @@ async def _generate_hf_animagine(self, positive_prompt: str, negative_prompt: st
 | `positive_prompt` | `str` | `—` |
 | `negative_prompt` | `str` | `''` |
 
-###### `_build_animagine_prompt`  (L339)
+###### `_build_animagine_prompt`  (L344)
 
 ```python
 def _build_animagine_prompt(self, seed_tags: list[str], expanded_prompt: str) -> str
@@ -1630,7 +2115,7 @@ def _build_animagine_prompt(self, seed_tags: list[str], expanded_prompt: str) ->
 | `seed_tags` | `list[str]` | `—` |
 | `expanded_prompt` | `str` | `—` |
 
-###### `_generate_pollinations`  (L372)
+###### `_generate_pollinations`  (L377)
 
 ```python
 async def _generate_pollinations(self, positive_prompt: str, negative_prompt: str = '') -> bytes | None
@@ -1644,7 +2129,7 @@ async def _generate_pollinations(self, positive_prompt: str, negative_prompt: st
 | `positive_prompt` | `str` | `—` |
 | `negative_prompt` | `str` | `''` |
 
-###### `_generate_image_local`  (L416)
+###### `_generate_image_local`  (L421)
 
 ```python
 async def _generate_image_local(self, positive_prompt: str, negative_prompt: str) -> bytes | None
@@ -1658,11 +2143,13 @@ async def _generate_image_local(self, positive_prompt: str, negative_prompt: str
 | `positive_prompt` | `str` | `—` |
 | `negative_prompt` | `str` | `—` |
 
-###### `execute`  (L447)
+###### `execute`  (L452)
 
 ```python
-async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str) -> None
+async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str, silent: bool = False, **kwargs: object) -> str | None
 ```
+
+> 畫圖工具核心。  \n>   \n>         Args:  \n>             silent: 若為 True，不直接發送確認訊息，執行完成後回傳結果狀態字串。  \n>   \n>         Returns:  \n>             silent=False 時回傳 None；silent=True 時回傳 str 狀態摘要。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
@@ -1672,6 +2159,8 @@ async def execute(self, bot: commands.Bot, message: discord.Message, user_query:
 | `user_query` | `str` | `—` |
 | `vibe_snippet` | `str` | `—` |
 | `full_context` | `str` | `—` |
+| `silent` | `bool` | `False` |
+| `**kwargs` | `object` | `—` |
 
 
 ---
@@ -1687,13 +2176,15 @@ async def execute(self, bot: commands.Bot, message: discord.Message, user_query:
 | 名稱 | 型別 | 值（摘要） | 行號 |
 |---|---|---|---|
 | `logger` | `—` | `logging.getLogger(__name__)` | L24 |
+| `_TAG_ALIASES` | `dict[str, str]` | `{'huge_boobs': 'large_breasts', 'big_boobs': 'large_breasts', 'medium_breasts': ...` | L30 |
+| `_CONFLICT_ROOTS` | `list[list[str]]` | `[['large_breasts', 'small_breasts'], ['naked', 'swimsuit', 'underwear']]` | L46 |
 
 
-#### Class `ImageSearchTool` ← `BaseTool`  (L27)
+#### Class `ImageSearchTool` ← `BaseTool`  (L52)
 
 ##### Methods
 
-###### `intent_name`  (L30)
+###### `intent_name`  (L55)
 
 ```python
 @property
@@ -1704,7 +2195,7 @@ def intent_name(self) -> str
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `llm_description`  (L34)
+###### `llm_description`  (L59)
 
 ```python
 @property
@@ -1715,7 +2206,18 @@ def llm_description(self) -> str
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `can_handle_by_regex`  (L37)
+###### `response_mode`  (L63)
+
+```python
+@property
+def response_mode(self) -> ToolResponseMode
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `can_handle_by_regex`  (L66)
 
 ```python
 def can_handle_by_regex(self, text: str) -> bool
@@ -1726,20 +2228,74 @@ def can_handle_by_regex(self, text: str) -> bool
 | `self` | `—` | `—` |
 | `text` | `str` | `—` |
 
-###### `__init__`  (L47)
+###### `__init__`  (L76)
 
 ```python
-def __init__(self)
+def __init__(self) -> None
 ```
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `execute`  (L59)
+###### `_build_tag_pool`  (L94)
 
 ```python
-async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str) -> None
+def _build_tag_pool(self, user_query: str, raw_llm_reply: str = '') -> list[str]
+```
+
+> 字典掃描 + 正則 + LLM 補充，合建原始 tag 集合。  \n>   \n>         Args:  \n>             user_query: 使用者原始輸入。  \n>             raw_llm_reply: LLM 翻譯結果（若無則留空，Agent 模式下不走 LLM）。  \n>   \n>         Returns:  \n>             原始 tag 列表（未去重 / 未消解衝突）。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `user_query` | `str` | `—` |
+| `raw_llm_reply` | `str` | `''` |
+
+###### `_normalize_tags`  (L150)
+
+```python
+def _normalize_tags(self, tag_pool: list[str], is_nsfw_requested: bool = False) -> list[str]
+```
+
+> 去重、別名正規化、衝突消解、保底補充。  \n>   \n>         Args:  \n>             tag_pool: 由 _build_tag_pool 回傳的原始 tag 列表。  \n>             is_nsfw_requested: 若為 True 且 tag_pool 為空，保底加入 ['1girl', 'naked']；  \n>                                否則保底使用 ['1girl', 'solo']（較安全）。  \n>   \n>         Returns:  \n>             最終正規化後的 tag 列表（上限 3 個）。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `tag_pool` | `list[str]` | `—` |
+| `is_nsfw_requested` | `bool` | `False` |
+
+###### `_booru_search`  (L191)
+
+```python
+async def _booru_search(self, working_list: list[str]) -> tuple[str, bool]
+```
+
+> 向 Safebooru API 搜圖，支援 tag 逐步退避。  \n>   \n>         Args:  \n>             working_list: 正規化後的 tag 列表（會被就地修改以退避）。  \n>   \n>         Returns:  \n>             (img_url, fallback_attempted)
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `working_list` | `list[str]` | `—` |
+
+###### `search`  (L246)
+
+```python
+async def search(self, user_query: str) -> tuple[str, list[str], bool]
+```
+
+> ReAct Agent 專用公開搜圖介面（純本機，不走 LLM 翻譯）。  \n>   \n>         Args:  \n>             user_query: 使用者的搜圖描述（中文或英文均可）。  \n>   \n>         Returns:  \n>             (img_url, used_tags, is_fallback)
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `user_query` | `str` | `—` |
+
+###### `execute`  (L273)
+
+```python
+async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str, **kwargs: object) -> None
 ```
 
 | 參數 | 型別 | 預設值 |
@@ -1750,6 +2306,7 @@ async def execute(self, bot: commands.Bot, message: discord.Message, user_query:
 | `user_query` | `str` | `—` |
 | `vibe_snippet` | `str` | `—` |
 | `full_context` | `str` | `—` |
+| `**kwargs` | `object` | `—` |
 
 
 ---
@@ -1758,11 +2315,11 @@ async def execute(self, bot: commands.Bot, message: discord.Message, user_query:
 ### 📄 `handlers/social/tools/music_tool.py`
 
 
-#### Class `MusicTool` ← `BaseTool`  (L12)
+#### Class `MusicTool` ← `BaseTool`  (L13)
 
 ##### Methods
 
-###### `intent_name`  (L14)
+###### `intent_name`  (L15)
 
 ```python
 @property
@@ -1773,7 +2330,7 @@ def intent_name(self) -> str
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `llm_description`  (L18)
+###### `llm_description`  (L19)
 
 ```python
 @property
@@ -1784,7 +2341,18 @@ def llm_description(self) -> str
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `can_handle_by_regex`  (L21)
+###### `response_mode`  (L23)
+
+```python
+@property
+def response_mode(self) -> ToolResponseMode
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `can_handle_by_regex`  (L26)
 
 ```python
 def can_handle_by_regex(self, text: str) -> bool
@@ -1795,11 +2363,13 @@ def can_handle_by_regex(self, text: str) -> bool
 | `self` | `—` | `—` |
 | `text` | `str` | `—` |
 
-###### `execute`  (L34)
+###### `execute`  (L39)
 
 ```python
-async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str) -> None
+async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str, silent: bool = False, **kwargs: object) -> str | None
 ```
+
+> 音樂工具核心。  \n>   \n>         Args:  \n>             silent: 若為 True，不直接發送 Discord 確認訊息，改為回傳狀態字串給 Agent。  \n>   \n>         Returns:  \n>             silent=False 時回傳 None；silent=True 時回傳執行狀態字串。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
@@ -1809,6 +2379,8 @@ async def execute(self, bot: commands.Bot, message: discord.Message, user_query:
 | `user_query` | `str` | `—` |
 | `vibe_snippet` | `str` | `—` |
 | `full_context` | `str` | `—` |
+| `silent` | `bool` | `False` |
+| `**kwargs` | `object` | `—` |
 
 
 ---
@@ -1876,7 +2448,7 @@ def can_handle_by_regex(self, text: str) -> bool
 ###### `execute`  (L260)
 
 ```python
-async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str) -> None
+async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str, **kwargs: object) -> None
 ```
 
 | 參數 | 型別 | 預設值 |
@@ -1887,6 +2459,7 @@ async def execute(self, bot: commands.Bot, message: discord.Message, user_query:
 | `user_query` | `str` | `—` |
 | `vibe_snippet` | `str` | `—` |
 | `full_context` | `str` | `—` |
+| `**kwargs` | `object` | `—` |
 
 
 #### Functions
@@ -2024,7 +2597,7 @@ def can_handle_by_regex(self, text: str) -> bool
 ###### `execute`  (L44)
 
 ```python
-async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str) -> None
+async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str, **kwargs: object) -> None
 ```
 
 | 參數 | 型別 | 預設值 |
@@ -2035,16 +2608,17 @@ async def execute(self, bot: commands.Bot, message: discord.Message, user_query:
 | `user_query` | `str` | `—` |
 | `vibe_snippet` | `str` | `—` |
 | `full_context` | `str` | `—` |
+| `**kwargs` | `object` | `—` |
 
 
-#### Class `AdvancedSearchTool` ← `BaseTool`  (L253)
+#### Class `AdvancedSearchTool` ← `BaseTool`  (L254)
 
 > 相容性搜尋工具 (現已整合至 ChatTool 聯網對話系統中)。
     當 Intent 強制為 SEARCH 時，會調用檢索並交由 ChatTool 個性化回覆。
 
 ##### Methods
 
-###### `intent_name`  (L260)
+###### `intent_name`  (L261)
 
 ```python
 @property
@@ -2055,7 +2629,7 @@ def intent_name(self) -> str
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `llm_description`  (L264)
+###### `llm_description`  (L265)
 
 ```python
 @property
@@ -2066,7 +2640,7 @@ def llm_description(self) -> str
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `can_handle_by_regex`  (L267)
+###### `can_handle_by_regex`  (L268)
 
 ```python
 def can_handle_by_regex(self, text: str) -> bool
@@ -2077,10 +2651,10 @@ def can_handle_by_regex(self, text: str) -> bool
 | `self` | `—` | `—` |
 | `text` | `str` | `—` |
 
-###### `execute`  (L270)
+###### `execute`  (L271)
 
 ```python
-async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str) -> None
+async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str, **kwargs: object) -> None
 ```
 
 | 參數 | 型別 | 預設值 |
@@ -2091,11 +2665,12 @@ async def execute(self, bot: commands.Bot, message: discord.Message, user_query:
 | `user_query` | `str` | `—` |
 | `vibe_snippet` | `str` | `—` |
 | `full_context` | `str` | `—` |
+| `**kwargs` | `object` | `—` |
 
 
 #### Functions
 
-##### `fetch_web_and_entity_context`  (L111)
+##### `fetch_web_and_entity_context`  (L112)
 
 ```python
 async def fetch_web_and_entity_context(user_query: str) -> tuple[str, str]
@@ -2120,18 +2695,19 @@ async def fetch_web_and_entity_context(user_query: str) -> tuple[str, str]
 
 | 名稱 | 型別 | 值（摘要） | 行號 |
 |---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L40 |
-| `_CN_TO_TICKER` | `dict[str, str]` | `{'台積電': '2330.TW', '聯發科': '2454.TW', '鴻海': '2317.TW', '台塑': '1301.TW', '中鋼': '20...` | L45 |
-| `_TICKER_REGEX` | `—` | `re.compile('(股票\|股價\|K線\|EMA\|RSI\|MACD\|技術指標\|技術分析\|走勢\|\\b\\d{4}(?:\\.TW)?\\b\|BTC\|ETH\|S...` | L65 |
+| `logger` | `—` | `logging.getLogger(__name__)` | L43 |
+| `_KNOWN_CRYPTOS` | `set[str]` | `{'BTC', 'ETH', 'SOL', 'DOGE', 'XAUT', 'USDT', 'USDC', 'XRP', 'BNB', 'ADA', 'AVAX...` | L51 |
+| `_CN_TO_TICKER` | `dict[str, str]` | `{'台積電': '2330.TW', '聯發科': '2454.TW', '鴻海': '2317.TW', '台塑': '1301.TW', '中鋼': '20...` | L61 |
+| `_TICKER_REGEX` | `—` | `re.compile('(股票\|股價\|K線\|EMA\|RSI\|MACD\|技術指標\|技術分析\|走勢\|行情\|幣價\|趨勢\|分析\|\\b\\d{4}(?:\\.TW)?\...` | L83 |
 
 
-#### Class `StockTool` ← `BaseTool`  (L229)
+#### Class `StockTool` ← `BaseTool`  (L300)
 
 > 股票 / 加密貨幣 / 指數查詢，附 K 線圖與技術指標報告。
 
 ##### Methods
 
-###### `intent_name`  (L233)
+###### `intent_name`  (L304)
 
 ```python
 @property
@@ -2142,7 +2718,7 @@ def intent_name(self) -> str
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `llm_description`  (L237)
+###### `llm_description`  (L308)
 
 ```python
 @property
@@ -2153,7 +2729,7 @@ def llm_description(self) -> str
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `can_handle_by_regex`  (L240)
+###### `can_handle_by_regex`  (L311)
 
 ```python
 def can_handle_by_regex(self, text: str) -> bool
@@ -2164,10 +2740,10 @@ def can_handle_by_regex(self, text: str) -> bool
 | `self` | `—` | `—` |
 | `text` | `str` | `—` |
 
-###### `execute`  (L243)
+###### `execute`  (L314)
 
 ```python
-async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str) -> None
+async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str, silent: bool = False, **kwargs: object) -> str | None
 ```
 
 | 參數 | 型別 | 預設值 |
@@ -2178,11 +2754,13 @@ async def execute(self, bot: commands.Bot, message: discord.Message, user_query:
 | `user_query` | `str` | `—` |
 | `vibe_snippet` | `str` | `—` |
 | `full_context` | `str` | `—` |
+| `silent` | `bool` | `False` |
+| `**kwargs` | `object` | `—` |
 
 
 #### Functions
 
-##### `_resolve_ticker`  (L76)
+##### `_resolve_ticker`  (L96)
 
 ```python
 def _resolve_ticker(raw: str) -> str
@@ -2194,19 +2772,31 @@ def _resolve_ticker(raw: str) -> str
 |---|---|---|
 | `raw` | `str` | `—` |
 
-##### `_quick_extract_ticker`  (L101)
+##### `_quick_extract_tickers`  (L129)
 
 ```python
-def _quick_extract_ticker(text: str) -> str
+def _quick_extract_tickers(text: str) -> list[str]
 ```
 
-> 不依賴 LLM，純用正則一步到位提取 ticker。  \n>     支援：中文對照表 / 台股四位數 / 純 ASCII 股票代號。
+> 純用正則一步到位提取所有 tickers。  \n>     支援多標的同時提取（如：0050 00878 00981A / 台積電 鴻海 NVDA / BTC ETH）。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `text` | `str` | `—` |
 
-##### `_compute_rsi`  (L126)
+##### `_quick_extract_ticker`  (L174)
+
+```python
+def _quick_extract_ticker(text: str) -> str
+```
+
+> 單一標的相容介面。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `text` | `str` | `—` |
+
+##### `_compute_rsi`  (L180)
 
 ```python
 def _compute_rsi(series: pd.Series, period: int = 14) -> pd.Series
@@ -2219,7 +2809,7 @@ def _compute_rsi(series: pd.Series, period: int = 14) -> pd.Series
 | `series` | `pd.Series` | `—` |
 | `period` | `int` | `14` |
 
-##### `_fetch_and_plot`  (L137)
+##### `_fetch_and_plot`  (L191)
 
 ```python
 def _fetch_and_plot(ticker: str) -> tuple[bytes | None, dict]
@@ -2292,7 +2882,7 @@ def can_handle_by_regex(self, text: str) -> bool
 ###### `execute`  (L79)
 
 ```python
-async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str) -> None
+async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str, **kwargs: object) -> None
 ```
 
 | 參數 | 型別 | 預設值 |
@@ -2303,6 +2893,7 @@ async def execute(self, bot: commands.Bot, message: discord.Message, user_query:
 | `user_query` | `str` | `—` |
 | `vibe_snippet` | `str` | `—` |
 | `full_context` | `str` | `—` |
+| `**kwargs` | `object` | `—` |
 
 
 #### Functions
@@ -2463,7 +3054,20 @@ def _chunk_message(text: str, max_length: int = 1900) -> list[str]
 | `text` | `str` | `—` |
 | `max_length` | `int` | `1900` |
 
-##### `simulate_typing_and_send`  (L274)
+##### `remove_hourglass_reaction`  (L274)
+
+```python
+async def remove_hourglass_reaction(target: discord.Message | Any, bot_user: discord.User | discord.Member | None = None) -> None
+```
+
+> 安全移除訊息上的 ⏳ 沙漏反應。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `target` | `discord.Message | Any` | `—` |
+| `bot_user` | `discord.User | discord.Member | None` | `None` |
+
+##### `simulate_typing_and_send`  (L302)
 
 ```python
 async def simulate_typing_and_send(target: discord.Message | discord.TextChannel | Any, reply: str, intent_name: str = 'CHAT', prompt: str = '', model: str = '', system_prompt: str = '', user_prompt: str = '', latency_ms: int = 0) -> None
@@ -2480,7 +3084,7 @@ async def simulate_typing_and_send(target: discord.Message | discord.TextChannel
 | `user_prompt` | `str` | `''` |
 | `latency_ms` | `int` | `0` |
 
-##### `simulate_typing_and_send_to_channel`  (L341)
+##### `simulate_typing_and_send_to_channel`  (L364)
 
 ```python
 async def simulate_typing_and_send_to_channel(channel: discord.TextChannel | Any, reply: str, intent_name: str = 'CHAT', prompt: str = '', model: str = '', system_prompt: str = '', user_prompt: str = '') -> None
@@ -2581,7 +3185,19 @@ def append_chat_log(message: discord.Message) -> None
 |---|---|---|
 | `message` | `discord.Message` | `—` |
 
-##### `read_chat_log`  (L76)
+##### `async_append_chat_log`  (L72)
+
+```python
+async def async_append_chat_log(message: discord.Message) -> None
+```
+
+> 非同步版本的追加寫入，避免在 Discord on_message 事件迴圈中阻塞。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `message` | `discord.Message` | `—` |
+
+##### `read_chat_log`  (L85)
 
 ```python
 def read_chat_log(date_str: str) -> list[dict]
@@ -2593,7 +3209,7 @@ def read_chat_log(date_str: str) -> list[dict]
 |---|---|---|
 | `date_str` | `str` | `—` |
 
-##### `is_date_processed`  (L104)
+##### `is_date_processed`  (L113)
 
 ```python
 def is_date_processed(date_str: str) -> bool
@@ -2605,7 +3221,7 @@ def is_date_processed(date_str: str) -> bool
 |---|---|---|
 | `date_str` | `str` | `—` |
 
-##### `mark_date_processed`  (L109)
+##### `mark_date_processed`  (L118)
 
 ```python
 def mark_date_processed(date_str: str, stats: dict | None = None) -> None
@@ -2618,7 +3234,7 @@ def mark_date_processed(date_str: str, stats: dict | None = None) -> None
 | `date_str` | `str` | `—` |
 | `stats` | `dict | None` | `None` |
 
-##### `get_yesterday_str`  (L129)
+##### `get_yesterday_str`  (L138)
 
 ```python
 def get_yesterday_str() -> str
@@ -2637,16 +3253,16 @@ def get_yesterday_str() -> str
 
 | 名稱 | 型別 | 值（摘要） | 行號 |
 |---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L17 |
+| `logger` | `—` | `logging.getLogger(__name__)` | L18 |
 
 
-#### Class `MemoryManager` ← `commands.Cog`  (L20)
+#### Class `MemoryManager` ← `commands.Cog`  (L21)
 
 > 靈魂記錄者！追尋全局單一個體 UID，於日常背景中抓取反思屬性的深睡大腦層。
 
 ##### Methods
 
-###### `__init__`  (L23)
+###### `__init__`  (L24)
 
 ```python
 def __init__(self, bot: commands.Bot) -> None
@@ -2657,7 +3273,7 @@ def __init__(self, bot: commands.Bot) -> None
 | `self` | `—` | `—` |
 | `bot` | `commands.Bot` | `—` |
 
-###### `reload_store`  (L42)
+###### `reload_store`  (L43)
 
 ```python
 def reload_store(self) -> None
@@ -2669,18 +3285,20 @@ def reload_store(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `get_user_memory_snippet`  (L57)
+###### `get_user_memory_snippet`  (L58)
 
 ```python
 def get_user_memory_snippet(self, user_id: int) -> str
 ```
+
+> 產生注入 LLM Prompt 的使用者記憶片段（結合類別多樣性選取）。  \n>   \n>         Args:  \n>             user_id: Discord 使用者 ID。  \n>   \n>         Returns:  \n>             格式化後的長期記憶字串。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `self` | `—` | `—` |
 | `user_id` | `int` | `—` |
 
-###### `on_message`  (L82)
+###### `on_message`  (L94)
 
 ```python
 @commands.Cog.listener()
@@ -2692,7 +3310,7 @@ async def on_message(self, message: discord.Message) -> None
 | `self` | `—` | `—` |
 | `message` | `discord.Message` | `—` |
 
-###### `_run_reflection_extract`  (L121)
+###### `_run_reflection_extract`  (L133)
 
 ```python
 async def _run_reflection_extract(self, author: discord.Member | discord.User, texts: str) -> None
@@ -2723,13 +3341,13 @@ async def _run_reflection_extract(self, author: discord.Member | discord.User, t
 | `_NIGHTLY_SYSTEM_PROMPT` | `—` | `'【深夜靈魂整合引擎 (Nightly Reflection AI)】\n這是一份來自群友「{display_name}」今日完整的聊天記錄，內容遠比平時的片段...` | L50 |
 
 
-#### Class `NightlyDigest` ← `commands.Cog`  (L76)
+#### Class `NightlyDigest` ← `commands.Cog`  (L83)
 
 > 凌晨 3:00 深夜記憶整合工人。
 
 ##### Methods
 
-###### `__init__`  (L79)
+###### `__init__`  (L86)
 
 ```python
 def __init__(self, bot: commands.Bot) -> None
@@ -2740,7 +3358,7 @@ def __init__(self, bot: commands.Bot) -> None
 | `self` | `—` | `—` |
 | `bot` | `commands.Bot` | `—` |
 
-###### `cog_load`  (L83)
+###### `cog_load`  (L90)
 
 ```python
 async def cog_load(self) -> None
@@ -2750,7 +3368,7 @@ async def cog_load(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `cog_unload`  (L87)
+###### `cog_unload`  (L94)
 
 ```python
 async def cog_unload(self) -> None
@@ -2760,7 +3378,7 @@ async def cog_unload(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `_nightly_loop`  (L95)
+###### `_nightly_loop`  (L102)
 
 ```python
 @tasks.loop(minutes=1)
@@ -2771,7 +3389,7 @@ async def _nightly_loop(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `_before_loop`  (L106)
+###### `_before_loop`  (L114)
 
 ```python
 @_nightly_loop.before_loop
@@ -2782,7 +3400,7 @@ async def _before_loop(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `cmd_nightly_digest`  (L114)
+###### `cmd_nightly_digest`  (L122)
 
 ```python
 @commands.command(name='nightly_digest', hidden=True)
@@ -2798,7 +3416,7 @@ async def cmd_nightly_digest(self, ctx: commands.Context, date_str: str = '') ->
 | `ctx` | `commands.Context` | `—` |
 | `date_str` | `str` | `''` |
 
-###### `_run_digest`  (L132)
+###### `_run_digest`  (L140)
 
 ```python
 async def _run_digest(self, date_str: str, force: bool = False) -> dict | None
@@ -2871,7 +3489,7 @@ def _save(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `get_affinity`  (L64)
+###### `get_affinity`  (L74)
 
 ```python
 def get_affinity(self, uid: int) -> float
@@ -2884,7 +3502,7 @@ def get_affinity(self, uid: int) -> float
 | `self` | `—` | `—` |
 | `uid` | `int` | `—` |
 
-###### `update_affinity`  (L69)
+###### `update_affinity`  (L79)
 
 ```python
 def update_affinity(self, uid: int, delta: int | float) -> None
@@ -2898,7 +3516,7 @@ def update_affinity(self, uid: int, delta: int | float) -> None
 | `uid` | `int` | `—` |
 | `delta` | `int | float` | `—` |
 
-###### `get_affinity_tier`  (L91)
+###### `get_affinity_tier`  (L101)
 
 ```python
 def get_affinity_tier(self, uid: int) -> str
@@ -2911,7 +3529,7 @@ def get_affinity_tier(self, uid: int) -> str
 | `self` | `—` | `—` |
 | `uid` | `int` | `—` |
 
-###### `decay_all`  (L99)
+###### `decay_all`  (L109)
 
 ```python
 def decay_all(self) -> int
@@ -2923,7 +3541,7 @@ def decay_all(self) -> int
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `get_relationship_snippet`  (L123)
+###### `get_relationship_snippet`  (L133)
 
 ```python
 def get_relationship_snippet(self, uid: int) -> str
@@ -2951,26 +3569,27 @@ def get_relationship_snippet(self, uid: int) -> str
 |---|---|---|---|
 | `logger` | `—` | `logging.getLogger(__name__)` | L44 |
 | `_TZ_TW` | `—` | `timezone(timedelta(hours=8))` | L46 |
-| `_REPLAY_SYSTEM_PROMPT` | `—` | `'【歷史記憶重建引擎 (Memory Rebuild AI)】\n這是一份來自群友「{display_name}」的過去完整聊天記錄，\n內容已通過清洗，請從中...` | L121 |
-| `_REPLAY_MAX_MSGS_PER_USER` | `—` | `getattr(settings, 'NIGHTLY_MAX_MSGS_PER_USER', 80)` | L146 |
-| `_REPLAY_MIN_MSGS_THRESHOLD` | `—` | `getattr(settings, 'NIGHTLY_MIN_MSGS_THRESHOLD', 5)` | L148 |
+| `_BANTER_PATTERNS` | `list[re.Pattern[str]]` | `[re.compile('吃大便\|吃屎\|去死\|去吃屎\|神經病\|幹嘛啦\|智障')]` | L53 |
+| `_REPLAY_SYSTEM_PROMPT` | `—` | `'【歷史記憶重建引擎 (Memory Rebuild AI)】\n這是一份來自群友「{display_name}」的過去完整聊天記錄，\n內容已通過清洗，請從中...` | L143 |
+| `_REPLAY_MAX_MSGS_PER_USER` | `—` | `getattr(settings, 'NIGHTLY_MAX_MSGS_PER_USER', 80)` | L175 |
+| `_REPLAY_MIN_MSGS_THRESHOLD` | `—` | `getattr(settings, 'NIGHTLY_MIN_MSGS_THRESHOLD', 5)` | L177 |
 
 
 #### Functions
 
-##### `sanitize_existing`  (L52)
+##### `sanitize_existing`  (L58)
 
 ```python
 def sanitize_existing(path: Path = settings.USER_MEMORY_PATH) -> dict[str, int]
 ```
 
-> 掃描並清洗現有 user_memory.json 內的污染資料。  \n>   \n>     清洗項目：  \n>     - Aliases：過濾超長、含 @、含 [某群友]、命中黑名單的別名。  \n>     - Facts：移除文字為空、超長句子（> 60 字，通常是 3B 模型把整句記成 fact）、  \n>              含 [某群友] 或 @ 的污染 fact。  \n>     - 重複 fact（同文字已存在）。  \n>   \n>     Args:  \n>         path: user_memory.json 的路徑。  \n>   \n>     Returns:  \n>         統計字典，含 users_cleaned、aliases_removed、facts_removed。
+> 掃描並清洗現有 user_memory.json 內的污染資料。  \n>   \n>     清洗項目：  \n>     - Aliases：過濾超長/超短、含 @、含 [某群友]、命中黑名單或遊戲代號格式的別名。  \n>     - Facts：移除文字為空、超長句子（> 60 字）、含 [某群友] 或 @ 的污染 fact、  \n>              移除明顯的群聊互嘴幹話（如吃大便），並進行語意模糊去重。  \n>   \n>     Args:  \n>         path: user_memory.json 的路徑。  \n>   \n>     Returns:  \n>         統計字典，含 users_cleaned、aliases_removed、facts_removed。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `path` | `Path` | `settings.USER_MEMORY_PATH` |
 
-##### `replay_past_chat_logs`  (L151)
+##### `replay_past_chat_logs`  (L180)
 
 ```python
 async def replay_past_chat_logs(days: int = 30, memory_path: Path = settings.USER_MEMORY_PATH) -> dict[str, int]
@@ -2983,7 +3602,7 @@ async def replay_past_chat_logs(days: int = 30, memory_path: Path = settings.USE
 | `days` | `int` | `30` |
 | `memory_path` | `Path` | `settings.USER_MEMORY_PATH` |
 
-##### `_call_llm_direct`  (L246)
+##### `_call_llm_direct`  (L275)
 
 ```python
 async def _call_llm_direct(system_prompt: str, user_prompt: str, uid: str) -> dict | None
@@ -2997,13 +3616,13 @@ async def _call_llm_direct(system_prompt: str, user_prompt: str, uid: str) -> di
 | `user_prompt` | `str` | `—` |
 | `uid` | `str` | `—` |
 
-##### `_setup_logging`  (L299)
+##### `_setup_logging`  (L328)
 
 ```python
 def _setup_logging() -> None
 ```
 
-##### `main`  (L306)
+##### `main`  (L335)
 
 ```python
 def main() -> None
@@ -3022,109 +3641,153 @@ def main() -> None
 
 | 名稱 | 型別 | 值（摘要） | 行號 |
 |---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L8 |
-| `UserMemoryStore` | `—` | `dict[str, UserProfile]` | L34 |
-| `RelationshipMemoryStore` | `—` | `dict[str, list[RelationshipFact]]` | L37 |
-| `MAX_FACTS_IN_CONTEXT` | `—` | `getattr(settings, 'MEMORY_MAX_FACTS_IN_CONTEXT', 5)` | L40 |
-| `MAX_FACTS_PER_USER` | `—` | `getattr(settings, 'MEMORY_MAX_FACTS_PER_USER', 15)` | L42 |
-| `PERMANENT_FACT_THRESHOLD` | `—` | `getattr(settings, 'MEMORY_PERMANENT_FACT_THRESHOLD', 4)` | L44 |
-| `_ALIAS_BLACKLIST` | `—` | `{'靠邀', '未知', '無住址資訊', '哈哈', '喔喔', '幹', '靠北'}` | L47 |
+| `logger` | `—` | `logging.getLogger(__name__)` | L10 |
+| `UserMemoryStore` | `—` | `dict[str, UserProfile]` | L37 |
+| `RelationshipMemoryStore` | `—` | `dict[str, list[RelationshipFact]]` | L40 |
+| `MAX_FACTS_IN_CONTEXT` | `int` | `getattr(settings, 'MEMORY_MAX_FACTS_IN_CONTEXT', 5)` | L43 |
+| `MAX_FACTS_PER_USER` | `int` | `getattr(settings, 'MEMORY_MAX_FACTS_PER_USER', 15)` | L45 |
+| `PERMANENT_FACT_THRESHOLD` | `int` | `getattr(settings, 'MEMORY_PERMANENT_FACT_THRESHOLD', 4)` | L47 |
+| `_ALIAS_BLACKLIST` | `set[str]` | `{'靠邀', '未知', '無住址資訊', '哈哈', '喔喔', '幹', '靠北', '哎呀', '笑死', '問號', '群友', '群友們', '某群友...` | L50 |
+| `_VALID_CATEGORIES` | `set[str]` | `{'identity', 'interest', 'habit', 'relationship', 'opinion'}` | L58 |
+| `_META_PREFIX_PATTERN` | `re.Pattern[str]` | `re.compile('^(他說\|他表示\|他提到\|他認為\|他覺得\|他常說\|他有提到\|他稱\|發話者說\|發話者表示)[：:，,]?\\s*')` | L198 |
+| `_META_BRACKET_PATTERN` | `re.Pattern[str]` | `re.compile('[\\(（\\[【].*?[\\)）\\]】]')` | L201 |
+| `_META_TAIL_PATTERNS` | `list[re.Pattern[str]]` | `[re.compile('[，,]?\\s*這是.*?(特質\|習慣\|特徵\|核心).*?$'), re.compile('[，,]?\\s*(重複\|強烈).*?$...` | L202 |
 
 
-#### Class `UserFact` ← `TypedDict`  (L14)
+#### Class `UserFact` ← `TypedDict`  (L16)
 
 
-#### Class `UserProfile` ← `TypedDict`  (L20)
+#### Class `UserProfile` ← `TypedDict`  (L23)
 
 
-#### Class `RelationshipFact` ← `TypedDict`  (L25)
+#### Class `RelationshipFact` ← `TypedDict`  (L28)
 
 
 #### Functions
 
-##### `_migrate_fact`  (L53)
+##### `_migrate_fact`  (L66)
 
 ```python
 def _migrate_fact(raw: Any) -> UserFact | None
 ```
 
-> 把舊格式 str 或新格式 dict 統一轉換為 UserFact。
+> 把舊格式 str 或新格式 dict 統一轉換為 UserFact。  \n>   \n>     Args:  \n>         raw: 原始事實資料（str 或 dict）。  \n>   \n>     Returns:  \n>         標準化後的 UserFact 物件，若無效則回傳 None。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `raw` | `Any` | `—` |
 
-##### `make_fact`  (L76)
+##### `make_fact`  (L101)
 
 ```python
-def make_fact(fact_text: str, importance: int = 3) -> UserFact
+def make_fact(fact_text: str, importance: int = 3, category: str = 'identity') -> UserFact
 ```
 
-> 建立一個新的 UserFact 物件（供其他模組快速建立）。
+> 建立一個新的 UserFact 物件（供其他模組快速建立）。  \n>   \n>     Args:  \n>         fact_text: 事實內容文字。  \n>         importance: 重要性數值（1~5）。  \n>         category: 主題分類（identity/interest/habit/relationship/opinion）。  \n>   \n>     Returns:  \n>         標準化後的 UserFact 物件。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `fact_text` | `str` | `—` |
 | `importance` | `int` | `3` |
+| `category` | `str` | `'identity'` |
 
-##### `load_user_memory`  (L88)
+##### `load_user_memory`  (L126)
 
 ```python
 def load_user_memory(path: Path) -> UserMemoryStore
 ```
 
-> 載入既有的記憶特徵，作為無伺服器 Document Store；自動遷移舊格式。
+> 載入既有的記憶特徵，作為無伺服器 Document Store；自動遷移舊格式。  \n>   \n>     Args:  \n>         path: user_memory.json 儲存路徑。  \n>   \n>     Returns:  \n>         UserMemoryStore 記憶字典。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `path` | `Path` | `—` |
 
-##### `save_user_memory`  (L123)
+##### `save_user_memory`  (L168)
 
 ```python
 def save_user_memory(store: UserMemoryStore, path: Path) -> None
 ```
 
-> 全安全硬覆寫之原子狀態防斷記憶儲存落盤程序。
+> 全安全硬覆寫之原子狀態防斷記憶儲存落盤程序。  \n>   \n>     Args:  \n>         store: 要儲存的 UserMemoryStore 物件。  \n>         path: 目標寫入路徑。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `store` | `UserMemoryStore` | `—` |
 | `path` | `Path` | `—` |
 
-##### `sanitize_aliases`  (L139)
+##### `_clean_fact_core`  (L209)
+
+```python
+def _clean_fact_core(text: str) -> str
+```
+
+> 去除 LLM 常見的後綴元評論、引號、贅詞前綴，萃取核心陳述。  \n>   \n>     Args:  \n>         text: 原始 fact 字串。  \n>   \n>     Returns:  \n>         清洗後的純核心語意字串。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `text` | `str` | `—` |
+
+##### `calculate_fact_similarity`  (L227)
+
+```python
+def calculate_fact_similarity(s1: str, s2: str) -> float
+```
+
+> 計算兩條事實文字的語意重疊度與字元相似度。  \n>   \n>     結合元評論去除、字串包含度、SequenceMatcher 與 2-gram Jaccard 比對。  \n>   \n>     Args:  \n>         s1: 第一條事實字串。  \n>         s2: 第二條事實字串。  \n>   \n>     Returns:  \n>         0.0 ~ 1.0 的相似度分數。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `s1` | `str` | `—` |
+| `s2` | `str` | `—` |
+
+##### `sanitize_aliases`  (L278)
 
 ```python
 def sanitize_aliases(raw_aliases: list[str]) -> list[str]
 ```
 
-> 統一的別名消毒邏輯：排除雪莉、@開頭、佔位符、黑名單、過長字串。
+> 統一的別名消毒邏輯：排除雪莉、@開頭、佔位符、黑名單、過長/過短/格式異常別名。  \n>   \n>     Args:  \n>         raw_aliases: 待過濾的原始別名列表。  \n>   \n>     Returns:  \n>         消毒後的有效別名列表（最多 5 個，去重保持順序）。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `raw_aliases` | `list[str]` | `—` |
 
-##### `sanitize_and_merge_facts`  (L160)
+##### `sanitize_and_merge_facts`  (L318)
 
 ```python
-def sanitize_and_merge_facts(existing_facts: list[UserFact], new_raw_facts: list[Any], max_facts: int = MAX_FACTS_PER_USER) -> tuple[list[UserFact], int]
+def sanitize_and_merge_facts(existing_facts: list[UserFact], new_raw_facts: list[Any], max_facts: int = MAX_FACTS_PER_USER, similarity_threshold: float = 0.65) -> tuple[list[UserFact], int]
 ```
 
-> 統一的 facts 合併邏輯：解析、消毒、去重、排序、截斷。  \n>     回傳 (最終 facts 列表, 本次新增數量)。
+> 統一的 facts 合併邏輯：解析、消毒、語意模糊去重、更新重要度、排序、截斷。  \n>   \n>     當新事實與已有事實高度相似（similarity >= threshold）時，更新舊事實的 importance  \n>     與 updated_at，不新增重複事實。  \n>   \n>     Args:  \n>         existing_facts: 當前已有的事實清單。  \n>         new_raw_facts: 待合併的原始事實資料（str 或 dict 列表）。  \n>         max_facts: 每位使用者保留的事實上限。  \n>         similarity_threshold: 判定為重複事實的相似度閾值（預設 0.65）。  \n>   \n>     Returns:  \n>         (最終 facts 列表, 本次實質新增數量)。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `existing_facts` | `list[UserFact]` | `—` |
 | `new_raw_facts` | `list[Any]` | `—` |
 | `max_facts` | `int` | `MAX_FACTS_PER_USER` |
+| `similarity_threshold` | `float` | `0.65` |
 
-##### `decay_memories`  (L196)
+##### `get_diverse_facts_for_context`  (L393)
+
+```python
+def get_diverse_facts_for_context(facts: list[UserFact], max_count: int = MAX_FACTS_IN_CONTEXT) -> list[UserFact]
+```
+
+> 從使用者的 facts 中挑選兼具重要性與類別多樣性的事實注入 Prompt。  \n>   \n>     避免相同主題或單一類別的事實佔據所有注入名額。  \n>   \n>     Args:  \n>         facts: 該使用者的全部事實清單。  \n>         max_count: 最多選取的事實數量（預設 MAX_FACTS_IN_CONTEXT = 5）。  \n>   \n>     Returns:  \n>         精選後的多樣化事實清單，按 importance 降序排列。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `facts` | `list[UserFact]` | `—` |
+| `max_count` | `int` | `MAX_FACTS_IN_CONTEXT` |
+
+##### `decay_memories`  (L454)
 
 ```python
 def decay_memories(store: UserMemoryStore, reference_time: datetime | None = None) -> int
 ```
 
-> 對所有 importance <= 2 的 facts 降級或移除。回傳移除的數量。  \n>     - imp=1 的暫時狀態直接移除  \n>     - imp=2 降為 imp=1  \n>     - 30 天未更新的 fact 自動降一級
+> 對所有 importance <= 2 的 facts 降級或移除。回傳移除的數量。  \n>   \n>     Args:  \n>         store: UserMemoryStore 物件。  \n>         reference_time: 參考時間點（預設為 UTC 當前時間）。  \n>   \n>     Returns:  \n>         被移除的暫時性事實數量。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
@@ -3473,16 +4136,16 @@ async def setup(bot: commands.Bot)
 
 | 名稱 | 型別 | 值（摘要） | 行號 |
 |---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L14 |
+| `logger` | `—` | `logging.getLogger(__name__)` | L15 |
 
 
-#### Class `MusicHandler` ← `commands.Cog`  (L17)
+#### Class `MusicHandler` ← `commands.Cog`  (L18)
 
 > 音樂處理器，負責語音頻道連接、佇列管理、播放與時間軸控制。
 
 ##### Methods
 
-###### `__init__`  (L20)
+###### `__init__`  (L21)
 
 ```python
 def __init__(self, bot: commands.Bot) -> None
@@ -3495,7 +4158,7 @@ def __init__(self, bot: commands.Bot) -> None
 | `self` | `—` | `—` |
 | `bot` | `commands.Bot` | `—` |
 
-###### `_delete_song_message`  (L40)
+###### `_delete_song_message`  (L41)
 
 ```python
 async def _delete_song_message(self, guild_id: int) -> None
@@ -3508,7 +4171,7 @@ async def _delete_song_message(self, guild_id: int) -> None
 | `self` | `—` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `format_duration`  (L53)
+###### `format_duration`  (L54)
 
 ```python
 def format_duration(self, seconds: Any) -> str
@@ -3521,7 +4184,7 @@ def format_duration(self, seconds: Any) -> str
 | `self` | `—` | `—` |
 | `seconds` | `Any` | `—` |
 
-###### `format_time_axis`  (L75)
+###### `format_time_axis`  (L76)
 
 ```python
 def format_time_axis(self, elapsed_seconds: Any, total_seconds: Any, bar_length: int = 15) -> str
@@ -3536,7 +4199,7 @@ def format_time_axis(self, elapsed_seconds: Any, total_seconds: Any, bar_length:
 | `total_seconds` | `Any` | `—` |
 | `bar_length` | `int` | `15` |
 
-###### `get_elapsed_time`  (L102)
+###### `get_elapsed_time`  (L103)
 
 ```python
 def get_elapsed_time(self, guild_id: int) -> int
@@ -3549,7 +4212,7 @@ def get_elapsed_time(self, guild_id: int) -> int
 | `self` | `—` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `pause_playback`  (L125)
+###### `pause_playback`  (L126)
 
 ```python
 def pause_playback(self, guild_id: int) -> None
@@ -3562,7 +4225,7 @@ def pause_playback(self, guild_id: int) -> None
 | `self` | `—` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `resume_playback`  (L138)
+###### `resume_playback`  (L139)
 
 ```python
 def resume_playback(self, guild_id: int) -> None
@@ -3575,7 +4238,7 @@ def resume_playback(self, guild_id: int) -> None
 | `self` | `—` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `shorten_url`  (L148)
+###### `shorten_url`  (L149)
 
 ```python
 def shorten_url(self, url: str) -> str
@@ -3588,7 +4251,7 @@ def shorten_url(self, url: str) -> str
 | `self` | `—` | `—` |
 | `url` | `str` | `—` |
 
-###### `build_playing_embed`  (L166)
+###### `build_playing_embed`  (L167)
 
 ```python
 def build_playing_embed(self, guild_id: int) -> discord.Embed
@@ -3601,7 +4264,7 @@ def build_playing_embed(self, guild_id: int) -> discord.Embed
 | `self` | `—` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `build_queue_embed`  (L198)
+###### `build_queue_embed`  (L199)
 
 ```python
 def build_queue_embed(self, guild_id: int, page: int = 0, per_page: int = 10) -> discord.Embed
@@ -3616,7 +4279,7 @@ def build_queue_embed(self, guild_id: int, page: int = 0, per_page: int = 10) ->
 | `page` | `int` | `0` |
 | `per_page` | `int` | `10` |
 
-###### `send_queue_embed`  (L252)
+###### `send_queue_embed`  (L253)
 
 ```python
 async def send_queue_embed(self, channel: discord.abc.Messageable, guild_id: int) -> None
@@ -3630,7 +4293,7 @@ async def send_queue_embed(self, channel: discord.abc.Messageable, guild_id: int
 | `channel` | `discord.abc.Messageable` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `_start_progress_updater`  (L270)
+###### `_start_progress_updater`  (L271)
 
 ```python
 def _start_progress_updater(self, guild_id: int) -> None
@@ -3643,7 +4306,7 @@ def _start_progress_updater(self, guild_id: int) -> None
 | `self` | `—` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `_stop_progress_updater`  (L280)
+###### `_stop_progress_updater`  (L281)
 
 ```python
 def _stop_progress_updater(self, guild_id: int) -> None
@@ -3656,7 +4319,7 @@ def _stop_progress_updater(self, guild_id: int) -> None
 | `self` | `—` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `_progress_updater_loop`  (L290)
+###### `_progress_updater_loop`  (L291)
 
 ```python
 async def _progress_updater_loop(self, guild_id: int) -> None
@@ -3669,7 +4332,7 @@ async def _progress_updater_loop(self, guild_id: int) -> None
 | `self` | `—` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `jump_to`  (L323)
+###### `jump_to`  (L324)
 
 ```python
 def jump_to(self, guild_id: int, index: int) -> dict[str, Any] | None
@@ -3683,7 +4346,7 @@ def jump_to(self, guild_id: int, index: int) -> dict[str, Any] | None
 | `guild_id` | `int` | `—` |
 | `index` | `int` | `—` |
 
-###### `clear_queue`  (L342)
+###### `clear_queue`  (L343)
 
 ```python
 def clear_queue(self, guild_id: int) -> int
@@ -3696,7 +4359,7 @@ def clear_queue(self, guild_id: int) -> int
 | `self` | `—` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `headless_play`  (L360)
+###### `headless_play`  (L361)
 
 ```python
 async def headless_play(self, text_channel: discord.TextChannel, voice_channel: discord.VoiceChannel, query: str, insert_at_top: bool = False) -> None
@@ -3712,7 +4375,7 @@ async def headless_play(self, text_channel: discord.TextChannel, voice_channel: 
 | `query` | `str` | `—` |
 | `insert_at_top` | `bool` | `False` |
 
-###### `_play_next`  (L434)
+###### `_play_next`  (L435)
 
 ```python
 def _play_next(self, guild: discord.Guild, text_channel: discord.TextChannel) -> None
@@ -3726,7 +4389,7 @@ def _play_next(self, guild: discord.Guild, text_channel: discord.TextChannel) ->
 | `guild` | `discord.Guild` | `—` |
 | `text_channel` | `discord.TextChannel` | `—` |
 
-###### `play_command`  (L539)
+###### `play_command`  (L542)
 
 ```python
 @app_commands.command(name='play', description='🎵 音樂播放系統 — 選擇操作類型後填入對應內容')
@@ -4147,16 +4810,16 @@ def clear(self) -> None
 
 | 名稱 | 型別 | 值（摘要） | 行號 |
 |---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L11 |
-| `stt_logger` | `—` | `logging.getLogger('stt_thinking')` | L13 |
-| `stt_handler` | `—` | `logging.FileHandler(settings.STT_THINKING_LOG_PATH, encoding='utf-8')` | L15 |
+| `logger` | `—` | `logging.getLogger(__name__)` | L12 |
+| `stt_logger` | `—` | `logging.getLogger('stt_thinking')` | L14 |
+| `stt_handler` | `—` | `logging.FileHandler(settings.STT_THINKING_LOG_PATH, encoding='utf-8')` | L16 |
 
 
-#### Class `SpeechToText` ← `object`  (L20)
+#### Class `SpeechToText` ← `object`  (L21)
 
 ##### Methods
 
-###### `__init__`  (L21)
+###### `__init__`  (L22)
 
 ```python
 def __init__(self) -> None
@@ -4166,7 +4829,7 @@ def __init__(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `transcribe`  (L50)
+###### `transcribe`  (L51)
 
 ```python
 async def transcribe(self, audio_bytes: bytes) -> str
@@ -4177,7 +4840,7 @@ async def transcribe(self, audio_bytes: bytes) -> str
 | `self` | `—` | `—` |
 | `audio_bytes` | `bytes` | `—` |
 
-###### `unload`  (L81)
+###### `unload`  (L85)
 
 ```python
 def unload(self) -> None
@@ -4226,7 +4889,7 @@ async def synthesize(self, text: str) -> bytes
 | `self` | `—` | `—` |
 | `text` | `str` | `—` |
 
-###### `unload`  (L46)
+###### `unload`  (L50)
 
 ```python
 def unload(self) -> None
@@ -4359,11 +5022,11 @@ async def on_submit(self, interaction: discord.Interaction)
 | `interaction` | `discord.Interaction` | `—` |
 
 
-#### Class `ConfigSelect` ← `discord.ui.Select`  (L49)
+#### Class `ConfigSelect` ← `discord.ui.Select`  (L53)
 
 ##### Methods
 
-###### `__init__`  (L50)
+###### `__init__`  (L54)
 
 ```python
 def __init__(self)
@@ -4373,7 +5036,7 @@ def __init__(self)
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `callback`  (L61)
+###### `callback`  (L65)
 
 ```python
 async def callback(self, interaction: discord.Interaction)
@@ -4385,11 +5048,11 @@ async def callback(self, interaction: discord.Interaction)
 | `interaction` | `discord.Interaction` | `—` |
 
 
-#### Class `ConfigView` ← `discord.ui.View`  (L66)
+#### Class `ConfigView` ← `discord.ui.View`  (L70)
 
 ##### Methods
 
-###### `__init__`  (L67)
+###### `__init__`  (L71)
 
 ```python
 def __init__(self)
@@ -4400,11 +5063,11 @@ def __init__(self)
 | `self` | `—` | `—` |
 
 
-#### Class `MemoryControlView` ← `discord.ui.View`  (L71)
+#### Class `MemoryControlView` ← `discord.ui.View`  (L75)
 
 ##### Methods
 
-###### `__init__`  (L72)
+###### `__init__`  (L76)
 
 ```python
 def __init__(self, target_user_id: int)
@@ -4415,7 +5078,7 @@ def __init__(self, target_user_id: int)
 | `self` | `—` | `—` |
 | `target_user_id` | `int` | `—` |
 
-###### `correct_button`  (L77)
+###### `correct_button`  (L81)
 
 ```python
 @discord.ui.button(label='✅ 沒錯，很準', style=discord.ButtonStyle.success)
@@ -4428,7 +5091,7 @@ async def correct_button(self, interaction: discord.Interaction, button: discord
 | `interaction` | `discord.Interaction` | `—` |
 | `button` | `discord.ui.Button` | `—` |
 
-###### `incorrect_button`  (L84)
+###### `incorrect_button`  (L88)
 
 ```python
 @discord.ui.button(label='❌ 記錯了，清除記憶', style=discord.ButtonStyle.danger)
@@ -4442,11 +5105,11 @@ async def incorrect_button(self, interaction: discord.Interaction, button: disco
 | `button` | `discord.ui.Button` | `—` |
 
 
-#### Class `AdminCog` ← `commands.Cog`  (L100)
+#### Class `AdminCog` ← `commands.Cog`  (L104)
 
 ##### Methods
 
-###### `__init__`  (L101)
+###### `__init__`  (L105)
 
 ```python
 def __init__(self, bot: commands.Bot) -> None
@@ -4457,7 +5120,7 @@ def __init__(self, bot: commands.Bot) -> None
 | `self` | `—` | `—` |
 | `bot` | `commands.Bot` | `—` |
 
-###### `_is_admin`  (L104)
+###### `_is_admin`  (L108)
 
 ```python
 def _is_admin(self, interaction: discord.Interaction) -> bool
@@ -4468,7 +5131,7 @@ def _is_admin(self, interaction: discord.Interaction) -> bool
 | `self` | `—` | `—` |
 | `interaction` | `discord.Interaction` | `—` |
 
-###### `_is_super_admin`  (L111)
+###### `_is_super_admin`  (L115)
 
 ```python
 def _is_super_admin(self, interaction: discord.Interaction) -> bool
@@ -4479,7 +5142,7 @@ def _is_super_admin(self, interaction: discord.Interaction) -> bool
 | `self` | `—` | `—` |
 | `interaction` | `discord.Interaction` | `—` |
 
-###### `vibe_show`  (L117)
+###### `vibe_show`  (L121)
 
 ```python
 @app_commands.command(name='vibe_show', description='顯示目前的氛圍記憶 (僅限自己可見)')
@@ -4492,7 +5155,7 @@ async def vibe_show(self, interaction: discord.Interaction, channel: discord.Tex
 | `interaction` | `discord.Interaction` | `—` |
 | `channel` | `discord.TextChannel` | `None` |
 
-###### `vibe_clear`  (L131)
+###### `vibe_clear`  (L135)
 
 ```python
 @app_commands.command(name='vibe_clear', description='清除頻道氛圍記憶')
@@ -4505,7 +5168,7 @@ async def vibe_clear(self, interaction: discord.Interaction, channel: discord.Te
 | `interaction` | `discord.Interaction` | `—` |
 | `channel` | `discord.TextChannel` | `None` |
 
-###### `memory_show`  (L152)
+###### `memory_show`  (L156)
 
 ```python
 @app_commands.command(name='memory_show', description='顯示使用者的長期記憶 (僅限自己可見)')
@@ -4518,7 +5181,7 @@ async def memory_show(self, interaction: discord.Interaction, user: discord.Memb
 | `interaction` | `discord.Interaction` | `—` |
 | `user` | `discord.Member` | `—` |
 
-###### `memory_clear`  (L166)
+###### `memory_clear`  (L170)
 
 ```python
 @app_commands.command(name='memory_clear', description='清除使用者的長期記憶')
@@ -4531,7 +5194,7 @@ async def memory_clear(self, interaction: discord.Interaction, user: discord.Mem
 | `interaction` | `discord.Interaction` | `—` |
 | `user` | `discord.Member` | `—` |
 
-###### `reload_cog`  (L186)
+###### `reload_cog`  (L190)
 
 ```python
 @app_commands.command(name='reload', description='重新加載 Cog')
@@ -4544,7 +5207,7 @@ async def reload_cog(self, interaction: discord.Interaction, cog_name: str) -> N
 | `interaction` | `discord.Interaction` | `—` |
 | `cog_name` | `str` | `—` |
 
-###### `restart`  (L197)
+###### `restart`  (L201)
 
 ```python
 @app_commands.command(name='restart', description='重新加載指定模組或全部模組 (熱重啟)')
@@ -4557,7 +5220,7 @@ async def restart(self, interaction: discord.Interaction, module_name: str = 'al
 | `interaction` | `discord.Interaction` | `—` |
 | `module_name` | `str` | `'all'` |
 
-###### `config_panel`  (L244)
+###### `config_panel`  (L248)
 
 ```python
 @app_commands.command(name='config', description='伺服器端設定面板 (僅限管理員)')
@@ -4569,7 +5232,7 @@ async def config_panel(self, interaction: discord.Interaction) -> None
 | `self` | `—` | `—` |
 | `interaction` | `discord.Interaction` | `—` |
 
-###### `stats_command`  (L251)
+###### `stats_command`  (L255)
 
 ```python
 @app_commands.command(name='stats', description='顯示系統詳細統計儀表板 (公開)')

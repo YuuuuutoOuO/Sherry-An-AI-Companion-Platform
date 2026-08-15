@@ -271,6 +271,34 @@ def _chunk_message(text: str, max_length: int = 1900) -> list[str]:
     return [c for c in chunks if c]
 
 
+async def remove_hourglass_reaction(
+    target: discord.Message | Any,
+    bot_user: discord.User | discord.Member | None = None,
+) -> None:
+    """安全移除訊息上的 ⏳ 沙漏反應。"""
+    if not hasattr(target, "remove_reaction"):
+        return
+    try:
+        me = None
+        guild = getattr(target, "guild", None)
+        if guild and getattr(guild, "me", None):
+            me = guild.me
+        elif bot_user:
+            me = bot_user
+
+        if me:
+            await target.remove_reaction("⏳", me)
+        else:
+            for reaction in getattr(target, "reactions", []):
+                if str(reaction.emoji) == "⏳" and getattr(reaction, "me", False):
+                    state = getattr(target, "_state", None)
+                    current_user = getattr(state, "user", None) if state else None
+                    if current_user:
+                        await target.remove_reaction("⏳", current_user)
+    except Exception as e:
+        logger.debug("utils: failed to remove hourglass reaction: %s", e)
+
+
 async def simulate_typing_and_send(
     target: discord.Message | discord.TextChannel | Any,
     reply: str,
@@ -283,14 +311,6 @@ async def simulate_typing_and_send(
 ) -> None:
     is_message = isinstance(target, discord.Message) or hasattr(target, "reply")
     channel = target.channel if is_message else target
-
-    if is_message:
-        try:
-            guild = getattr(target, "guild", None)
-            if guild and getattr(guild, "me", None):
-                await target.remove_reaction("⏳", guild.me)
-        except Exception:
-            pass
 
     final_reply, thought_log = _process_micro_cot_extraction(
         reply, prompt=prompt, intent=intent_name,
@@ -336,6 +356,9 @@ async def simulate_typing_and_send(
                 pass
     except discord.HTTPException as exc:
         logger.error("utils: failed to send reply: %s (length: %d)", exc, len(final_reply))
+    finally:
+        if is_message:
+            await remove_hourglass_reaction(target)
 
 
 async def simulate_typing_and_send_to_channel(

@@ -25,18 +25,23 @@ except ImportError:
     ResourceExhausted = Exception
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 class AIAnalyst:
-    def __init__(self):
+    def __init__(self) -> None:
         if _GENAI_AVAILABLE:
             try:
                 self.model = genai.GenerativeModel("gemini-2.0-flash-lite")
-                print("✅ [market_plugin] Gemini AI 模型已初始化")
+                logger.info("[market_plugin] Gemini AI 模型已初始化")
             except Exception as e:
-                print(f"⚠️ [market_plugin] Gemini 初始化失敗: {e}")
+                logger.warning("[market_plugin] Gemini 初始化失敗: %s", e)
                 self.model = None
         else:
             self.model = None
-            print("⚠️ [market_plugin] GEMINI_API_KEY 未設定，AI 分析功能將受限")
+            logger.warning("[market_plugin] GEMINI_API_KEY 未設定，AI 分析功能將受限")
 
     # ------------------------------------------------------------------
     # 工具函式

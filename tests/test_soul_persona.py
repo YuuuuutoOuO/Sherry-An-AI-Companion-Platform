@@ -34,20 +34,30 @@ def test_default_soul_load():
 
 def test_channel_soul_map():
     """測試頻道映照切換至 serious 人設。"""
+    if hasattr(_load_soul_persona, "cache_clear"):
+        _load_soul_persona.cache_clear()
     settings.CHANNEL_SOUL_MAP[99999] = "sherry_serious.md"
-    head_persona, _tail = build_dynamic_persona("這問題怎麼解", "CHAT", channel_id=99999)
-    assert "嚴肅特派偵探模式" in head_persona or "專業問題" in head_persona
+    try:
+        head_persona, _tail = build_dynamic_persona("這問題怎麼解", "CHAT", channel_id=99999)
+        assert "嚴肅特派偵探模式" in head_persona or "專業問題" in head_persona
+    finally:
+        if hasattr(_load_soul_persona, "cache_clear"):
+            _load_soul_persona.cache_clear()
 
 
 def test_fallback_on_missing_file():
     """測試當指定 soul 檔案不存在時回退至 CORE_PERSONA。"""
     original_default = settings.DEFAULT_SOUL_PATH
+    if hasattr(_load_soul_persona, "cache_clear"):
+        _load_soul_persona.cache_clear()
     try:
         settings.DEFAULT_SOUL_PATH = settings.BASE_DIR / "soul" / "non_existent_soul.md"
         loaded = _load_soul_persona()
         assert loaded == settings.CORE_PERSONA
     finally:
         settings.DEFAULT_SOUL_PATH = original_default
+        if hasattr(_load_soul_persona, "cache_clear"):
+            _load_soul_persona.cache_clear()
 
 
 def test_listing_challenge_lore():

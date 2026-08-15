@@ -96,8 +96,6 @@ class OllamaClient:
     def _claude_api_key(self) -> str:
         return self._custom_claude_api_key or getattr(settings, "CLAUDE_API_KEY", "")
 
-        self._session: aiohttp.ClientSession | None = None
-
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=settings.OLLAMA_TIMEOUT)
@@ -145,6 +143,7 @@ class OllamaClient:
         user_prompt: str,
         backend_label: str,
         images: list[str] | None = None,
+        temperature: float | None = None,
     ) -> str:
         """Send a chat completion request to any OpenAI-compatible endpoint."""
         headers: dict[str, str] = {"Content-Type": "application/json"}
@@ -168,18 +167,20 @@ class OllamaClient:
                 {"role": "user", "content": user_prompt},
             ]
 
+        target_temp = temperature if temperature is not None else getattr(settings, "LLM_TEMPERATURE", 0.85)
+
         payload: dict[str, Any] = {
             "model": actual_model,
             "messages": messages,
             "stream": False,
             "max_tokens": settings.LLM_MAX_OUTPUT_TOKENS,
-            "temperature": getattr(settings, "LLM_TEMPERATURE", 0.85),
+            "temperature": target_temp,
             "presence_penalty": getattr(settings, "LLM_PRESENCE_PENALTY", 0.6),
             "frequency_penalty": getattr(settings, "LLM_FREQUENCY_PENALTY", 0.6),
         }
 
         url = f"{base_url}/chat/completions"
-        logger.debug("%s request → model=%s url=%s", backend_label, actual_model, url)
+        logger.debug("%s request → model=%s url=%s temp=%.2f", backend_label, actual_model, url, target_temp)
 
         async with session.post(url, json=payload, headers=headers) as resp:
             if resp.status >= 400:
@@ -202,6 +203,7 @@ class OllamaClient:
         actual_model: str,
         system_prompt: str,
         user_prompt: str,
+        temperature: float | None = None,
     ) -> str:
         """Send a request to Anthropic Claude Messages API."""
         headers: dict[str, str] = {
@@ -210,6 +212,8 @@ class OllamaClient:
             "anthropic-version": "2023-06-01",
         }
 
+        target_temp = temperature if temperature is not None else getattr(settings, "LLM_TEMPERATURE", 0.85)
+
         payload: dict[str, Any] = {
             "model": actual_model,
             "system": system_prompt,
@@ -217,11 +221,11 @@ class OllamaClient:
                 {"role": "user", "content": user_prompt},
             ],
             "max_tokens": settings.LLM_MAX_OUTPUT_TOKENS,
-            "temperature": getattr(settings, "LLM_TEMPERATURE", 0.85),
+            "temperature": target_temp,
         }
 
         url = f"{self._claude_base_url}/messages"
-        logger.debug("Claude request → model=%s url=%s", actual_model, url)
+        logger.debug("Claude request → model=%s url=%s temp=%.2f", actual_model, url, target_temp)
 
         async with session.post(url, json=payload, headers=headers) as resp:
             resp.raise_for_status()
@@ -246,11 +250,13 @@ class OllamaClient:
         system_prompt: str,
         user_prompt: str,
         images: list[str] | None = None,
+        temperature: float | None = None,
     ) -> str:
         """Route a chat request to the correct backend based on model prefix."""
         session = await self._get_session()
 
         backend, actual_model = self._parse_model(model)
+        target_temp = temperature if temperature is not None else getattr(settings, "LLM_TEMPERATURE", 0.85)
 
         # --- Ollama native API ---
         if backend == "ollama":
@@ -270,13 +276,13 @@ class OllamaClient:
                     "num_ctx": settings.LLM_MAX_CONTEXT_TOKENS,
                     "num_predict": settings.LLM_MAX_OUTPUT_TOKENS,
                     "num_batch": getattr(settings, "LLM_NUM_BATCH", 2048),
-                    "temperature": getattr(settings, "LLM_TEMPERATURE", 0.85),
+                    "temperature": target_temp,
                     "presence_penalty": getattr(settings, "LLM_PRESENCE_PENALTY", 0.6),
                     "frequency_penalty": getattr(settings, "LLM_FREQUENCY_PENALTY", 0.6),
                 },
             }
             url = f"{self._base_url}/api/chat"
-            logger.debug("Ollama request → model=%s url=%s", actual_model, url)
+            logger.debug("Ollama request → model=%s url=%s temp=%.2f", actual_model, url, target_temp)
 
             async with session.post(url, json=payload) as resp:
                 if resp.status >= 400:
@@ -314,6 +320,7 @@ class OllamaClient:
                 user_prompt=user_prompt,
                 backend_label="LMS",
                 images=images,
+                temperature=target_temp,
             )
 
         # --- vLLM (High-Performance Engine, OpenAI-compatible) ---
@@ -327,6 +334,7 @@ class OllamaClient:
                 user_prompt=user_prompt,
                 backend_label="vLLM",
                 images=images,
+                temperature=target_temp,
             )
 
         # --- OpenAI ChatGPT ---
@@ -340,6 +348,7 @@ class OllamaClient:
                 user_prompt=user_prompt,
                 backend_label="OpenAI",
                 images=images,
+                temperature=target_temp,
             )
 
         # --- DeepSeek ---
@@ -353,6 +362,7 @@ class OllamaClient:
                 user_prompt=user_prompt,
                 backend_label="DeepSeek",
                 images=images,
+                temperature=target_temp,
             )
 
         # --- Google Gemini (OpenAI-compatible endpoint) ---
@@ -366,6 +376,7 @@ class OllamaClient:
                 user_prompt=user_prompt,
                 backend_label="Gemini",
                 images=images,
+                temperature=target_temp,
             )
 
         # --- Anthropic Claude (Messages API) ---
@@ -375,6 +386,7 @@ class OllamaClient:
                 actual_model=actual_model,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
+                temperature=target_temp,
             )
 
         # Should never reach here

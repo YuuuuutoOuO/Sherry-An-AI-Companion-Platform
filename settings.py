@@ -79,7 +79,7 @@ FFMPEG = str(BASE_DIR / 'ffmpeg')
 # ---------------------------------------------------------------------------
 # Discord
 # ---------------------------------------------------------------------------
-DISCORD_BOT_TOKEN: str = os.environ["DISCORD_BOT_TOKEN"]
+DISCORD_BOT_TOKEN: str = os.getenv("DISCORD_BOT_TOKEN", "")
 ADMIN_ROLE_IDS: list[int] = []
 ADMIN_USER_IDS: list[int] = [425311733503229972]
 NSFW_ALLOWED_CHANNEL_IDS: list[int] = []
@@ -136,6 +136,34 @@ VISION_MODEL: str = "ollama:minicpm-v"
 CLOUD_SEARCH_MODEL: str = "deepseek:deepseek-v4-flash"
 
 OLLAMA_TIMEOUT: int = 120
+
+# ---------------------------------------------------------------------------
+# 代理人調度與多工架構設定 (Agent Dispatcher Settings)
+# ---------------------------------------------------------------------------
+# 任務調度模式：PARALLEL (高效能單次並行調度，預設) | REACT (經典多步驟 ReAct 迴圈) | CLASSIC (傳統單意圖快路徑)
+AGENT_DISPATCH_MODE: str = os.getenv("AGENT_DISPATCH_MODE", "PARALLEL").upper()
+
+# 行為自適應對話抑制開關：若為 True，當發動的工具全為 DIRECT_UI (如點歌/搜圖/畫圖) 且使用者無聊天需求時，動作完成即刻結束，不產生多餘廢話文字
+ACTION_EARLY_TERMINATION_ENABLED: bool = os.getenv("ACTION_EARLY_TERMINATION_ENABLED", "True").lower() in ("true", "1", "yes")
+
+# 並行調度模型（專門用於單次推論任務拆解與對話抑制標記）
+PARALLEL_PLANNER_MODEL: str = os.getenv("PARALLEL_PLANNER_MODEL", CLASSIFIER_MODEL)
+PARALLEL_MAX_TASKS: int = 5
+PARALLEL_STEP_TIMEOUT: float = 30.0
+
+# ReAct 多步驟 Agent 推理模型（「思考→行動→觀察」迭代迴圈，保留向下相容）
+# 預設繼承 NOMORAL_MODEL（無道德限制模型），可用 .env 中 REACT_MODEL 覆寫
+REACT_MODEL: str = os.getenv("REACT_MODEL", NOMORAL_MODEL)
+
+# ReAct 多步驟 Agent 開關（保留向下相容）
+REACT_ENABLED: bool = os.getenv("REACT_ENABLED", "True").lower() == "true"
+
+# ReAct 迴圈控制參數
+REACT_MAX_STEPS: int = 5                    # 最多步數（日常聊天 1 步即收斂）
+REACT_STEP_TIMEOUT: float = 60.0            # 單步推理最長秒數（給予充分 prefill 時間）
+REACT_MAX_OBSERVATION_LENGTH: int = 1200    # 單次 Observation 截斷上限
+REACT_MAX_TRANSCRIPT_CHARS: int = 6000      # 總對話历史截斷防爆上限
+
 LLM_MAX_CONTEXT_TOKENS: int = 8192
 LLM_MAX_OUTPUT_TOKENS: int = 1024
 
@@ -295,7 +323,8 @@ MICRO_COT_ENABLED: bool = True
 # Daily Chat Log + Nightly Memory Digest
 # ---------------------------------------------------------------------------
 CHAT_LOG_DIR: Path = DATA_DIR / "chat_logs"          # 每日聊天記錄 JSONL 目錄
-NIGHTLY_DIGEST_HOUR: int = 3                          # 深夜整合觸發小時（台灣時間 UTC+8）
+NIGHTLY_DIGEST_HOUR: int = 4                          # 深夜整合觸發小時（台灣時間 UTC+8）
+NIGHTLY_DIGEST_MINUTE: int = 30                        # 深夜整合觸發分鐘（台灣時間 UTC+8，預設 04:30）
 NIGHTLY_DIGEST_MODEL: str = PRIMARY_MODEL             # 深夜整合使用較強模型
 NIGHTLY_MAX_MSGS_PER_USER: int = 200                  # 每位使用者最多送入 LLM 的訊息數
 
@@ -316,7 +345,8 @@ WEB_UI_HTTP_TIMEOUT: float = 5.0
 YOUTUBE_COOKIES_PATH: Path = DATA_DIR / "cookies.txt"
 MUSIC_PLAYLIST_MAX_ITEMS: int = 100
 MUSIC_FFMPEG_BEFORE_OPTIONS: str = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -loglevel error"
-MUSIC_FFMPEG_OPTIONS: str = '-vn -af "loudnorm=I=-14:LRA=11:TP=-1.5"'
+MUSIC_FFMPEG_OPTIONS: str = '-vn -af "loudnorm=I=-9:LRA=11:TP=-1.0"'
+MUSIC_DEFAULT_VOLUME: float = 1.2
 MUSIC_QUEUE_VIEW_TIMEOUT: int = 180
 
 VOICE_STT_REPO_ID: str = "nvidia/nemotron-3.5-asr-streaming-0.6b"
@@ -357,7 +387,7 @@ BOT_BRAIN_RETRY_DELAY: float = 2.0
 HEARTBEAT_CHECK_INTERVAL_MINUTES: int = 30
 HEARTBEAT_CONDITION_START_HOUR: int = 9
 HEARTBEAT_CONDITION_END_HOUR: int = 22
-HEARTBEAT_CONDITION_MIN_GAP_SECONDS: int = 7200
+HEARTBEAT_CONDITION_MIN_GAP_SECONDS: int = 14400
 
 # ---------------------------------------------------------------------------
 # External APIs, Search & User-Agent
@@ -515,7 +545,35 @@ SETTINGS_META: dict[str, dict] = {
         "type": "model",
         "category": "模型設定",
     },
-    # === LLM 參數 ===
+    "AGENT_DISPATCH_MODE": {
+        "label": "代理人調度模式 (Agent Dispatch Mode)",
+        "description": "選擇訊息解析與工具調度核心：PARALLEL（高效能單次推論並行調度，秒級響應，推薦）、REACT（多步驟思考迭代迴圈）、CLASSIC（傳統單意圖快路徑）。",
+        "type": "select",
+        "options": [
+            {"value": "PARALLEL", "label": "🚀 高效能並行調度 (Parallel) - 推薦"},
+            {"value": "REACT", "label": "🔄 經典多步驟 ReAct (Sequential)"},
+            {"value": "CLASSIC", "label": "⚡ 傳統單意圖快路徑 (Classic)"},
+        ],
+        "category": "模型設定",
+    },
+    "ACTION_EARLY_TERMINATION_ENABLED": {
+        "label": "行為自適應對話抑制 (Action Early Termination)",
+        "description": "開啟 (True) = 當發動的工具全為自帶 UI 渲染（如點歌、搜圖、畫圖）且無聊天需求時，動作完成即刻收工，不發送多餘文字；關閉 (False) = 動作完成後仍強制由主力模型生成文字閒聊回覆。",
+        "type": "bool",
+        "category": "模型設定",
+    },
+    "PARALLEL_PLANNER_MODEL": {
+        "label": "並行調度模型 (Parallel Planner Model)",
+        "description": "用於 Parallel Agent 單次任務拆解與對話抑制標記的輕量模型。",
+        "type": "model",
+        "category": "模型設定",
+    },
+    "REACT_MODEL": {
+        "label": "ReAct 任務拆解模型 (ReAct Planner Model)",
+        "description": "ReAct 多步驟 Agent 用於意圖分析與工具發動的規劃模型（負責「思考→行動→觀察」步驟調度）。最終對話生成會由 PRIMARY_MODEL (主力模型) 進行發言合成。",
+        "type": "model",
+        "category": "模型設定",
+    },
     "OLLAMA_TIMEOUT": {
         "label": "Ollama 逾時秒數 (Timeout)",
         "description": "等待 Ollama 回應的最長秒數，較大模型需要更長時間。建議 60–180。",
@@ -935,7 +993,7 @@ SETTINGS_META: dict[str, dict] = {
     },
     "HEARTBEAT_CONDITION_MIN_GAP_SECONDS": {
         "label": "心跳兩次主動發言最短間隔（秒）",
-        "description": "兩次主動閒聊之間的最短間隔，預設 7200 秒（2 小時），避免洗版。",
+        "description": "兩次主動閒聊之間的最短間隔，預設 14400 秒（4 小時），避免洗版。",
         "type": "int",
         "min": 600,
         "max": 86400,
@@ -1066,6 +1124,15 @@ SETTINGS_META: dict[str, dict] = {
         "label": "音樂 FFmpeg 轉碼參數",
         "description": "播放 YouTube 或音訊串流時傳遞給 FFmpeg 的音量與標準化參數。",
         "type": "str",
+        "category": "音樂播放與隊列",
+    },
+    "MUSIC_DEFAULT_VOLUME": {
+        "label": "音樂預設播放音量倍率",
+        "description": "傳送至 Discord 語音頻道時的 PCM 數位音量增益倍率（預設 1.2 倍）。",
+        "type": "float",
+        "min": 0.1,
+        "max": 3.0,
+        "step": 0.1,
         "category": "音樂播放與隊列",
     },
     "MUSIC_FFMPEG_BEFORE_OPTIONS": {
@@ -1496,8 +1563,8 @@ def get_editable_settings() -> dict:
             "type": meta.get("type", type(v).__name__),
             "category": meta.get("category", "其他"),
         }
-        # 選擇性加入數值約束
-        for constraint in ("min", "max", "step"):
+        # 選擇性加入數值約束與下拉選單選項
+        for constraint in ("min", "max", "step", "options"):
             if constraint in meta:
                 entry[constraint] = meta[constraint]
 

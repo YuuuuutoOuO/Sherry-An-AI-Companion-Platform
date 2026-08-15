@@ -264,6 +264,7 @@ class ScheduleTool(BaseTool):
         user_query: str,
         vibe_snippet: str,
         full_context: str,
+        **kwargs: object,
     ) -> None:
         brain: BotBrain | None = bot.get_cog("BotBrain")
         if not brain:

@@ -6,6 +6,7 @@ handlers/social/tools/chat_tools.py
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 import re
@@ -26,12 +27,10 @@ logger = logging.getLogger(__name__)
 def _should_trigger_search(query: str) -> bool:
     """判斷使用者輸入是否需要觸發即時網路/實體檢索。
 
-    ⚠️ 注意：\b\d{4}\b 會誤觸任何 4 位數（含年份如 2026），已移除。
-    台股代碼改以 \b[02-9]\d{3}\b 識別（排除以 1 開頭的年份類數字），
-    並要求同時出現股票/行情相關關鍵字才觸發。
+    ⚠️ 注意：排除一般「介紹」（避免誤觸自我介紹），聚焦真實時事、新聞與行情查詢。
     """
     pattern = (
-        r"(0050|美伊|戰爭|新聞|最新|時事|狀況|進展|趨勢|評價|怎麼樣|現況|發展|介紹|資訊|幫.*查|搜尋|查詢|怎麼看|是什麼|價格|指數|股票)"
+        r"(0050|美伊|戰爭|新聞|最新|時事|狀況|進展|趨勢|評價|怎麼樣|現況|發展|資訊|幫.*查|搜尋|查詢|怎麼看|是什麼|價格|指數|股票)"
     )
     if bool(re.search(pattern, query, re.IGNORECASE)):
         return True
@@ -74,6 +73,7 @@ class ChatTool(BaseTool):
         user_query: str,
         vibe_snippet: str,
         full_context: str,
+        **kwargs: object,
     ) -> None:
         brain: BotBrain | None = bot.get_cog("BotBrain")
         if not brain:
@@ -162,21 +162,30 @@ class ChatTool(BaseTool):
         import time
         start_time = time.time()
 
+        loop = asyncio.get_running_loop()
+        reply_future: asyncio.Future[None] = loop.create_future()
+
         async def _on_reply(reply: str) -> None:
-            elapsed_ms = int((time.time() - start_time) * 1000)
-            final_reply = reply.strip()
-            if ref_link and "http" not in final_reply:
-                final_reply += f"\n\n📂 **參考來源**：\n🔗 <{ref_link}>"
-            await simulate_typing_and_send(
-                message,
-                final_reply,
-                intent_name=self.intent_name,
-                prompt=user_query,
-                model=settings.PRIMARY_MODEL,
-                system_prompt=sys_prompt,
-                user_prompt=user_instruct,
-                latency_ms=elapsed_ms,
-            )
+            try:
+                elapsed_ms = int((time.time() - start_time) * 1000)
+                final_reply = reply.strip()
+                if ref_link and "http" not in final_reply:
+                    final_reply += f"\n\n📂 **參考來源**：\n🔗 <{ref_link}>"
+                await simulate_typing_and_send(
+                    message,
+                    final_reply,
+                    intent_name=self.intent_name,
+                    prompt=user_query,
+                    model=settings.PRIMARY_MODEL,
+                    system_prompt=sys_prompt,
+                    user_prompt=user_instruct,
+                    latency_ms=elapsed_ms,
+                )
+            except Exception as e:
+                logger.error("ChatTool: _on_reply 處理失敗: %s", e, exc_info=True)
+            finally:
+                if not reply_future.done():
+                    reply_future.set_result(None)
 
         task = InferenceTask(
             priority=settings.PRIORITY_TAG_RESPONSE,
@@ -187,3 +196,8 @@ class ChatTool(BaseTool):
             task_id=f"tool-chat-{message.id}",
         )
         await brain.enqueue_task(task)
+
+        try:
+            await asyncio.wait_for(reply_future, timeout=float(settings.OLLAMA_TIMEOUT))
+        except asyncio.TimeoutError:
+            logger.warning("ChatTool: 等待回覆發送逾時 (%ds)", settings.OLLAMA_TIMEOUT)

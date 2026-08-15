@@ -8,17 +8,21 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=7">
+    <link rel="stylesheet" href="/static/style.css?v=12">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <div class="app-layout">
         <!-- ===== SIDEBAR ===== -->
         <aside class="sidebar">
-            <div class="sidebar-brand">
-                <div class="brand-icon">✦</div>
+            <div class="sidebar-brand" style="display: flex; align-items: center; gap: 12px; padding: 18px 20px; border-bottom: 1px solid var(--border);">
+                <div style="position: relative; width: 42px; height: 42px; flex-shrink: 0;">
+                    <img src="/static/sherry_avatar.png" alt="Sherry" style="width: 42px; height: 42px; border-radius: 50%; object-fit: cover; object-position: top center; border: 2px solid #fbbf24; box-shadow: 0 0 12px rgba(251, 191, 36, 0.45);">
+                    <span style="position: absolute; bottom: -2px; right: -2px; width: 12px; height: 12px; background: #00ff88; border: 2px solid #0b0f19; border-radius: 50%;" title="Sherry AI Active"></span>
+                </div>
                 <div class="brand-text">
-                    <span class="brand-name">Sherry</span>
-                    <span class="brand-sub">Console v2</span>
+                    <span class="brand-name" style="font-weight: 800; color: #38bdf8; font-size: 1.15rem; letter-spacing: 0.5px;">Sherry 🍊</span>
+                    <span class="brand-sub" style="color: #fbbf24; font-size: 0.75rem; font-weight: 600; display: block;">名偵探 Console</span>
                 </div>
             </div>
             <nav class="sidebar-nav">
@@ -49,6 +53,10 @@
                 <button class="nav-btn" id="nav-bot-status" onclick="switchView('bot-status')">
                     <span class="nav-icon">🎵</span>
                     <span>語音與音樂監控</span>
+                </button>
+                <button class="nav-btn" id="nav-stock-trader" onclick="switchView('stock-trader')">
+                    <span class="nav-icon">📈</span>
+                    <span>雪莉虛擬炒股</span>
                 </button>
                 <button class="nav-btn admin-only" id="nav-audit" onclick="switchView('audit')">
                     <span class="nav-icon">🛡️</span>
@@ -118,17 +126,26 @@
                     <button class="icon-btn" title="刷新語音與音樂動態" onclick="loadBotStatus()">↻</button>
                     <span style="color: var(--text-muted); font-size: 0.85rem; margin-left: 8px;">3 秒自動刷新</span>
                 </div>
+                <div class="topbar-right hidden" id="stock-trader-toolbar">
+                    <button class="btn-update admin-only" onclick="refreshStockTraderPrices()" title="連線 yfinance 刷新美股最新行情與持倉損益" style="background: linear-gradient(135deg, rgba(0, 229, 255, 0.2), rgba(0, 184, 212, 0.3)); border: 1px solid #00e5ff; color: #00e5ff; font-size: 0.82rem; padding: 6px 12px;">
+                        <span>🔄</span> 刷新行情損益
+                    </button>
+                    <button class="btn-update admin-only" onclick="triggerStockTraderEval()" title="手動觸發雪莉美股看盤與量化下單評估" style="font-size: 0.82rem; padding: 6px 12px;">
+                        <span>🤖</span> 手動評估看盤
+                    </button>
+                    <button class="icon-btn" title="重新整理炒股數據" onclick="loadStockTraderData()">↻</button>
+                </div>
                 <div class="topbar-right hidden" id="audit-toolbar">
                     <button class="icon-btn" title="重新整理審計紀錄" onclick="loadAuditLogs()">↻</button>
                 </div>
                 <div class="topbar-right hidden" id="mod-manager-toolbar">
-                    <button class="icon-btn" title="重新整理模組清單" onclick="loadModManager()">↻</button>
-                    <button class="btn-restart admin-only" onclick="requestRestart()" style="font-size:0.82rem; padding:6px 12px;">
+                    <button class="btn-restart admin-only" id="mod-restart-btn" onclick="requestRestart()" style="font-size:0.82rem; padding:6px 12px;">
                         <span>🔄</span> 重啟雪莉
                     </button>
-                    <button class="btn-stop admin-only" onclick="requestStop()" style="font-size:0.82rem; padding:6px 12px;">
+                    <button class="btn-stop admin-only" id="mod-stop-btn" onclick="requestStop()" style="font-size:0.82rem; padding:6px 12px;">
                         <span>🛑</span> 關閉雪莉
                     </button>
+                    <button class="icon-btn" title="重新整理模組清單" onclick="loadModManager()">↻</button>
                 </div>
                 <div class="topbar-right hidden" id="settings-toolbar">
                     <button class="btn-save admin-only" id="save-btn" onclick="saveSettings()">
@@ -620,21 +637,13 @@
                     <div class="mod-manager-banner">
                         <div>
                             <h2 class="mod-manager-banner-title">🧩 功能模組管理中心</h2>
-                            <p class="mod-manager-banner-sub">管理雪莉的所有可插拔功能模組，開啟或停用後需重啟雪莉生效。</p>
-                        </div>
-                        <div style="display:flex; gap:10px; flex-wrap:wrap;">
-                            <button class="btn-restart admin-only" onclick="requestRestart()" id="mod-restart-btn">
-                                🔄 重啟雪莉 (Apply Changes)
-                            </button>
-                            <button class="btn-stop admin-only" onclick="requestStop()" id="mod-stop-btn">
-                                🛑 關閉雪莉
-                            </button>
+                            <p class="mod-manager-banner-sub">管理雪莉的所有可插拔功能模組，開啟或停用後請點擊上方頂欄按鈕重啟雪莉生效。</p>
                         </div>
                     </div>
 
                     <!-- Notice Bar -->
                     <div class="mod-notice-bar" id="mod-notice-bar" style="display:none;">
-                        ⚠️ 模組設定已變更，請點擊上方「🔄 重啟雪莉」按鈕以套用。
+                        ⚠️ 模組設定已變更，請點擊上方頂欄「🔄 重啟雪莉」按鈕以套用。
                     </div>
 
                     <!-- Module Grid -->
@@ -642,6 +651,154 @@
                         <div class="mod-loading">
                             <div class="mod-loading-spinner"></div>
                             <span>正在掃描模組清單...</span>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- ===== STOCK TRADER VIEW ===== -->
+            <div class="view hidden" id="view-stock-trader">
+                <div class="stock-trader-wrapper" style="padding: 20px;">
+                    <!-- Banner -->
+                    <div style="background: linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(56, 189, 248, 0.15)); border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 16px; padding: 22px 28px; margin-bottom: 24px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3); display: flex; align-items: center; justify-content: space-between; position: relative; overflow: hidden;">
+                        <div style="display: flex; align-items: center; gap: 20px; width: 100%;">
+                            <div style="position: relative; flex-shrink: 0;">
+                                <img src="/static/sherry_avatar.png" alt="Sherry Detective" style="width: 72px; height: 72px; border-radius: 50%; object-fit: cover; object-position: top center; border: 3px solid #fbbf24; box-shadow: 0 0 18px rgba(251, 191, 36, 0.5);">
+                                <span style="position: absolute; top: -4px; right: -4px; background: #fbbf24; color: #0b0f19; font-size: 0.7rem; font-weight: 800; padding: 2px 6px; border-radius: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.4);">🔍 15歲名偵探</span>
+                            </div>
+                            <div style="flex: 1;">
+                                <h2 style="font-size: 1.4rem; font-weight: 800; color: #f8fafc; margin-bottom: 6px; display: flex; align-items: center; gap: 8px;">
+                                    <span>📈 橘雪莉 美股虛擬量化交易控制台</span>
+                                </h2>
+                                <div style="background: rgba(56, 189, 248, 0.1); border-left: 3px solid #fbbf24; padding: 8px 14px; border-radius: 0 8px 8px 0; margin-top: 6px;">
+                                    <p style="color: #e2e8f0; font-size: 0.92rem; font-weight: 600; font-style: italic; margin-bottom: 2px;">
+                                        「歡迎來到名偵探雪莉的美股量化指揮中心！真相永遠只有一個！🔍」
+                                    </p>
+                                    <p style="color: var(--text-muted); font-size: 0.8rem; margin: 0;">
+                                        初始本金 $10,000 美金 | 交易時段 23:00~04:00 (03:50強看盤) | 手續費 0.1% | 碎股 >= 0.01 股
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 4 Core Stat Cards -->
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px;">
+                        <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 18px;">
+                            <div style="color: var(--text-muted); font-size: 0.82rem; margin-bottom: 6px;">💰 總資產金額 (USD)</div>
+                            <div id="st-total-asset" style="font-size: 1.6rem; font-weight: 800; color: #00e5ff;">$10,000.00</div>
+                            <div id="st-total-pnl-sub" style="font-size: 0.82rem; color: #888; margin-top: 4px;">+$0.00 (0.00%)</div>
+                        </div>
+                        <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 18px;">
+                            <div style="color: var(--text-muted); font-size: 0.82rem; margin-bottom: 6px;">💵 剩餘可用現金 (USD)</div>
+                            <div id="st-cash" style="font-size: 1.6rem; font-weight: 800; color: #00ff88;">$10,000.00</div>
+                            <div id="st-positions-count-sub" style="font-size: 0.82rem; color: #888; margin-top: 4px;">0 筆持倉標的</div>
+                        </div>
+                        <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 18px;">
+                            <div style="color: var(--text-muted); font-size: 0.82rem; margin-bottom: 6px;">📊 1 個月累積盈餘率</div>
+                            <div id="st-pnl-pct" style="font-size: 1.6rem; font-weight: 800; color: #ff4444;">+0.00%</div>
+                            <div id="st-day-pnl-sub" style="font-size: 0.82rem; color: #888; margin-top: 4px;">當日損益: $0.00</div>
+                        </div>
+                        <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 18px;">
+                            <div style="color: var(--text-muted); font-size: 0.82rem; margin-bottom: 6px;">🎯 交易勝率</div>
+                            <div id="st-win-rate" style="font-size: 1.6rem; font-weight: 800; color: #ffab00;">0.0%</div>
+                            <div id="st-trades-count-sub" style="font-size: 0.82rem; color: #888; margin-top: 4px;">0 / 0 筆交易勝場</div>
+                        </div>
+                    </div>
+
+                    <!-- 1-Month Return Rate Line Chart -->
+                    <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; margin-bottom: 24px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                            <h3 style="font-size: 1.1rem; font-weight: 700; color: var(--text-main);">📈 近 1 個月盈餘率 (Return Rate %) 走勢圖</h3>
+                            <span style="font-size: 0.82rem; color: var(--text-muted);">每日盤末自動快照記錄</span>
+                        </div>
+                        <div style="position: relative; height: 320px; width: 100%;">
+                            <canvas id="st-return-chart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Grid: CoT Thinking Logs & Current Holdings -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px;">
+                        <!-- CoT Log Card -->
+                        <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; display: flex; flex-direction: column;">
+                            <h3 style="font-size: 1.1rem; font-weight: 700; margin-bottom: 14px; color: #00e5ff;">🧠 名偵探雪莉思考邏輯 (CoT)</h3>
+                            <div id="st-thought-container" style="flex: 1; max-height: 300px; overflow-y: auto; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; line-height: 1.5; color: #ddd;">
+                                <div style="color: var(--text-muted);">載入思考日誌中...</div>
+                            </div>
+                        </div>
+
+                        <!-- Holdings Table Card -->
+                        <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px;">
+                            <h3 style="font-size: 1.1rem; font-weight: 700; margin-bottom: 14px; color: #00ff88;">📦 當前持有標的</h3>
+                            <div style="overflow-x: auto; max-height: 300px;">
+                                <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+                                    <thead>
+                                        <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-muted); text-align: left;">
+                                            <th style="padding: 8px;">標的</th>
+                                            <th style="padding: 8px;">股數</th>
+                                            <th style="padding: 8px;">均價</th>
+                                            <th style="padding: 8px;">現價</th>
+                                            <th style="padding: 8px;">未實現損益</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="st-holdings-tbody">
+                                        <tr><td colspan="5" style="padding: 16px; text-align: center; color: var(--text-muted);">無持倉標的</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Full Width: Trade History -->
+                    <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; margin-bottom: 24px;">
+                        <h3 style="font-size: 1.1rem; font-weight: 700; margin-bottom: 14px; color: var(--text-main);">📋 歷史交易紀錄</h3>
+                        <div style="overflow-x: auto; max-height: 320px;">
+                            <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+                                <thead>
+                                    <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-muted); text-align: left;">
+                                        <th style="padding: 10px;">時間</th>
+                                        <th style="padding: 10px;">標的</th>
+                                        <th style="padding: 10px;">動作</th>
+                                        <th style="padding: 10px;">股數</th>
+                                        <th style="padding: 10px;">成交價</th>
+                                        <th style="padding: 10px;">手續費</th>
+                                        <th style="padding: 10px;">交割金額</th>
+                                        <th style="padding: 10px;">實現損益</th>
+                                        <th style="padding: 10px;">分析理由</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="st-trades-tbody">
+                                    <tr><td colspan="9" style="padding: 20px; text-align: center; color: var(--text-muted);">尚無交易紀錄</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Full Width: Target Stock Indicators -->
+                    <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px;">
+                        <h3 style="font-size: 1.1rem; font-weight: 700; margin-bottom: 14px; color: var(--text-main);">🔍 追蹤標的與即時技術指標</h3>
+                        <div style="overflow-x: auto; max-height: 320px;">
+                            <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+                                <thead>
+                                    <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-muted); text-align: left;">
+                                        <th style="padding: 10px;">標的</th>
+                                        <th style="padding: 10px;">最新價</th>
+                                        <th style="padding: 10px;">1日變動</th>
+                                        <th style="padding: 10px;">1月變動</th>
+                                        <th style="padding: 10px;">RSI (14)</th>
+                                        <th style="padding: 10px;">MA20</th>
+                                        <th style="padding: 10px;">MA60 (季線)</th>
+                                        <th style="padding: 10px;">EMA20</th>
+                                        <th style="padding: 10px;">布林上/下軌</th>
+                                        <th style="padding: 10px;">MACD 柱狀</th>
+                                        <th style="padding: 10px;">成交量比</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="st-targets-tbody">
+                                    <tr><td colspan="11" style="padding: 20px; text-align: center; color: var(--text-muted);">載入指標中...</td></tr>
+                                </tbody>
+                            </table>
                         </div>
                     </div>
 
