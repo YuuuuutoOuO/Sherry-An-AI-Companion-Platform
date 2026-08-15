@@ -12,7 +12,7 @@ from discord.ext import commands
 
 import settings
 from handlers.bot_brain import BotBrain, InferenceTask
-from handlers.social.tool_base import BaseTool
+from handlers.social.tool_base import BaseTool, ToolResponseMode
 from handlers.social.utils import append_draw_thinking_log
 from mod.clients import GeminiImageClient
 
@@ -74,6 +74,7 @@ class DrawTool(BaseTool):
                 logger.info("DrawTool: 已載入 pixiv_tag.json，共 %d 筆 tag。", len(self._pixiv_dict))
             except Exception as e:
                 logger.error("DrawTool: pixiv_tag.json 載入失敗: %s", e)
+        self._sorted_pixiv_keys: list[str] = sorted(self._pixiv_dict.keys(), key=len, reverse=True)
 
     # --- 強制附加的正向提示詞（雲端 + 地端通用）---
     MANDATORY_POSITIVE = [
@@ -118,6 +119,10 @@ class DrawTool(BaseTool):
     def llm_description(self) -> str:
         return "使用者明確要求你畫圖、生成圖片、繪製影像"
 
+    @property
+    def response_mode(self) -> ToolResponseMode:
+        return ToolResponseMode.DIRECT_UI
+
     def can_handle_by_regex(self, text: str) -> bool:
         # 明確的繪圖動詞與句型
         return bool(re.search(r"((幫|給)我畫|畫\s*一張|生成\s*一張|幫忙畫|幫我生成|draw me|generate\s+an?)", text, re.IGNORECASE))
@@ -135,7 +140,7 @@ class DrawTool(BaseTool):
         scan_text = user_query.lower()
 
         # 依 key 長度由長到短排序，確保長詞優先匹配
-        sorted_keys = sorted(self._pixiv_dict.keys(), key=len, reverse=True)
+        sorted_keys = self._sorted_pixiv_keys
         for key in sorted_keys:
             if len(key) < 2:
                 continue
@@ -444,17 +449,38 @@ class DrawTool(BaseTool):
             logger.error(f"連線本地 SD WebUI 失敗: {e}")
             return None
 
-    async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str) -> None:
+    async def execute(
+        self,
+        bot: commands.Bot,
+        message: discord.Message,
+        user_query: str,
+        vibe_snippet: str,
+        full_context: str,
+        *,
+        silent: bool = False,
+        **kwargs: object,
+    ) -> str | None:
+        """畫圖工具核心。
+
+        Args:
+            silent: 若為 True，不直接發送確認訊息，執行完成後回傳結果狀態字串。
+
+        Returns:
+            silent=False 時回傳 None；silent=True 時回傳 str 狀態摘要。
+        """
         brain: BotBrain = bot.get_cog("BotBrain")
         if not brain:
-            return
+            return "BotBrain 未就緒。" if silent else None
 
         # 狀態機檢查
         if getattr(brain, "_voice_mode_active", False):
-            await message.reply("名偵探現在正在用語音講話，無法分心畫圖喔！", mention_author=True)
-            return
+            msg = "名偵探現在正在用語音講話，無法分心畫圖喔！"
+            if silent: return msg
+            await message.reply(msg, mention_author=True)
+            return None
 
-        await message.reply("好的，名偵探現在來畫圖了！請等我一下...", mention_author=True)
+        if not silent:
+            await message.reply("好的，名偵探現在來畫圖了！請等我一下...", mention_author=True)
 
         brain._sd_generating = True
         # 廿別「需要記錄到 log 」的中間變數
@@ -520,12 +546,16 @@ class DrawTool(BaseTool):
                 _success = True
                 file = discord.File(fp=io.BytesIO(img_bytes), filename="generated.png")
                 view = DrawControlView(user_query=user_query, original_author=message.author)
+                if silent:
+                    await message.reply(file=file, view=view, mention_author=True)
+                    return f"畫圖完成！來源：{_source_label}"
                 await message.reply("畫好了！你看！", file=file, view=view, mention_author=True)
                 logger.info("DrawTool: 畫圖成功，來源: %s", _source_label)
-                return
+                return None
 
             # --- 層級 4: 本地 SD WebUI ---
-            await message.reply("抱歉剛剛沒有靈感...讓我用另一種方式試試看！", mention_author=True)
+            if not silent:
+                await message.reply("抱歉剛剛沒有靈感...讓我用另一種方式試試看！", mention_author=True)
             logger.info("DrawTool: [4/4] 嘗試本地 SD WebUI")
             pos_prompt, neg_prompt = await self._translate_to_sd_prompt(user_query, brain)
             _final_prompt = pos_prompt
@@ -537,10 +567,15 @@ class DrawTool(BaseTool):
                 _success = True
                 file = discord.File(fp=io.BytesIO(img_bytes), filename="generated.png")
                 view = DrawControlView(user_query=user_query, original_author=message.author)
+                if silent:
+                    await message.reply(file=file, view=view, mention_author=True)
+                    return f"畫圖完成！來源：本地 SD WebUI"
                 await message.reply("畫好了！你看！", file=file, view=view, mention_author=True)
             else:
                 _source_label = "failed"
-                await message.reply("嗚嗚，畫筆好像壞掉了，畫不出來...", mention_author=True)
+                err_msg = "嗚嗚，畫筆好像壞掉了，畫不出來..."
+                if silent: return err_msg
+                await message.reply(err_msg, mention_author=True)
 
         finally:
             brain._sd_generating = False

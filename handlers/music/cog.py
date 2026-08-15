@@ -6,6 +6,7 @@ import re
 import time
 from typing import Any
 
+import settings
 # 匯入分離出來的模塊
 from handlers.music.config import FFMPEG_EXE_PATH, FFMPEG_OPTIONS, ytdl_client
 from handlers.music.ui import MusicControlView, MusicQueueView
@@ -467,11 +468,13 @@ class MusicHandler(commands.Cog):
                     song['duration'] = fresh_song.get('duration', 0) or song.get('duration', 0) or 0
                     song['thumbnail'] = fresh_song.get('thumbnail') or song.get('thumbnail')
 
-                    source = discord.FFmpegPCMAudio(
+                    raw_source = discord.FFmpegPCMAudio(
                         true_audio_stream,
                         executable=FFMPEG_EXE_PATH,
                         **FFMPEG_OPTIONS
                     )
+                    vol = getattr(settings, "MUSIC_DEFAULT_VOLUME", 1.2)
+                    source = discord.PCMVolumeTransformer(raw_source, volume=vol)
 
                     def after_playback(error: Exception | None = None) -> None:
                         if error:

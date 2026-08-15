@@ -34,13 +34,17 @@ class ConfigModal(discord.ui.Modal, title='修改設定'):
             
             setattr(settings, self.key, val)
             
-            overrides = {}
-            if settings.CONFIG_OVERRIDE_PATH.exists():
-                with open(settings.CONFIG_OVERRIDE_PATH, "r", encoding="utf-8") as f:
-                    overrides = json.load(f)
-            overrides[self.key] = val
-            with open(settings.CONFIG_OVERRIDE_PATH, "w", encoding="utf-8") as f:
-                json.dump(overrides, f, indent=4, ensure_ascii=False)
+            def _save_override():
+                overrides = {}
+                if settings.CONFIG_OVERRIDE_PATH.exists():
+                    with open(settings.CONFIG_OVERRIDE_PATH, "r", encoding="utf-8") as f:
+                        overrides = json.load(f)
+                overrides[self.key] = val
+                with open(settings.CONFIG_OVERRIDE_PATH, "w", encoding="utf-8") as f:
+                    json.dump(overrides, f, indent=4, ensure_ascii=False)
+
+            import asyncio
+            await asyncio.to_thread(_save_override)
                 
             await interaction.response.send_message(f"✅ 設定 `{self.key}` 已更新為 `{val}`，並儲存至 override 檔。", ephemeral=True)
         except ValueError:

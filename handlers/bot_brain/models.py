@@ -16,4 +16,5 @@ class InferenceTask:
     model: str = dataclasses.field(default=settings.PRIMARY_MODEL, compare=False)
     task_id: str = dataclasses.field(default="unnamed", compare=False)
     sequence_id: int = dataclasses.field(default=0)
-    images: list[str] | None = dataclasses.field(default=None, compare=False) 
+    images: list[str] | None = dataclasses.field(default=None, compare=False)
+    temperature: float | None = dataclasses.field(default=None, compare=False)

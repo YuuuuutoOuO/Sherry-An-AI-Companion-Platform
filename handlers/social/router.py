@@ -2,6 +2,7 @@
 handlers/social/router.py
 """
 import logging
+import os
 import re
 import discord
 from discord.ext import commands
@@ -11,7 +12,7 @@ import asyncio
 
 import settings
 from handlers.bot_brain import BotBrain, InferenceTask
-from handlers.social.utils import fetch_context_script, append_debug_log
+from handlers.social.utils import fetch_context_script, append_debug_log, remove_hourglass_reaction
 from handlers.social.registry import TOOL_LIST, get_fallback_tool
 from handlers.social.rate_limiter import rate_limiter
 from handlers.social.observability import log_event, log_error, make_timer
@@ -38,7 +39,8 @@ async def route_and_execute_tag(bot: commands.Bot, message: discord.Message) -> 
 
     try:
         await message.add_reaction("⏳")
-    except Exception: pass
+    except Exception:
+        pass
 
     context_script = await fetch_context_script(message.channel, message)
     
@@ -139,109 +141,161 @@ async def route_and_execute_tag(bot: commands.Bot, message: discord.Message) -> 
     if image_desc_text:
         full_context = f"{full_context}\n\n{image_desc_text}"
 
-# Removed compound parser import and usage – keep single-query flow
-    # from handlers.social.compound_parser import parse_compound_command  # disabled
-    sub_queries = [user_query]
+    # 決定調度模式：PARALLEL (預設高效能並行) | REACT (多步驟 ReAct) | CLASSIC (傳統單意圖)
+    dispatch_mode = getattr(settings, "AGENT_DISPATCH_MODE", "PARALLEL").upper()
 
+    # 向下相容：若 REACT_ENABLED 為 False 且未特別指定 PARALLEL，則走 CLASSIC
+    if not getattr(settings, "REACT_ENABLED", True) and "AGENT_DISPATCH_MODE" not in os.environ:
+        dispatch_mode = "CLASSIC"
 
-    for sq in sub_queries:
-        if not sq.strip():
-            continue
+    if dispatch_mode == "PARALLEL":
+        # ── [Parallel 路由路徑] 單次推論多工拆解與並行調度 (推薦) ───────────
+        from handlers.social.parallel_agent import ParallelAgentTool
 
+        parallel_agent = ParallelAgentTool(TOOL_LIST)
+
+        log_event(
+            "intent_classify",
+            message_id=_msg_id,
+            user=_user,
+            channel_id=_channel_id,
+            raw_input=user_query,
+            intent="PARALLEL_AGENT",
+            intent_source="parallel_router",
+        )
+
+        logger.info(
+            "social_chat: [Parallel Router] 訊息 → ParallelAgentTool  user=%s query=%s",
+            _user,
+            user_query[:80],
+        )
+
+        try:
+            await parallel_agent.execute(bot, message, user_query, vibe_snippet, full_context)
+        finally:
+            await remove_hourglass_reaction(message, bot.user)
+
+    elif dispatch_mode == "REACT":
+        # ── [ReAct 路由路徑] 多步驟思考與鏈式工具 ────────────────────────────
+        from handlers.social.react_agent import ReactAgentTool
+
+        react_agent = ReactAgentTool(TOOL_LIST)
+
+        log_event(
+            "intent_classify",
+            message_id=_msg_id,
+            user=_user,
+            channel_id=_channel_id,
+            raw_input=user_query,
+            intent="REACT_AGENT",
+            intent_source="react_router",
+        )
+
+        logger.info(
+            "social_chat: [ReAct Router] 訊息 → ReactAgentTool  user=%s query=%s",
+            _user,
+            user_query[:80],
+        )
+
+        try:
+            await react_agent.execute(bot, message, user_query, vibe_snippet, full_context)
+        finally:
+            await remove_hourglass_reaction(message, bot.user)
+    else:
+        # ── [經典路由路徑] 正則快路徑 -> LLM 分類器 -> 單一工具硬路由 ──────
+        logger.info("social_chat: [經典 Router] dispatch_mode=%s，使用傳統單意圖硬路由。", dispatch_mode)
+        sq = user_query
         handled_by_regex = False
         for tool in TOOL_LIST:
             if tool.can_handle_by_regex(sq):
                 logger.info(f"social_chat: [極速正則層] Intent 定位 '{sq}' 至 {tool.intent_name} 模組。")
                 log_event("intent_classify", message_id=_msg_id, user=_user, channel_id=_channel_id,
                           raw_input=sq, intent=tool.intent_name, intent_source="regex_fast")
-                await tool.execute(bot, message, sq, vibe_snippet, full_context)
+                try:
+                    await tool.execute(bot, message, sq, vibe_snippet, full_context)
+                finally:
+                    await remove_hourglass_reaction(message, bot.user)
                 handled_by_regex = True
                 break
-                
-        if handled_by_regex:
-            continue
 
-        def _needs_llm_classification(text: str) -> bool:
-            # 只有當文字包含較為模糊的指令/疑問詞彙時，才需要交給 LLM 分類
-            return bool(re.search(r"(查|什麼|總結|大意|幫.*找|怎麼看|最新|近期|新聞|哪裡|提醒|排程|定時|播放|點歌|畫|生成|搜尋)", text, re.IGNORECASE))
-            
-        if not _needs_llm_classification(sq):
-            logger.info(f"social_chat: [極速過濾層] 無特殊意圖關鍵字，直接Fallback為CHAT。")
-            log_event("intent_classify", message_id=_msg_id, user=_user, channel_id=_channel_id,
-                      raw_input=sq, intent="CHAT", intent_source="fast_filter")
-            chat_tool = get_fallback_tool()
-            await chat_tool.execute(bot, message, sq, vibe_snippet, full_context)
-            continue
+        if not handled_by_regex:
+            def _needs_llm_classification(text: str) -> bool:
+                return bool(
+                    re.search(
+                        r"(查|什麼|總結|大意|幫.*找|怎麼看|最新|近期|新聞|哪裡|提醒|排程|定時|播放|點歌|畫|生成|搜尋|分析|走勢|行情|股|幣|K線|指標|趨勢)",
+                        text,
+                        re.IGNORECASE,
+                    )
+                )
 
-        logger.debug(f"social_chat: 正則無所獲。將要求 Classifier 解讀: {sq}")
-        
-        tool_descriptions_prompt = "\n".join([f"- 若包含強烈情境「{t.llm_description}」-> 強制回傳標籤：[{t.intent_name}]" for t in TOOL_LIST if t.intent_name != "CHAT"])
-        
-        # ✨ [修正] 嚴格限定 LLM 只能從這些英文單字裡挑選，不准翻譯！
-        available_tags = ", ".join([f"[{t.intent_name}]" for t in TOOL_LIST])
+            if not _needs_llm_classification(sq):
+                logger.info("social_chat: [極速過濾層] 無特殊意圖關鍵字，直接Fallback為CHAT。")
+                log_event("intent_classify", message_id=_msg_id, user=_user, channel_id=_channel_id,
+                          raw_input=sq, intent="CHAT", intent_source="fast_filter")
+                chat_tool = get_fallback_tool()
+                try:
+                    await chat_tool.execute(bot, message, sq, vibe_snippet, full_context)
+                finally:
+                    await remove_hourglass_reaction(message, bot.user)
+            else:
+                logger.debug(f"social_chat: 正則無所獲。將要求 Classifier 解讀: {sq}")
+                tool_descriptions_prompt = "\n".join([f"- 若包含強烈情境「{t.llm_description}」-> 強制回傳標籤：[{t.intent_name}]" for t in TOOL_LIST if t.intent_name != "CHAT"])
+                available_tags = ", ".join([f"[{t.intent_name}]" for t in TOOL_LIST])
 
-        intent_classifier_system_prompt = (
-            "【任務：分類指令意圖。請用冷靜且機械的絕對規則判斷，不准推測使用者的腦補】\n"
-            f"{tool_descriptions_prompt}\n"
-            "【強制鐵則】\n"
-            "1. 若使用者僅是在叫人名(誰是某某)、吵架反駁(搞錯了、不是啦)、單純講廢話時！即使出現沒看過的專有名詞，你『唯一』只能回傳兜底標籤：[CHAT]。\n"
-            "2. 不要自作聰明以為講一個人名就是在搜圖片，找圖片必備對應動詞（看、找圖、網址）！沒有絕對強烈的動詞一律為 [CHAT]！\n"
-            f"3. 只能輸出以下其中一個標籤：{available_tags}。絕對禁止翻譯標籤（例如不可以寫[音樂]），除此之外禁止任何標點符號、解釋與道德警告。"
-        )
+                intent_classifier_system_prompt = (
+                    "【任務：分類指令意圖。請用冷靜且機械的絕對規則判斷，不准推測使用者的腦補】\n"
+                    f"{tool_descriptions_prompt}\n"
+                    "【強制鐵則】\n"
+                    "1. 若使用者詢問股票、加密貨幣（Crypto/USDT/BTC/ETH/XAUT等交易對與幣價）、指數行情、K線走勢或要求進行技術分析，強制回傳標籤：[STOCK]。\n"
+                    "2. 若使用者僅是在叫人名(誰是某某)、吵架反駁(搞錯了、不是啦)、單純講廢話時！即使出現沒看過的專有名詞，你『唯一』只能回傳兜底標籤：[CHAT]。\n"
+                    "3. 不要自作聰明以為講一個人名就是在搜圖片，找圖片必備對應動詞（看、找圖、網址）！沒有絕對強烈的動詞一律為 [CHAT]！\n"
+                    f"4. 只能輸出以下其中一個標籤：{available_tags}。絕對禁止翻譯標籤（例如不可以寫[音樂]），除此之外禁止任何標點符號、解釋與道德警告。"
+                )
 
-        async def _on_dynamic_llm_result(raw_result: str, _sq=sq) -> None:
-            # 移除所有不相干的標記，如 </thought> 或 markdown
-            clean_result = re.sub(r"<\/?thought>", "", raw_result)
-            result_str = clean_result.strip().upper()
-            
-            target_tool = get_fallback_tool() 
-            for tool in TOOL_LIST:
-                if f"[{tool.intent_name}]" in result_str or tool.intent_name in result_str:
-                    target_tool = tool
-                    break
-            
-            _intent_source = "llm_classifier"
+                async def _on_dynamic_llm_result(raw_result: str, _sq=sq) -> None:
+                    clean_result = re.sub(r"<\/?thought>", "", raw_result)
+                    result_str = clean_result.strip().upper()
                     
-            # ✨ [修正] Veto 機制：二次校驗 LLM 的誤判
-            if target_tool.intent_name == "SUMMARY":
-                if not re.search(r"https?:\/\/[^\s]+", _sq):
-                    logger.info(f"social_chat: [Veto] SUMMARY 誤判無網址: '{_sq}'，強制降級 CHAT。")
-                    target_tool = get_fallback_tool()
-                    _intent_source = "veto_override"
-            elif target_tool.intent_name == "MUSIC":
-                if not re.search(r"(跳過|卡歌|列出播放清單|播歌|播放|撥放|點歌|我想聽|刪除|刪歌|刪掉|移除|清空|音樂|歌|聽)", _sq):
-                    logger.info(f"social_chat: [Veto] MUSIC 誤判無音樂動詞: '{_sq}'，強制降級 CHAT。")
-                    target_tool = get_fallback_tool()
-                    _intent_source = "veto_override"
-            elif target_tool.intent_name == "DRAW":
-                if not re.search(r"(幫我畫|給.*畫|畫一張|生成一張|幫忙畫|畫.*圖|draw|generate)", _sq, re.IGNORECASE):
-                    logger.info(f"social_chat: [Veto] DRAW 誤判無畫圖明確指令: '{_sq}'，強制降級 CHAT。")
-                    target_tool = get_fallback_tool()
-                    _intent_source = "veto_override"
-            elif target_tool.intent_name == "PIXIV":
-                if not re.search(r"(寫真|照片|畫像|pixiv|本子|給我看|我要看|找.*圖|給.*圖|色圖|搜圖|來張|找張|show me|find.*image|get.*pic)", _sq, re.IGNORECASE):
-                    logger.info(f"social_chat: [Veto] PIXIV 誤判無看圖動詞: '{_sq}'，強制降級 CHAT。")
-                    target_tool = get_fallback_tool()
-                    _intent_source = "veto_override"
-
-            log_event("intent_classify", message_id=_msg_id, user=_user, channel_id=_channel_id,
-                      raw_input=_sq, intent=target_tool.intent_name, intent_source=_intent_source,
-                      veto_fired=(_intent_source == "veto_override"),
-                      latency_ms=elapsed())
-            if _intent_source == "veto_override":
-                log_error(event="veto_fired", message_id=_msg_id, task_id=f"intent-{_msg_id}",
-                          error_type="VetoOverride", message=f"LLM→{result_str[:30]} vetoed→CHAT for: {_sq[:80]}")
+                    target_tool = get_fallback_tool() 
+                    for tool in TOOL_LIST:
+                        if f"[{tool.intent_name}]" in result_str or tool.intent_name in result_str:
+                            target_tool = tool
+                            break
                     
-            logger.info(f"social_chat: [動態腦域解析層] 神經判定：將使用者導向模塊 ({target_tool.intent_name})")
-            # 嘗試解析回傳的 JSON
-            await target_tool.execute(bot, message, _sq, vibe_snippet, full_context)
+                    _intent_source = "llm_classifier"
+                    if target_tool.intent_name == "SUMMARY":
+                        if not re.search(r"https?:\/\/[^\s]+", _sq):
+                            target_tool = get_fallback_tool()
+                            _intent_source = "veto_override"
+                    elif target_tool.intent_name == "MUSIC":
+                        if not re.search(r"(跳過|卡歌|列出播放清單|播歌|播放|撥放|點歌|我想聽|刪除|刪歌|刪掉|移除|清空|音樂|歌|聽)", _sq):
+                            target_tool = get_fallback_tool()
+                            _intent_source = "veto_override"
+                    elif target_tool.intent_name == "DRAW":
+                        if not re.search(r"(幫我畫|給.*畫|畫一張|生成一張|幫忙畫|畫.*圖|draw|generate)", _sq, re.IGNORECASE):
+                            target_tool = get_fallback_tool()
+                            _intent_source = "veto_override"
+                    elif target_tool.intent_name == "PIXIV":
+                        if not re.search(r"(寫真|照片|畫像|pixiv|本子|給我看|我要看|找.*圖|給.*圖|色圖|搜圖|來張|找張|show me|find.*image|get.*pic)", _sq, re.IGNORECASE):
+                            target_tool = get_fallback_tool()
+                            _intent_source = "veto_override"
 
-        intent_task = InferenceTask(
-            priority=settings.PRIORITY_TAG_RESPONSE,
-            system_prompt=intent_classifier_system_prompt,
-            user_prompt=sq,
-            callback=_on_dynamic_llm_result,
-            model=settings.CLASSIFIER_MODEL,
-            task_id=f"intent-dynamic-route-{message.id}",
-        )
-        await brain.enqueue_task(intent_task)
+                    log_event("intent_classify", message_id=_msg_id, user=_user, channel_id=_channel_id,
+                              raw_input=_sq, intent=target_tool.intent_name, intent_source=_intent_source,
+                              veto_fired=(_intent_source == "veto_override"),
+                              latency_ms=elapsed())
+                    logger.info(f"social_chat: [經典硬路由] 神經判定：將使用者導向模塊 ({target_tool.intent_name})")
+                    try:
+                        await target_tool.execute(bot, message, _sq, vibe_snippet, full_context)
+                    finally:
+                        await remove_hourglass_reaction(message, bot.user)
+
+                intent_task = InferenceTask(
+                    priority=settings.PRIORITY_TAG_RESPONSE,
+                    system_prompt=intent_classifier_system_prompt,
+                    user_prompt=sq,
+                    callback=_on_dynamic_llm_result,
+                    model=settings.CLASSIFIER_MODEL,
+                    task_id=f"intent-dynamic-route-{message.id}",
+                )
+                await brain.enqueue_task(intent_task)

@@ -52,6 +52,7 @@ class HealthMonitor(commands.Cog):
         self._discord_handler = DiscordChannelHandler(self.bot, level=level)
         logging.getLogger().addHandler(self._discord_handler)
         
+        self._session: aiohttp.ClientSession | None = aiohttp.ClientSession()
         self._health_loop.start()
         logger.info("HealthMonitor: 啟動 Ollama 狀態監控迴圈與 Discord 頻道日誌收集")
 
@@ -60,14 +61,18 @@ class HealthMonitor(commands.Cog):
             logging.getLogger().removeHandler(self._discord_handler)
             self._discord_handler = None
             
+        if self._session and not self._session.closed:
+            await self._session.close()
+            
         self._health_loop.cancel()
         logger.info("HealthMonitor: 關閉監控迴圈與日誌收集")
 
     async def ping_ollama(self) -> bool:
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(settings.OLLAMA_BASE_URL, timeout=aiohttp.ClientTimeout(total=settings.HEALTH_CHECK_TIMEOUT)) as resp:
-                    return resp.status == 200
+            if not self._session or self._session.closed:
+                self._session = aiohttp.ClientSession()
+            async with self._session.get(settings.OLLAMA_BASE_URL, timeout=aiohttp.ClientTimeout(total=settings.HEALTH_CHECK_TIMEOUT)) as resp:
+                return resp.status == 200
         except Exception:
             return False
 

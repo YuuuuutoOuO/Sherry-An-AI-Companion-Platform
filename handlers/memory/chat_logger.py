@@ -69,6 +69,15 @@ def append_chat_log(message: discord.Message) -> None:
         logger.debug("chat_logger: 寫入失敗: %s", exc)
 
 
+async def async_append_chat_log(message: discord.Message) -> None:
+    """非同步版本的追加寫入，避免在 Discord on_message 事件迴圈中阻塞。"""
+    import asyncio
+    try:
+        await asyncio.to_thread(append_chat_log, message)
+    except Exception as exc:
+        logger.debug("chat_logger async: 寫入失敗: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # 讀取
 # ---------------------------------------------------------------------------

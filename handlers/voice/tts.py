@@ -33,9 +33,13 @@ class TextToSpeech:
             tmp_name = f.name
             
         try:
-            self._model.tts_to_file(text=text, speaker_wav=self.speaker_wav, language=self.language, file_path=tmp_name)
-            with open(tmp_name, "rb") as f:
-                return f.read()
+            def _do_synthesize():
+                self._model.tts_to_file(text=text, speaker_wav=self.speaker_wav, language=self.language, file_path=tmp_name)
+                with open(tmp_name, "rb") as f:
+                    return f.read()
+
+            import asyncio
+            return await asyncio.to_thread(_do_synthesize)
         except Exception as e:
             logger.error(f"TTS 合成失敗: {e}")
             return b""

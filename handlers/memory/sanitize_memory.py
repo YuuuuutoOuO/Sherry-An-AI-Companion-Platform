@@ -46,17 +46,22 @@ logger = logging.getLogger(__name__)
 _TZ_TW = timezone(timedelta(hours=8))
 
 # ──────────────────────────────────────────────────────────────
-# 1. 靜態清洗：不依賴 LLM，直接過濾壞資料
+# 1. 靜態清洗：不依賴 LLM，直接過濾壞資料與模糊去重
 # ──────────────────────────────────────────────────────────────
+
+# 明顯屬於群聊互相打鬧/嘴砲句或主客體顛倒的幹話模式
+_BANTER_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"吃大便|吃屎|去死|去吃屎|神經病|幹嘛啦|智障"),
+]
+
 
 def sanitize_existing(path: Path = settings.USER_MEMORY_PATH) -> dict[str, int]:
     """掃描並清洗現有 user_memory.json 內的污染資料。
 
     清洗項目：
-    - Aliases：過濾超長、含 @、含 [某群友]、命中黑名單的別名。
-    - Facts：移除文字為空、超長句子（> 60 字，通常是 3B 模型把整句記成 fact）、
-             含 [某群友] 或 @ 的污染 fact。
-    - 重複 fact（同文字已存在）。
+    - Aliases：過濾超長/超短、含 @、含 [某群友]、命中黑名單或遊戲代號格式的別名。
+    - Facts：移除文字為空、超長句子（> 60 字）、含 [某群友] 或 @ 的污染 fact、
+             移除明顯的群聊互嘴幹話（如吃大便），並進行語意模糊去重。
 
     Args:
         path: user_memory.json 的路徑。
@@ -64,6 +69,8 @@ def sanitize_existing(path: Path = settings.USER_MEMORY_PATH) -> dict[str, int]:
     Returns:
         統計字典，含 users_cleaned、aliases_removed、facts_removed。
     """
+    from handlers.memory.storage import calculate_fact_similarity
+
     store: UserMemoryStore = load_user_memory(path)
     stats = {"users_cleaned": 0, "aliases_removed": 0, "facts_removed": 0}
 
@@ -71,33 +78,48 @@ def sanitize_existing(path: Path = settings.USER_MEMORY_PATH) -> dict[str, int]:
         original_alias_count = len(profile.get("aliases", []))
         original_fact_count = len(profile.get("facts", []))
 
-        # ── Aliases 清洗 ──────────────────────────────
+        # ── Aliases 清洗（使用升級版 sanitize_aliases）─────────
         clean_aliases = sanitize_aliases(profile.get("aliases", []))
 
-        # ── Facts 清洗 ────────────────────────────────
-        seen_texts: set[str] = set()
-        clean_facts = []
+        # ── Facts 清洗與模糊去重 ────────────────────────────
+        filtered_facts = []
         for fact in profile.get("facts", []):
             text = str(fact.get("fact", "")).strip()
             if not text:
                 continue
-            if len(text) > 60:  # 3B 模型常把整句話記成 fact
+            if len(text) > 60:  # 過長句子通常是小模型把整句記成 fact
                 logger.debug("[清洗] uid=%s 丟棄過長 fact（%d 字）: %s", uid, len(text), text[:40])
                 continue
             if "[某群友]" in text or text.startswith("@"):
                 logger.debug("[清洗] uid=%s 丟棄含 @mention 的 fact: %s", uid, text[:40])
                 continue
-            if text in seen_texts:
+            # 過濾明顯的互嗆/嘴砲幹話
+            if any(p.search(text) for p in _BANTER_PATTERNS):
+                logger.info("[清洗] uid=%s 丟棄嘴砲/幹話 fact: %s", uid, text)
                 continue
-            seen_texts.add(text)
-            clean_facts.append(fact)
+
+            filtered_facts.append(fact)
+
+        # 語意模糊去重（保留重要性最高者）
+        deduped_facts: list[UserFact] = []
+        for f in filtered_facts:
+            f_text = f.get("fact", "")
+            f_imp = f.get("importance", 3)
+            matched = False
+            for existing in deduped_facts:
+                if calculate_fact_similarity(f_text, existing.get("fact", "")) >= 0.65:
+                    existing["importance"] = max(existing.get("importance", 3), f_imp)
+                    matched = True
+                    break
+            if not matched:
+                deduped_facts.append(f)
 
         aliases_removed = original_alias_count - len(clean_aliases)
-        facts_removed = original_fact_count - len(clean_facts)
+        facts_removed = original_fact_count - len(deduped_facts)
 
         if aliases_removed > 0 or facts_removed > 0:
             profile["aliases"] = clean_aliases
-            profile["facts"] = clean_facts
+            profile["facts"] = deduped_facts
             stats["users_cleaned"] += 1
             stats["aliases_removed"] += aliases_removed
             stats["facts_removed"] += facts_removed
@@ -123,22 +145,29 @@ _REPLAY_SYSTEM_PROMPT = (
     "這是一份來自群友「{display_name}」的過去完整聊天記錄，\n"
     "內容已通過清洗，請從中萃取關於「這位群友本人」的長期記憶。\n\n"
     "---任務指令---\n"
-    "請從這份記錄中找出有意義的人格特質、興趣、習慣，\n"
-    "以及他與雪莉（橘雪莉）的互動模式。\n\n"
-    "⚠️【絕對禁止事項】：\n"
-    "1. 絕對不可將「橘雪莉」或 [某群友] 的名稱記入 aliases！\n"
-    "2. aliases 只填入這個人真正的自稱、綽號（若無則空陣列）。\n"
-    "3. 禁止把完整句子或別人說的話記成 alias 或 fact。\n"
-    "4. 若發言皆為普通幹話、無具體資訊，留下空陣列，寧缺勿濫。\n"
-    "5. 每條 fact 必須附上 importance（1~5整數）：\n"
-    "   1=短暫狀態  2=一般偏好  3=穩固習慣  4=重要特質  5=核心身份\n"
-    "6. 每條 fact 文字不超過 50 字，禁止記入完整句子。\n\n"
+    "請從這份記錄中找出有意義且真實的人格特質、興趣愛好、生活習慣，\n"
+    "以及他與雪莉（橘雪莉）的長期互動模式。\n\n"
+    "⚠️【核心禁止事項（違規將導致嚴重人格錯亂）】：\n"
+    "1. 【嚴格禁止主客體顛倒】：發話者對其他人說的話（例如叫別人吃大便、罵別人、開玩笑說『你只能...』、『你去死』），\n"
+    "   是發話者對『其他人』的祈使或嘴砲句，絕對不可記為發話者本人的喜好或特質！\n"
+    "2. 【嚴格過濾嘴砲與幹話】：群聊中的打鬧、互相嘲諷、無厘頭幹話或情緒發洩，請一律忽略，留下空陣列，寧缺勿濫！\n"
+    "3. 【嚴格別名判定】：只有發話者明確自我介紹（例如：『我叫XX』、『可以叫我XX』）才記入 aliases。\n"
+    "   絕對禁止將遊戲名稱（如賽爾號）、伺服器房號、動漫名、代號、泛稱（如群友、大家）或整句話記為 aliases！\n"
+    "4. 發言紀錄中出現的「[某群友]」是發話者在訊息中 TAG 的其他人，絕對不是發話者本人！\n"
+    "5. 分類規範（category）：\n"
+    "   - identity: 真實身份/職業/居住地/個人自稱\n"
+    "   - interest: 明確熱愛的遊戲/動漫/技術/興趣\n"
+    "   - habit: 穩固生活作息/口頭禪\n"
+    "   - relationship: 與雪莉（橘雪莉）的長期互動模式\n"
+    "   - opinion: 對重要事物的穩定看法\n"
+    "6. 每條 fact 必須附上 importance（1~5整數）與 category。\n"
+    "7. 每條 fact 文字不超過 50 字，禁止記入完整句子。\n\n"
     "目前已知長期屬性（請勿重複，但可升級 importance）：\n"
     "{current_facts}\n\n"
     "請只返回 JSON 格式，不可有任何其他文字：\n"
     '```json\n'
-    '{{"aliases": ["真實的綽號或自稱"],\n'
-    ' "facts": [{{"fact": "他喜歡XX", "importance": 3}}]}}\n'
+    '{{"aliases": ["真實的綽號或自稱(若無則空陣列)"],\n'
+    ' "facts": [{{"fact": "他平時喜歡寫Python", "importance": 3, "category": "interest"}}]}}\n'
     '```'
 )
 
@@ -305,6 +334,12 @@ def _setup_logging() -> None:
 
 def main() -> None:
     """CLI 入口，支援 sanitize / replay / all 三種模式。"""
+    import sys
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
     _setup_logging()
 
     parser = argparse.ArgumentParser(description="雪莉記憶清洗與重建工具")
@@ -322,34 +357,33 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    print("=" * 60)
-    print(" 🌸 橘雪莉記憶系統 - 舊資料清洗與重建工具 🌸")
-    print("=" * 60)
+    logger.info("=" * 50)
+    logger.info("橘雪莉記憶系統 - 舊資料清洗與重建工具")
+    logger.info("=" * 50)
 
     if args.mode in ("sanitize", "all"):
-        print("\n🧹 [模式 1: 靜態記憶清洗]")
+        logger.info("[模式 1: 靜態記憶清洗]")
         if not settings.USER_MEMORY_PATH.exists():
-            print(f"⚠️  尚未找到記憶庫檔案 `{settings.USER_MEMORY_PATH}` (可能為首次部署)。")
-            print("ℹ️  無需進行靜態清洗，待 Bot 運作後會自動建立最新格式記憶庫。")
+            logger.info("尚未找到記憶庫檔案 %s (可能為首次部署)。無需進行靜態清洗。", settings.USER_MEMORY_PATH)
         else:
-            print(f"正在掃描並清洗 `{settings.USER_MEMORY_PATH}` ...")
+            logger.info("正在掃描並清洗 %s ...", settings.USER_MEMORY_PATH)
             sanitize_stats = sanitize_existing()
-            print(f"✅ 靜態清洗完成！統計數據: {sanitize_stats}")
+            logger.info("靜態清洗完成！統計數據: %s", sanitize_stats)
 
     if args.mode in ("replay", "all"):
-        print(f"\n🔄 [模式 2: 歷史對話記憶重跑 (最近 {args.days} 天)]")
+        logger.info("[模式 2: 歷史對話記憶重跑 (最近 %d 天)]", args.days)
         chat_log_dir = settings.CHAT_LOG_DIR
         if not chat_log_dir.exists() or not list(chat_log_dir.glob("*.jsonl")):
-            print(f"⚠️  尚未找到歷史對話日誌目錄 `{chat_log_dir}` 或無 `.jsonl` 檔案。")
-            print("ℹ️  無需歷史重跑。當新機器累積 `data/chat_logs/` 後即可隨時執行。")
+            logger.info("尚未找到歷史對話日誌目錄 %s 或無 .jsonl 檔案。無需歷史重跑。", chat_log_dir)
         else:
-            print(f"正在讀取 `{chat_log_dir}` 並透過大模型重新萃取...")
+            logger.info("正在讀取 %s 並透過大模型重新萃取...", chat_log_dir)
             replay_stats = asyncio.run(replay_past_chat_logs(days=args.days))
-            print(f"✅ 歷史對話重跑完成！統計數據: {replay_stats}")
+            logger.info("歷史對話重跑完成！統計數據: %s", replay_stats)
 
-    print("\n" + "=" * 60)
+    logger.info("=" * 50)
 
 
 if __name__ == "__main__":
     main()
+
 

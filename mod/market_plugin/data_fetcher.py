@@ -23,17 +23,22 @@ except ImportError:
 from mod.market_plugin import config as cfg
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 class DataFetcher:
-    def __init__(self):
+    def __init__(self) -> None:
         self.finnhub_client = None
         if _FINNHUB_AVAILABLE and cfg.FINNHUB_API_KEY:
             try:
                 self.finnhub_client = finnhub.Client(api_key=cfg.FINNHUB_API_KEY)
-                print("✅ [market_plugin] Finnhub API 客戶端已連線")
+                logger.info("[market_plugin] Finnhub API 客戶端已連線")
             except Exception as e:
-                print(f"⚠️ [market_plugin] Finnhub 初始化失敗: {e}")
+                logger.warning("[market_plugin] Finnhub 初始化失敗: %s", e)
         else:
-            print("⚠️ [market_plugin] 未設定 FINNHUB_API_KEY，新聞功能將受限")
+            logger.warning("[market_plugin] 未設定 FINNHUB_API_KEY，新聞功能將受限")
 
     # ------------------------------------------------------------------
     # 預設清單
@@ -281,6 +286,29 @@ class DataFetcher:
                 e50 = df["Close"].ewm(span=50, adjust=False).mean().iloc[-1]
                 e200 = df["Close"].ewm(span=200, adjust=False).mean().iloc[-1]
 
+                ma20 = df["Close"].rolling(window=20).mean().iloc[-1]
+                ma60 = df["Close"].rolling(window=min(len(df), 60)).mean().iloc[-1]
+
+                std20 = df["Close"].rolling(window=20).std().iloc[-1]
+                bb_upper = ma20 + (2 * std20)
+                bb_lower = ma20 - (2 * std20)
+
+                # MACD (12, 26, 9)
+                ema12_series = df["Close"].ewm(span=12, adjust=False).mean()
+                ema26_series = df["Close"].ewm(span=26, adjust=False).mean()
+                dif_series = ema12_series - ema26_series
+                dem_series = dif_series.ewm(span=9, adjust=False).mean()
+                macd_dif = dif_series.iloc[-1]
+                macd_hist = (dif_series - dem_series).iloc[-1]
+
+                # Volume Ratio (當日成交量 / 20日平均量)
+                vol_ratio = 1.0
+                if "Volume" in df.columns and len(df) >= 20:
+                    vol_today = df["Volume"].iloc[-1]
+                    vol_avg = df["Volume"].rolling(window=20).mean().iloc[-1]
+                    if vol_avg > 0:
+                        vol_ratio = float(vol_today / vol_avg)
+
                 delta = df["Close"].diff()
                 gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
                 loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -298,9 +326,16 @@ class DataFetcher:
                     "close": round(float(close), 2),
                     "day_pct": round(float(day_pct), 2),
                     "mon_pct": round(float(mon_pct), 2),
+                    "ma20": round(float(ma20), 2),
+                    "ma60": round(float(ma60), 2),
                     "ema20": round(float(e20), 2),
                     "ema50": round(float(e50), 2),
                     "ema200": round(float(e200), 2),
+                    "bb_upper": round(float(bb_upper), 2),
+                    "bb_lower": round(float(bb_lower), 2),
+                    "macd_dif": round(float(macd_dif), 2),
+                    "macd_hist": round(float(macd_hist), 2),
+                    "volume_ratio": round(float(vol_ratio), 2),
                     "rsi": round(float(rsi), 1),
                     "pb": round(pb, 2) if isinstance(pb, (int, float)) else "N/A",
                     "pe": round(pe, 1) if isinstance(pe, (int, float)) else "N/A",

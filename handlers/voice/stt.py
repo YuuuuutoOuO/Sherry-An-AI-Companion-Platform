@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import tempfile
 import os
@@ -61,14 +62,17 @@ class SpeechToText:
             if lang == "zh":
                 lang = "zh-CN"
             
-            # Using transformers pipeline
-            result = self._model(tmp_name, generate_kwargs={"language": lang})
-            text = result.get("text", "")
+            # Using transformers pipeline in thread pool to prevent event loop blocking
+            def _do_transcribe() -> str:
+                res = self._model(tmp_name, generate_kwargs={"language": lang})
+                return str(res.get("text", "")).strip()
+
+            text = await asyncio.to_thread(_do_transcribe)
             
             # 記錄成功辨識的文字
-            stt_logger.info(f"[SUCCESS] 語音大小: {len(audio_bytes)} bytes | 辨識結果: {text.strip()}")
+            stt_logger.info(f"[SUCCESS] 語音大小: {len(audio_bytes)} bytes | 辨識結果: {text}")
             
-            return text.strip()
+            return text
         except Exception as e:
             # 記錄錯誤
             stt_logger.error(f"[ERROR] STT 辨識發生錯誤: {e}", exc_info=True)

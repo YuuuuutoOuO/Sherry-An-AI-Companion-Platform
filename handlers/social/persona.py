@@ -1,3 +1,4 @@
+import functools
 import logging
 from pathlib import Path
 import re
@@ -17,6 +18,7 @@ _HIGH_PRIORITY_LORE_PATTERNS = frozenset([
 ])
 
 
+@functools.lru_cache(maxsize=4)
 def _load_soul_persona(channel_id: int | None = None) -> str:
     """載入 SOUL 靈魂 Markdown 檔案，支援頻道映射與 fallback 備援機制。"""
     soul_file: Path = getattr(settings, "DEFAULT_SOUL_PATH", settings.BASE_DIR / "file" / "soul" / "sherry_default.md")

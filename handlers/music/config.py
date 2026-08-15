@@ -20,7 +20,7 @@ else:
 # Enabled loudnorm for volume normalization
 FFMPEG_OPTIONS = {
     'before_options': getattr(settings, "MUSIC_FFMPEG_BEFORE_OPTIONS", '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -loglevel error'),
-    'options': getattr(settings, "MUSIC_FFMPEG_OPTIONS", '-vn -af "loudnorm=I=-14:LRA=11:TP=-1.5"')
+    'options': getattr(settings, "MUSIC_FFMPEG_OPTIONS", '-vn -af "loudnorm=I=-9:LRA=11:TP=-1.0"')
 }
 
 # YouTube cookies 檔案路徑（需手動匯出瀏覽器 cookies 至此）
