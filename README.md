@@ -29,17 +29,17 @@
 ```mermaid
 flowchart TD
     UserMsg["群友訊息 / 圖片 @雪莉"] --> RateLimit{"Rate Limiter 檢查"}
-    RateLimit -->|允許| VisionCheck{"是否夾帶圖片？"}
-    VisionCheck -->|是| VisionModel["VISION_MODEL 視覺解析 + 自我形象特徵辨識"]
-    VisionCheck -->|否| QuoteContext["擷取引用回覆上下文"]
+    RateLimit -->|"允許"| VisionCheck{"是否夾帶圖片？"}
+    VisionCheck -->|"是"| VisionModel["VISION_MODEL 視覺解析與特徵辨識"]
+    VisionCheck -->|"否"| QuoteContext["擷取引用回覆上下文"]
     VisionModel --> QuoteContext
     QuoteContext --> DispatchMode{"AGENT_DISPATCH_MODE"}
     
-    DispatchMode -->|PARALLEL (預設推薦)| ParallelAgent["Parallel Agent (單次推論規劃 + asyncio.gather 並行執行 + Early Termination)"]
-    DispatchMode -->|REACT| ReActAgent["ReAct Agent (Thought → Action → Observation 迭代推理迴圈)"]
-    DispatchMode -->|CLASSIC| ClassicRouter["經典漏斗路由 (Regex 極速層 → LLM 分類器)"]
+    DispatchMode -->|"PARALLEL (預設推薦)"| ParallelAgent["Parallel Agent (單次規劃 + 並行執行 + 動作秒結)"]
+    DispatchMode -->|"REACT"| ReActAgent["ReAct Agent (思考 → 行動 → 觀察 迭代推理)"]
+    DispatchMode -->|"CLASSIC"| ClassicRouter["經典硬路由 (正則快路徑 → LLM 分類器)"]
     
-    ParallelAgent --> PersonaSynth["結合三層 Prompt + Lorebook 人格合成回覆"]
+    ParallelAgent --> PersonaSynth["結合三層 Prompt + Lorebook 合成人格回覆"]
     ReActAgent --> PersonaSynth
     ClassicRouter --> PersonaSynth
     PersonaSynth --> Queue["BotBrain PriorityQueue 推理佇列"]
