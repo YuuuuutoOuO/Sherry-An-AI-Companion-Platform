@@ -1,5 +1,6 @@
 import logging
 import asyncio
+from typing import Any
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -26,15 +27,22 @@ class VoiceCog(commands.Cog):
 
     @app_commands.command(name="join_voice", description="加入語音頻道開始交談")
     async def join_voice(self, interaction: discord.Interaction) -> None:
-        if not interaction.user.voice:
+        user = interaction.user
+        voice_state = getattr(user, "voice", None)
+        if not voice_state or not voice_state.channel:
             await interaction.response.send_message("你必須先加入語音頻道！")
             return
             
-        channel = interaction.user.voice.channel
-        await interaction.response.send_message(f"準備進入 {channel.name}，正在加載語音模型...")
+        channel = voice_state.channel
+        guild_id = interaction.guild_id
+        if not guild_id:
+            await interaction.response.send_message("❌ 請在伺服器中使用此指令！")
+            return
+
+        await interaction.response.send_message(f"準備進入 {getattr(channel, 'name', '語音頻道')}，正在加載語音模型...")
         
         # 標記 VRAM 狀態，關閉 SD
-        brain = self.bot.get_cog("BotBrain")
+        brain: Any = self.bot.get_cog("BotBrain")
         if brain:
             brain._voice_mode_active = True
             
@@ -45,9 +53,9 @@ class VoiceCog(commands.Cog):
         
         try:
             vc = await channel.connect()
-            self._active_channels[interaction.guild_id] = vc
-            asyncio.create_task(self._listen_loop(interaction.guild_id))
-            logger.info(f"已加入語音頻道: {channel.name}")
+            self._active_channels[guild_id] = vc
+            asyncio.create_task(self._listen_loop(guild_id))
+            logger.info(f"已加入語音頻道: {getattr(channel, 'name', guild_id)}")
         except Exception as e:
             logger.error(f"加入語音頻道失敗: {e}")
             if brain:
@@ -56,7 +64,7 @@ class VoiceCog(commands.Cog):
     @app_commands.command(name="leave_voice", description="離開語音頻道並釋放 VRAM")
     async def leave_voice(self, interaction: discord.Interaction) -> None:
         guild_id = interaction.guild_id
-        if guild_id in self._active_channels:
+        if guild_id and guild_id in self._active_channels:
             vc = self._active_channels.pop(guild_id)
             await vc.disconnect()
             
@@ -68,7 +76,7 @@ class VoiceCog(commands.Cog):
                 self._tts.unload()
                 self._tts = None
                 
-            brain = self.bot.get_cog("BotBrain")
+            brain: Any = self.bot.get_cog("BotBrain")
             if brain:
                 brain._voice_mode_active = False
                 
@@ -150,7 +158,7 @@ class VoiceCog(commands.Cog):
                                     from handlers.social.router import route_and_execute_tag
                                     
                                     # 將這個語音指令直接丟進原本的文字處理路由 (支援所有工具如排程、畫圖、音樂等)
-                                    await route_and_execute_tag(self.bot, mock_msg)
+                                    await route_and_execute_tag(self.bot, mock_msg)  # type: ignore[arg-type]
                         else:
                             # 沒聽到雪莉，當作背景音略過
                             pass

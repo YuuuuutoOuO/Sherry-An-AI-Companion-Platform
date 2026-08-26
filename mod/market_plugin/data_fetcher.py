@@ -183,7 +183,7 @@ class DataFetcher:
     # 晚報用 6 個月趨勢 + 新聞
     # ------------------------------------------------------------------
     def fetch_6mo_trend_and_news(self, tickers: list[str]) -> tuple[str, list]:
-        print(f"[market_plugin] 🔍 正在分析 {len(tickers)} 檔標的...")
+        logger.info("[market_plugin] 🔍 正在分析 %d 檔標的...", len(tickers))
         results = []
         try:
             data = yf.download(
@@ -243,10 +243,13 @@ class DataFetcher:
 
         ai_context = "【高階市場數據】\n"
         for item in results:
-            t = item["techs"]
+            t = item.get("techs", {})
+            rsi_val = t.get("RSI", "N/A") if isinstance(t, dict) else "N/A"
+            ma20_val = t.get("MA20", "N/A") if isinstance(t, dict) else "N/A"
+            bb_val = t.get("BB_Upper", "N/A") if isinstance(t, dict) else "N/A"
             ai_context += f"=== {item['ticker']} (現價: {item['price']}) ===\n"
             ai_context += f"趨勢: {item['trend']}\n"
-            ai_context += f"技術指標: RSI={t['RSI']}, MA20={t['MA20']}, BB上軌={t['BB_Upper']}\n"
+            ai_context += f"技術指標: RSI={rsi_val}, MA20={ma20_val}, BB上軌={bb_val}\n"
             if item.get("extra_info"):
                 ai_context += f"{item['extra_info']}\n"
             ai_context += f"過去12h新聞:\n{item['news']}\n\n"
@@ -257,7 +260,7 @@ class DataFetcher:
     # 每日指標晨報（raw_list）
     # ------------------------------------------------------------------
     def get_stock_info_raw(self, tickers: list[str]) -> list[dict]:
-        print(f"[market_plugin] 📊 抓取指標數據 ({len(tickers)} 檔)...")
+        logger.info("[market_plugin] 📊 抓取指標數據 (%d 檔)...", len(tickers))
         results = []
         try:
             data = yf.download(
@@ -265,7 +268,7 @@ class DataFetcher:
                 group_by="ticker", progress=False, auto_adjust=True
             )
         except Exception as e:
-            print(f"[market_plugin] 下載失敗: {e}")
+            logger.error("[market_plugin] 下載失敗: %s", e)
             return []
 
         for ticker in tickers:

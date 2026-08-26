@@ -60,14 +60,18 @@ async def load_all_tasks() -> list[dict[str, Any]]:
     """取得所有排程任務（執行緒安全讀取）。"""
     async with _lock:
         data = await _read_raw()
-        return data.get("tasks", [])
+        tasks = data.get("tasks", [])
+        return tasks if isinstance(tasks, list) else []
 
 
 async def load_tasks_by_user(user_id: str) -> list[dict[str, Any]]:
     """取得指定使用者的所有排程任務（執行緒安全讀取）。"""
     async with _lock:
         data = await _read_raw()
-        return [t for t in data.get("tasks", []) if t.get("user_id") == user_id]
+        tasks = data.get("tasks", [])
+        if isinstance(tasks, list):
+            return [t for t in tasks if isinstance(t, dict) and t.get("user_id") == user_id]
+        return []
 
 
 async def add_task(

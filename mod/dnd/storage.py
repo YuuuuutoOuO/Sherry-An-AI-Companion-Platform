@@ -19,7 +19,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-import settings
+from mod.dnd import config
 from mod.dnd.models import (
     Character,
     CharacterStats,
@@ -36,13 +36,13 @@ from mod.dnd.models import (
 
 logger = logging.getLogger(__name__)
 
-# File paths
-WORLD_FILE: Path = settings.DATA_DIR / "dnd_world.json"
-CHARACTERS_FILE: Path = settings.DATA_DIR / "dnd_characters.json"
-QUESTS_FILE: Path = settings.DATA_DIR / "dnd_quests.json"
-NPCS_FILE: Path = settings.DATA_DIR / "dnd_npcs.json"
-HISTORY_FILE: Path = settings.DATA_DIR / "dnd_history.jsonl"
-WORLD_SETTING_FILE: Path = settings.BASE_DIR / "mod" / "dnd" / "world_setting.json"
+# File paths (aliased from config for compatibility)
+WORLD_FILE: Path = config.WORLD_FILE
+CHARACTERS_FILE: Path = config.CHARACTERS_FILE
+QUESTS_FILE: Path = config.QUESTS_FILE
+NPCS_FILE: Path = config.NPCS_FILE
+HISTORY_FILE: Path = config.HISTORY_FILE
+WORLD_SETTING_FILE: Path = config.WORLD_SETTING_FILE
 
 
 def _atomic_write_json(file_path: Path, data: Any) -> None:
@@ -65,6 +65,21 @@ def _atomic_write_json(file_path: Path, data: Any) -> None:
 # World Setting (Static Skeleton)
 # ---------------------------------------------------------------------------
 
+DEFAULT_WORLD_SETTING: dict[str, Any] = {
+    "world_name": "艾瑟蘭大陸",
+    "era": "裂隙紀元 1247 年",
+    "magic_level": "中魔",
+    "starting_area": {
+        "name": "晨風村",
+        "type": "邊境村落",
+        "description": "位於平原與迷霧森林邊界的平靜村落，是無數冒險者的起點。",
+    },
+    "available_races": ["人類", "精靈", "矮人", "半身人", "半獸人"],
+    "available_classes": ["戰士", "法師", "遊俠", "盜賊", "牧師"],
+    "dm_core_directive": "你是艾瑟蘭大陸的地下城主 (DM)。世界是中魔設定、科技約等同中世紀歐洲。嚴禁引入現代科技或其它作品的角色。保持專業、沉浸且具有奇幻感的敘事風格。",
+}
+
+
 @functools.lru_cache(maxsize=1)
 def load_world_setting() -> dict[str, Any]:
     """Load static world setting JSON skeleton.
@@ -73,15 +88,21 @@ def load_world_setting() -> dict[str, Any]:
         Dictionary containing static setting.
     """
     if not WORLD_SETTING_FILE.exists():
-        logger.warning("World setting file missing at %s", WORLD_SETTING_FILE)
-        return {}
+        try:
+            WORLD_SETTING_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_write_json(WORLD_SETTING_FILE, DEFAULT_WORLD_SETTING)
+            logger.info("Initialized default world setting at %s", WORLD_SETTING_FILE)
+            return DEFAULT_WORLD_SETTING.copy()
+        except Exception as exc:
+            logger.warning("Could not persist default world setting: %s", exc)
+            return DEFAULT_WORLD_SETTING.copy()
 
     try:
         with open(WORLD_SETTING_FILE, "r", encoding="utf-8") as f:
             return json.load(f)  # type: ignore[no-any-return]
     except Exception as exc:
-        logger.error("Failed to load world_setting.json: %s", exc)
-        return {}
+        logger.error("Failed to load world setting file: %s", exc)
+        return DEFAULT_WORLD_SETTING.copy()
 
 
 # ---------------------------------------------------------------------------

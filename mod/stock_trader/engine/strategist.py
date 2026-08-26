@@ -413,15 +413,15 @@ class TradeStrategist:
         if not json_actions:
             if tier2_actions:
                 json_actions = tier2_actions
-                for act in json_actions:
-                    t3_match = next((t for t in tier3_actions if t["ticker"] == act["ticker"]), None)
+                for action_dict in json_actions:
+                    t3_match = next((t for t in tier3_actions if t["ticker"] == action_dict["ticker"]), None)
                     if t3_match:
-                        if act.get("target_amount_usd") is None and t3_match.get("target_amount_usd") is not None:
-                            act["target_amount_usd"] = t3_match.get("target_amount_usd")
-                        if act.get("target_shares") is None and t3_match.get("target_shares") is not None:
-                            act["target_shares"] = t3_match.get("target_shares")
+                        if action_dict.get("target_amount_usd") is None and t3_match.get("target_amount_usd") is not None:
+                            action_dict["target_amount_usd"] = t3_match.get("target_amount_usd")
+                        if action_dict.get("target_shares") is None and t3_match.get("target_shares") is not None:
+                            action_dict["target_shares"] = t3_match.get("target_shares")
                         if t3_match.get("target_shares_ratio") is not None:
-                            act["target_shares_ratio"] = t3_match.get("target_shares_ratio")
+                            action_dict["target_shares_ratio"] = t3_match.get("target_shares_ratio")
                 for t3 in tier3_actions:
                     if not any(a["ticker"] == t3["ticker"] for a in json_actions):
                         json_actions.append(t3)
@@ -440,10 +440,10 @@ class TradeStrategist:
 
         # 整理決策摘要
         summary_items = []
-        for act in json_actions:
-            tk = act.get("ticker", "")
-            ac = act.get("action", "HOLD").upper()
-            reast = act.get("reason", "")
+        for action_dict in json_actions:
+            tk = action_dict.get("ticker", "")
+            ac = action_dict.get("action", "HOLD").upper()
+            reast = action_dict.get("reason", "")
             summary_items.append(f"{tk}:{ac} ({reast})")
 
         decision_summary = "；".join(summary_items) if summary_items else "無具體下單動作 (觀望)"
@@ -486,7 +486,7 @@ class TradeStrategist:
                         system_prompt="",
                         user_prompt=prompt,
                         callback=_on_complete,
-                        model=getattr(settings, "PRIMARY_MODEL", "lms:gemma-4"),
+                        model=cfg.DEFAULT_MODEL,
                         task_id="stock_trader_eval",
                     )
                     await brain.enqueue_task(task)
@@ -496,8 +496,9 @@ class TradeStrategist:
                 except Exception as e:
                     logger.warning("[stock_trader] BotBrain 佇列呼叫失敗，切換直連備援模式: %s", e)
 
-        # 2. 直連推論：依次嘗試 PRIMARY_MODEL -> QUICK_MODEL -> NOMORAL_MODEL -> 本地常用 Ollama 模型
+        # 2. 直連推論：依次嘗試 cfg.DEFAULT_MODEL -> PRIMARY_MODEL -> QUICK_MODEL -> 本地常用 Ollama 模型
         models_to_try = [
+            cfg.DEFAULT_MODEL,
             getattr(settings, "PRIMARY_MODEL", None),
             getattr(settings, "QUICK_MODEL", None),
             getattr(settings, "NOMORAL_MODEL", None),

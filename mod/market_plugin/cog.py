@@ -24,6 +24,7 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 import discord
 from discord import app_commands
@@ -33,7 +34,7 @@ from mod.market_plugin import config as cfg
 from mod.market_plugin.ai_analyst import AIAnalyst
 from mod.market_plugin.card_scraper import fetch_snkrdunk_grades_sync
 from mod.market_plugin.data_fetcher import DataFetcher
-from mod.market_plugin.database import Database
+from mod.market_plugin.repository import Database, MarketRepository
 from mod.market_plugin.reports.card_report import run_card_daily_report
 from mod.market_plugin.reports.daily_raw import run_daily_raw_report
 from mod.market_plugin.reports.etf_monitor import check_etf_premium
@@ -59,14 +60,14 @@ class MarketCog(commands.Cog, name="Market & PTCG"):
         self._last_etf_trigger_minute: int | None = None
 
         # 注入到 bot，讓 reports 子模組可以呼叫
-        bot._market_watchlists = self._load_watchlists
+        setattr(bot, "_market_watchlists", self._load_watchlists)
 
         logger.info("[market_plugin] MarketCog 初始化完成")
 
     # =========================================================================
     # JSON 讀寫工具
     # =========================================================================
-    def _load_watchlists(self) -> dict:
+    def _load_watchlists(self) -> dict[str, list[str]]:
         path: Path = cfg.STOCKS_JSON_PATH
         if not path.exists():
             default = {
@@ -84,12 +85,12 @@ class MarketCog(commands.Cog, name="Market & PTCG"):
                     data[key] = []
                 else:
                     data[key] = [t.replace(".B", "-B").replace(".A", "-A") for t in data[key]]
-            return data
+            return dict(data)
         except (OSError, json.JSONDecodeError, ValueError) as e:
             logger.error("[market_plugin] 讀取 stocks.json 失敗: %s", e)
             return {"ai_list": [], "raw_list": [], "etf_list": []}
 
-    def _save_watchlists(self, data: dict) -> bool:
+    def _save_watchlists(self, data: dict[str, list[str]]) -> bool:
         try:
             with cfg.STOCKS_JSON_PATH.open("w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False)
@@ -98,18 +99,18 @@ class MarketCog(commands.Cog, name="Market & PTCG"):
             logger.error("[market_plugin] 儲存 stocks.json 失敗: %s", e)
             return False
 
-    def _load_cards(self) -> dict:
+    def _load_cards(self) -> dict[str, Any]:
         if not cfg.CARDS_JSON_PATH.exists():
             self._save_cards({})
             return {}
         try:
             with cfg.CARDS_JSON_PATH.open("r", encoding="utf-8") as f:
-                return json.load(f)
+                return dict(json.load(f))
         except (OSError, json.JSONDecodeError, ValueError) as e:
             logger.error("[market_plugin] 讀取 cards.json 失敗: %s", e)
             return {}
 
-    def _save_cards(self, data: dict) -> bool:
+    def _save_cards(self, data: dict[str, Any]) -> bool:
         try:
             with cfg.CARDS_JSON_PATH.open("w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False)
@@ -232,7 +233,8 @@ class MarketCog(commands.Cog, name="Market & PTCG"):
         await ctx.send("📊 正在抓取最新技術指標，請稍候...")
         try:
             await self._task_daily_raw(target_channel_id=ctx.channel.id)
-            await ctx.message.remove_reaction("⏳", self.bot.user)
+            if self.bot.user:
+                await ctx.message.remove_reaction("⏳", self.bot.user)
             await ctx.message.add_reaction("✅")
         except Exception as e:  # noqa: BLE001
             await ctx.send(f"❌ 報告生成失敗: {e}")
@@ -279,68 +281,77 @@ class MarketCog(commands.Cog, name="Market & PTCG"):
         await ctx.send(msg)
 
     # =========================================================================
-    # 股票指令 — 斜線指令
+    # 股票指令 — /market 整合指令 (Choice 選單模式)
     # =========================================================================
-    @app_commands.command(name="market_raw", description="手動觸發技術指標報告")
-    async def slash_raw(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message("📊 正在抓取最新技術指標，請稍候...", ephemeral=False)
-        try:
-            await self._task_daily_raw(target_channel_id=interaction.channel_id)
-        except Exception as e:  # noqa: BLE001
-            await interaction.followup.send(f"❌ 報告生成失敗: {e}", ephemeral=True)
-
-    @app_commands.command(name="market_add", description="加入股票追蹤清單")
+    @app_commands.command(name="market", description="📈 股票追蹤、清單管理與即時技術指標晨報")
     @app_commands.describe(
-        list_type="清單類型 (ai / raw / etf)",
-        ticker="股票代號，例如 NVDA",
+        action="選擇執行的動作",
+        list_type="清單類型 (僅在 add / remove 時需要)",
+        ticker="股票代號 (僅在 add / remove 時需要，例如 NVDA 或 2330.TW)",
     )
-    @app_commands.choices(list_type=[
-        app_commands.Choice(name="AI 分析組", value="ai"),
-        app_commands.Choice(name="指標晨報組", value="raw"),
-        app_commands.Choice(name="台股 ETF 組", value="etf"),
+    @app_commands.choices(action=[
+        app_commands.Choice(name="📰 即時晨報 (raw) — 手動推送最新技術指標晨報", value="raw"),
+        app_commands.Choice(name="➕ 加入追蹤 (add) — 將股票加入追蹤清單", value="add"),
+        app_commands.Choice(name="➖ 移除追蹤 (remove) — 從追蹤清單中移除股票", value="remove"),
+        app_commands.Choice(name="📋 查看清單 (list) — 查看目前追蹤的所有股票清單", value="list"),
     ])
-    async def slash_add(self, interaction: discord.Interaction, list_type: str, ticker: str) -> None:
-        ticker = ticker.upper().strip().replace(".B", "-B")
-        data = self._load_watchlists()
-        key = f"{list_type}_list"
-        if ticker in data[key]:
-            await interaction.response.send_message(f"⚠️ **{ticker}** 已在 {list_type} 清單中", ephemeral=True)
-            return
-        data[key].append(ticker)
-        if self._save_watchlists(data):
-            await interaction.response.send_message(f"✅ 已將 **{ticker}** 加入 {list_type} 組")
-
-    @app_commands.command(name="market_remove", description="移除股票追蹤清單")
-    @app_commands.describe(
-        list_type="清單類型 (ai / raw / etf)",
-        ticker="股票代號，例如 NVDA",
-    )
     @app_commands.choices(list_type=[
-        app_commands.Choice(name="AI 分析組", value="ai"),
-        app_commands.Choice(name="指標晨報組", value="raw"),
-        app_commands.Choice(name="台股 ETF 組", value="etf"),
+        app_commands.Choice(name="🤖 AI 分析組 (ai)", value="ai"),
+        app_commands.Choice(name="☀️ 指標晨報組 (raw)", value="raw"),
+        app_commands.Choice(name="📊 台股 ETF 組 (etf)", value="etf"),
     ])
-    async def slash_remove(self, interaction: discord.Interaction, list_type: str, ticker: str) -> None:
-        ticker = ticker.upper().strip().replace(".B", "-B")
-        data = self._load_watchlists()
-        key = f"{list_type}_list"
-        if ticker not in data[key]:
-            await interaction.response.send_message(f"⚠️ 找不到 **{ticker}**", ephemeral=True)
-            return
-        data[key].remove(ticker)
-        if self._save_watchlists(data):
-            await interaction.response.send_message(f"🗑️ 已移除 **{ticker}**")
+    async def slash_market(
+        self,
+        interaction: discord.Interaction,
+        action: app_commands.Choice[str],
+        list_type: app_commands.Choice[str] | None = None,
+        ticker: str | None = None,
+    ) -> None:
+        act = action.value
+        if act == "raw":
+            await interaction.response.send_message("📊 正在抓取最新技術指標，請稍候...", ephemeral=False)
+            try:
+                await self._task_daily_raw(target_channel_id=interaction.channel_id)
+            except Exception as e:  # noqa: BLE001
+                await interaction.followup.send(f"❌ 報告生成失敗: {e}", ephemeral=True)
 
-    @app_commands.command(name="market_list", description="查看所有股票追蹤清單")
-    async def slash_watchlist(self, interaction: discord.Interaction) -> None:
-        data = self._load_watchlists()
-        msg = (
-            "📋 **目前股票追蹤清單**\n"
-            f"🔹 **AI 分析組**: `{', '.join(data.get('ai_list', []))}`\n"
-            f"🔸 **指標晨報組**: `{', '.join(data.get('raw_list', []))}`\n"
-            f"📈 **台股 ETF 組**: `{', '.join(data.get('etf_list', []))}`"
-        )
-        await interaction.response.send_message(msg)
+        elif act == "add":
+            if not list_type or not ticker:
+                await interaction.response.send_message("❌ 請提供 `list_type` (清單類型) 與 `ticker` (股票代號)！", ephemeral=True)
+                return
+            cleaned_ticker = ticker.upper().strip().replace(".B", "-B")
+            data = self._load_watchlists()
+            key = f"{list_type.value}_list"
+            if cleaned_ticker in data.get(key, []):
+                await interaction.response.send_message(f"⚠️ **{cleaned_ticker}** 已在 {list_type.name} 中", ephemeral=True)
+                return
+            data.setdefault(key, []).append(cleaned_ticker)
+            if self._save_watchlists(data):
+                await interaction.response.send_message(f"✅ 已將 **{cleaned_ticker}** 加入 {list_type.name}！")
+
+        elif act == "remove":
+            if not list_type or not ticker:
+                await interaction.response.send_message("❌ 請提供 `list_type` (清單類型) 與 `ticker` (股票代號)！", ephemeral=True)
+                return
+            cleaned_ticker = ticker.upper().strip().replace(".B", "-B")
+            data = self._load_watchlists()
+            key = f"{list_type.value}_list"
+            if cleaned_ticker not in data.get(key, []):
+                await interaction.response.send_message(f"⚠️ 在 {list_type.name} 中找不到 **{cleaned_ticker}**", ephemeral=True)
+                return
+            data[key].remove(cleaned_ticker)
+            if self._save_watchlists(data):
+                await interaction.response.send_message(f"🗑️ 已從 {list_type.name} 移除 **{cleaned_ticker}**！")
+
+        elif act == "list":
+            data = self._load_watchlists()
+            msg = (
+                "📋 **目前股票追蹤清單**\n"
+                f"🔹 **AI 分析組**: `{', '.join(data.get('ai_list', []))}`\n"
+                f"🔸 **指標晨報組**: `{', '.join(data.get('raw_list', []))}`\n"
+                f"📈 **台股 ETF 組**: `{', '.join(data.get('etf_list', []))}`"
+            )
+            await interaction.response.send_message(msg)
 
     # =========================================================================
     # PTCG 卡片指令 — 前綴
@@ -400,63 +411,84 @@ class MarketCog(commands.Cog, name="Market & PTCG"):
         await ctx.send("🃏 正在啟動爬蟲潛入 SNKRDUNK 抓取最新卡價，請稍候...")
         try:
             await self._task_card_report(target_channel_id=ctx.channel.id)
-            await ctx.message.remove_reaction("⏳", self.bot.user)
+            if self.bot.user:
+                await ctx.message.remove_reaction("⏳", self.bot.user)
             await ctx.message.add_reaction("✅")
         except Exception as e:  # noqa: BLE001
             await ctx.send(f"❌ 卡片報價獲取失敗: {e}")
 
     # =========================================================================
-    # PTCG 卡片指令 — 斜線指令
+    # PTCG 卡片指令 — /card 整合指令 (Choice 選單模式)
     # =========================================================================
-    @app_commands.command(name="card_add", description="新增 PTCG 卡片追蹤")
-    @app_commands.describe(url="SNKRDUNK 卡片頁面網址", name="卡片名稱（自訂顯示名）")
-    async def slash_addcard(self, interaction: discord.Interaction, url: str, name: str) -> None:
-        data = self._load_cards()
-        if name in data:
-            await interaction.response.send_message(f"⚠️ **{name}** 已在追蹤清單中", ephemeral=True)
-            return
-        data[name] = {"url": url.strip(), "last_prices": {}}
-        if self._save_cards(data):
-            await interaction.response.send_message(f"✅ 已將 **{name}** 加入卡片追蹤清單！")
+    @app_commands.command(name="card", description="🃏 PTCG 卡片價格追蹤與即時行情")
+    @app_commands.describe(
+        action="選擇執行的動作",
+        name="卡片自訂名稱 (僅在 add / remove 時需要)",
+        url="SNKRDUNK 卡片頁面網址 (僅在 add 時需要)",
+    )
+    @app_commands.choices(action=[
+        app_commands.Choice(name="➕ 加入追蹤 (add) — 新增 PTCG 卡片追蹤", value="add"),
+        app_commands.Choice(name="➖ 移除追蹤 (remove) — 移除 PTCG 卡片追蹤", value="remove"),
+        app_commands.Choice(name="📋 查看清單 (list) — 查看追蹤的卡片清單與最新報價", value="list"),
+        app_commands.Choice(name="🔄 更新卡價 (update) — 手動觸發卡片報價爬蟲更新", value="update"),
+    ])
+    async def slash_card(
+        self,
+        interaction: discord.Interaction,
+        action: app_commands.Choice[str],
+        name: str | None = None,
+        url: str | None = None,
+    ) -> None:
+        act = action.value
+        if act == "add":
+            if not name or not url:
+                await interaction.response.send_message("❌ 請提供 `name` (卡片名稱) 與 `url` (SNKRDUNK 網址)！", ephemeral=True)
+                return
+            data = self._load_cards()
+            if name in data:
+                await interaction.response.send_message(f"⚠️ **{name}** 已在追蹤清單中", ephemeral=True)
+                return
+            data[name] = {"url": url.strip(), "last_prices": {}}
+            if self._save_cards(data):
+                await interaction.response.send_message(f"✅ 已將 **{name}** 加入卡片追蹤清單！")
 
-    @app_commands.command(name="card_remove", description="移除 PTCG 卡片追蹤")
-    @app_commands.describe(name="卡片名稱")
-    async def slash_removecard(self, interaction: discord.Interaction, name: str) -> None:
-        data = self._load_cards()
-        if name not in data:
-            await interaction.response.send_message(f"⚠️ 找不到 **{name}**", ephemeral=True)
-            return
-        del data[name]
-        if self._save_cards(data):
-            await interaction.response.send_message(f"🗑️ 已停止追蹤 **{name}**")
+        elif act == "remove":
+            if not name:
+                await interaction.response.send_message("❌ 請提供 `name` (卡片名稱)！", ephemeral=True)
+                return
+            data = self._load_cards()
+            if name not in data:
+                await interaction.response.send_message(f"⚠️ 找不到 **{name}**", ephemeral=True)
+                return
+            del data[name]
+            if self._save_cards(data):
+                await interaction.response.send_message(f"🗑️ 已停止追蹤 **{name}**")
 
-    @app_commands.command(name="card_list", description="查看追蹤的卡片清單與最新報價")
-    async def slash_listcard(self, interaction: discord.Interaction) -> None:
-        data = self._load_cards()
-        if not data:
-            await interaction.response.send_message("⚠️ 目前沒有追蹤任何卡片", ephemeral=True)
-            return
-        msg = "📋 **目前追蹤的卡片清單**\n"
-        for name, info in data.items():
-            lp = info.get("last_prices", {})
-            pa = lp.get("A", "N/A")
-            pp = lp.get("PSA 10", "N/A")
-            pb = lp.get("BGS 9.5", "N/A")
-            msg += (
-                f"• **{name}** "
-                f"(A: {'$'+str(pa) if pa!='N/A' else 'N/A'} | "
-                f"PSA 10: {'$'+str(pp) if pp!='N/A' else 'N/A'} | "
-                f"BGS 9.5: {'$'+str(pb) if pb!='N/A' else 'N/A'})\n"
-            )
-        await interaction.response.send_message(msg)
+        elif act == "list":
+            data = self._load_cards()
+            if not data:
+                await interaction.response.send_message("⚠️ 目前沒有追蹤任何卡片", ephemeral=True)
+                return
+            msg = "📋 **目前追蹤的卡片清單**\n"
+            for card_name, info in data.items():
+                lp = info.get("last_prices", {})
+                pa = lp.get("A", "N/A")
+                pp = lp.get("PSA 10", "N/A")
+                pb = lp.get("BGS 9.5", "N/A")
+                msg += (
+                    f"• **{card_name}** "
+                    f"(A: {'$'+str(pa) if pa!='N/A' else 'N/A'} | "
+                    f"PSA 10: {'$'+str(pp) if pp!='N/A' else 'N/A'} | "
+                    f"BGS 9.5: {'$'+str(pb) if pb!='N/A' else 'N/A'})\n"
+                )
+            await interaction.response.send_message(msg)
 
-    @app_commands.command(name="card_update", description="手動觸發卡片報價更新（啟動爬蟲）")
-    async def slash_updatecard(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message("🃏 正在啟動爬蟲抓取最新卡價，請稍候...")
-        try:
-            await self._task_card_report(target_channel_id=interaction.channel_id)
-        except Exception as e:  # noqa: BLE001
-            await interaction.followup.send(f"❌ 卡片報價獲取失敗: {e}", ephemeral=True)
+        elif act == "update":
+            await interaction.response.send_message("🃏 正在啟動爬蟲抓取最新卡價，請稍候...")
+            try:
+                await self._task_card_report(target_channel_id=interaction.channel_id)
+            except Exception as e:  # noqa: BLE001
+                await interaction.followup.send(f"❌ 卡片報價獲取失敗: {e}", ephemeral=True)
 
 
 # =========================================================================

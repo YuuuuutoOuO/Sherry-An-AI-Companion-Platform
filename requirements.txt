@@ -38,7 +38,6 @@ psutil>=5.9.0           # Web UI server: system CPU / RAM / Network metrics
 
 # --- Optional Modules Dependencies (mod/market_plugin) ---
 # 若不使用股票分析與 PTCG 卡片追蹤功能，可略過以下套件
-google-generativeai>=0.5.0
 google-genai>=1.0.0
 apscheduler>=3.10.0
 finnhub-python>=2.4.19

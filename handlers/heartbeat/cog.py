@@ -147,7 +147,7 @@ class HeartbeatCog(commands.Cog):
         self, task: HeartbeatTask, is_cold_channel: bool = False
     ) -> None:
         """推送心跳任務至 BotBrain。"""
-        brain: BotBrain | None = self.bot.get_cog("BotBrain")
+        brain: Any = self.bot.get_cog("BotBrain")
         if not brain:
             return
 
@@ -162,11 +162,15 @@ class HeartbeatCog(commands.Cog):
 
         vibe_context = ""
         if is_cold_channel:
-            vibe_mgr = self.bot.get_cog("VibeManager")
+            vibe_mgr: Any = self.bot.get_cog("VibeManager")
             if vibe_mgr:
                 vibe_snippet = vibe_mgr.get_top_topics_snippet(task.channel_id)
                 if vibe_snippet:
                     vibe_context = f"\n近期群組熱門話題供參考：\n{vibe_snippet}\n"
+
+        cot_instruction = ""
+        if getattr(settings, "MICRO_COT_ENABLED", True):
+            cot_instruction = "0. 🧠 【深度思考機制】：在給出最終回覆前，妳「必須」先用 <thought>...</thought> 標籤包覆妳的內心想法、局勢分析與發言策略。思考完後，再輸出對外說的話。\n"
 
         system_prompt = (
             f"{head_persona}\n\n"
@@ -174,16 +178,30 @@ class HeartbeatCog(commands.Cog):
             f"任務需求：{task.prompt}\n"
             f"{vibe_context}"
             "【執行規則】：\n"
+            f"{cot_instruction}"
             "1. 必須以橘雪莉第一人稱口吻直接開口說話，文字生動有活力。\n"
             "2. 嚴禁引號括號包裹整句，也不要輸出任何小說旁白敘述。\n"
             "3. 保持 15 歲名偵探的自信、自然與調皮人設。"
         )
 
+        import time
+        start_time = time.time()
+
         async def _on_heartbeat_reply(reply: str) -> None:
             clean_reply = reply.strip()
             if clean_reply:
+                elapsed_ms = int((time.time() - start_time) * 1000)
                 try:
-                    await simulate_typing_and_send(target_channel, clean_reply)
+                    await simulate_typing_and_send(
+                        target_channel,
+                        clean_reply,
+                        intent_name="HEARTBEAT",
+                        prompt=task.prompt,
+                        model=settings.PRIMARY_MODEL,
+                        system_prompt=system_prompt,
+                        user_prompt=f"主動發言任務：{task.title}",
+                        latency_ms=elapsed_ms,
+                    )
                 except Exception as exc:
                     logger.error("[HEARTBEAT] 發送心跳訊息至頻道 %d 失敗: %s", task.channel_id, exc)
 

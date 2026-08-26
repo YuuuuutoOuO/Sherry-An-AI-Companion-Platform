@@ -13,6 +13,7 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 import discord
 from discord.ext import commands
@@ -27,6 +28,7 @@ settings.FILE_DIR.mkdir(parents=True, exist_ok=True)
 settings.SOUL_DIR.mkdir(parents=True, exist_ok=True)
 settings.THINKING_LOG_DIR.mkdir(parents=True, exist_ok=True)
 settings.CHAT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+settings.VIDEO_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # Logging setup (must happen before any other import that logs)
@@ -59,6 +61,7 @@ EXTENSIONS: list[str] = [
     "handlers.help_cog",
     "handlers.welcome_cog",
     "handlers.heartbeat",
+    "handlers.roast",
 ]
 
 # ---------------------------------------------------------------------------
@@ -105,6 +108,22 @@ def build_bot() -> commands.Bot:
 
 async def main() -> None:
     """Async entry point: load extensions then connect to Discord."""
+    # Set exception handler on loop to gracefully ignore Windows WinError 10054 on client disconnects
+    def _asyncio_loop_exception_handler(loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        exc = context.get("exception")
+        if isinstance(exc, ConnectionResetError) or (isinstance(exc, OSError) and getattr(exc, "winerror", None) == 10054):
+            return
+        msg = context.get("message", "")
+        if "_call_connection_lost" in msg or ("ProactorBasePipeTransport" in msg and "10054" in str(context)):
+            return
+        loop.default_exception_handler(context)
+
+    try:
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(_asyncio_loop_exception_handler)
+    except RuntimeError:
+        pass
+
     bot = build_bot()
 
     async with bot:
@@ -132,7 +151,7 @@ async def main() -> None:
         @bot.event
         async def on_ready() -> None:
             import time
-            bot._start_time = time.time()
+            setattr(bot, "_start_time", time.time())
             try:
                 synced = await bot.tree.sync()
                 logger.info("Synced %d slash command(s).", len(synced))
@@ -140,12 +159,13 @@ async def main() -> None:
                 logger.error("Failed to sync slash commands: %s", exc)
 
             # --- Startup Summary Banner ---
+            bot_id = bot.user.id if bot.user else "Unknown"
             banner_lines = [
                 "=" * 60,
                 "🚀 SYSTEM STARTUP COMPLETE",
                 "=" * 60,
                 f"🤖 Bot Name : {bot.user}",
-                f"🆔 Bot ID   : {bot.user.id}",
+                f"🆔 Bot ID   : {bot_id}",
                 f"🏠 Guilds   : {len(bot.guilds)}",
                 "-" * 60,
             ]

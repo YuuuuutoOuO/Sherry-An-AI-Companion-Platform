@@ -3,6 +3,7 @@ handlers/social/tools/search_tools.py
 =====================================
 網頁與實體檢索工具庫。
 包含 URL 分析總結工具 (URLSummaryTool) 與 CHAT 檢索輔助函式 (fetch_web_and_entity_context)。
+支援 Discord Markdown 連結解析、SPA 網頁多層次備援萃取與 Slug 搜尋聯網回退。
 """
 
 from __future__ import annotations
@@ -10,19 +11,282 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 import urllib.parse
+from typing import Any
+
 import aiohttp
+from bs4 import BeautifulSoup
 import discord
 from discord.ext import commands
+
 import settings
 from handlers.bot_brain import BotBrain, InferenceTask
+from handlers.social.contracts import ToolCategory, ToolResult
 from handlers.social.persona import build_dynamic_persona
-from handlers.social.tool_base import BaseTool
+from handlers.social.tool_base import BaseTool, ToolResponseMode
 from handlers.social.utils import simulate_typing_and_send
+from mod.deep_search.repositories.search_client import DuckDuckGoSearchClient
+
+try:
+    import trafilatura
+except ImportError:
+    trafilatura = None
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_HTTP_TIMEOUT: int = settings.DEFAULT_HTTP_TIMEOUT
+DEFAULT_HTTP_TIMEOUT: int = getattr(settings, "DEFAULT_HTTP_TIMEOUT", 10)
+_search_session: aiohttp.ClientSession | None = None
+
+
+async def _get_search_session() -> aiohttp.ClientSession:
+    """取得或延遲初始化共用之 aiohttp.ClientSession。"""
+    global _search_session
+    if _search_session is None or _search_session.closed:
+        timeout = aiohttp.ClientTimeout(total=DEFAULT_HTTP_TIMEOUT)
+        headers = {
+            "User-Agent": getattr(
+                settings,
+                "DEFAULT_USER_AGENT",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            ),
+            "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        _search_session = aiohttp.ClientSession(timeout=timeout, headers=headers)
+    return _search_session
+
+
+def extract_clean_url(text: str) -> str:
+    """從使用者訊息或字串中萃取乾淨且單一的有效 URL。
+
+    支援處理：
+    1. Discord Markdown 格式：[label](https://...) 或 [https://...](https://...)
+    2. 角括號格式：<https://...>
+    3. 一般文字夾帶 URL：過濾結尾標點符號與多餘括號。
+
+    Args:
+        text: 使用者輸入之原始文字。
+
+    Returns:
+        str: 萃取出的乾淨 URL 字串，若未找到則回傳空字串。
+    """
+    raw = text.strip()
+    if not raw:
+        return ""
+
+    # 1. 優先匹配 Markdown 語法 [label](url)
+    md_match = re.search(r"\[.*?\]\((https?://[^\s\)]+)\)", raw)
+    if md_match:
+        return md_match.group(1).strip()
+
+    # 2. 匹配角括號 <url>
+    angle_match = re.search(r"<(https?://[^>]+)>", raw)
+    if angle_match:
+        return angle_match.group(1).strip()
+
+    # 3. 匹配標準 https?:// 並去除結尾標點
+    raw_match = re.search(r"https?://[^\s<>\[\]\(\)\"\']+", raw)
+    if raw_match:
+        url = raw_match.group(0)
+        # 過濾結尾可能殘留的標點符號或括號
+        url = re.sub(r"[\.,;:!\?\)\]\>\"\']+$", "", url)
+        return url
+
+    return ""
+
+
+def _extract_slug_keywords(url: str) -> str:
+    """從 URL 路徑 Slug 提取有意義的主題關鍵字，用於 SPA 頁面備援搜尋。
+
+    Args:
+        url: 目標網頁 URL。
+
+    Returns:
+        str: 提取出之主題關鍵字字串。
+    """
+    try:
+        unquoted = urllib.parse.unquote(url)
+        parsed = urllib.parse.urlparse(unquoted)
+        # 過濾通用路由字眼與編號
+        ignored_tokens = {
+            "zh-tw", "zh-cn", "zh-hk", "en-us", "en-gb", "weather", "news",
+            "sports", "finance", "article", "index", "html", "htm", "php",
+            "tw", "us", "jp", "cn", "hk",
+        }
+        parts: list[str] = []
+        for segment in parsed.path.split("/"):
+            segment = segment.strip()
+            if not segment:
+                continue
+            # 略過單純純數字或短英文代碼（如 ar-AA2aJgDB）
+            if re.match(r"^[a-zA-Z0-9_\-]{1,12}$", segment) and not any(ch in segment for ch in "一-龥"):
+                continue
+            cleaned = segment.replace("-", " ").replace("_", " ").replace(".", " ")
+            subparts = [p.strip() for p in cleaned.split() if p.lower() not in ignored_tokens and len(p.strip()) > 1]
+            parts.extend(subparts)
+
+        return " ".join(parts).strip()
+    except Exception as exc:
+        logger.debug("[search_tools] Slug 關鍵字提取跳過: %s", exc)
+        return ""
+
+
+async def fetch_and_extract_url(url: str, timeout_sec: int = DEFAULT_HTTP_TIMEOUT) -> tuple[str, str, str]:
+    """多層次高品質網頁內文與情報萃取管線。
+
+    管線架構：
+    1. 第一層：trafilatura 深度清洗提取（針對傳統靜態文章）。
+    2. 第二層（Meta/DOM 備援）：BeautifulSoup 解析 OpenGraph、Meta Description、JSON-LD 與 <p> 標籤。
+    3. 第三層（SPA Slug 搜尋聯網回退）：若內文為空（如 MSN 等 SPA 架構），自動自 URL 路徑與標題提取關鍵字，並調用 DuckDuckGo 檢索即時新聞補足情資。
+
+    Args:
+        url: 目標網頁 URL。
+        timeout_sec: 請求逾時秒數。
+
+    Returns:
+        tuple[str, str, str]: (網頁標題, 萃取內文或情資摘要, 萃取方式標記)。
+    """
+    clean_target = extract_clean_url(url) or url
+    title = ""
+    content = ""
+    meta_desc = ""
+
+    # ── [第一層] Trafilatura 靜態內文萃取 ──────────────────────────────────
+    def _fetch_trafilatura(tgt: str) -> tuple[str | None, str, str]:
+        if trafilatura is None:
+            return None, "", ""
+        try:
+            downloaded = trafilatura.fetch_url(tgt)
+            if downloaded:
+                extracted = trafilatura.extract(
+                    downloaded,
+                    include_links=False,
+                    include_comments=False,
+                    include_tables=True,
+                    output_format="txt",
+                )
+                t = ""
+                try:
+                    meta = trafilatura.extract_metadata(downloaded)
+                    if meta and meta.title:
+                        t = meta.title.strip()
+                except Exception:
+                    pass
+                return downloaded, extracted or "", t
+            return None, "", ""
+        except Exception as e:
+            logger.debug("[search_tools] Trafilatura 執行例外: %s", e)
+            return None, "", ""
+
+    loop = asyncio.get_running_loop()
+    raw_html: str | None = None
+    try:
+        raw_html, traf_content, traf_title = await asyncio.wait_for(
+            loop.run_in_executor(None, _fetch_trafilatura, clean_target),
+            timeout=float(timeout_sec),
+        )
+        if traf_title:
+            title = traf_title
+        if traf_content and len(traf_content.strip()) >= 50:
+            content = traf_content.strip()
+            return title or clean_target, content, "trafilatura"
+    except asyncio.TimeoutError:
+        logger.warning("[search_tools] Trafilatura 擷取超時 (%ds): %s", timeout_sec, clean_target)
+    except Exception as exc:
+        logger.debug("[search_tools] Trafilatura 略過: %s", exc)
+
+    # ── [第二層] BeautifulSoup 解析 DOM, Meta, OpenGraph, JSON-LD ─────────
+    if not raw_html:
+        try:
+            session = await _get_search_session()
+            async with session.get(clean_target, timeout=aiohttp.ClientTimeout(total=timeout_sec)) as resp:
+                if resp.status == 200:
+                    raw_html = await resp.text(errors="replace")
+        except Exception as exc:
+            logger.debug("[search_tools] aiohttp 下載網頁失敗: %s", exc)
+
+    if raw_html:
+        try:
+            soup = BeautifulSoup(raw_html, "html.parser")
+            if not title:
+                og_title = soup.find("meta", property="og:title")
+                if og_title and og_title.get("content"):
+                    title = str(og_title["content"]).strip()
+                elif soup.title and soup.title.string:
+                    title = soup.title.string.strip()
+
+            # 抓取 Meta 描述
+            og_desc = soup.find("meta", property="og:description")
+            if og_desc and og_desc.get("content"):
+                meta_desc = str(og_desc["content"]).strip()
+            if not meta_desc:
+                meta_d = soup.find("meta", attrs={"name": "description"})
+                if meta_d and meta_d.get("content"):
+                    meta_desc = str(meta_d["content"]).strip()
+
+            # 抓取 JSON-LD
+            for script in soup.find_all("script", type="application/ld+json"):
+                if script.string:
+                    try:
+                        import json
+                        data = json.loads(script.string)
+                        if isinstance(data, dict):
+                            if not title and data.get("headline"):
+                                title = str(data["headline"]).strip()
+                            if data.get("articleBody"):
+                                content = str(data["articleBody"]).strip()
+                                break
+                            elif data.get("description") and not meta_desc:
+                                meta_desc = str(data["description"]).strip()
+                    except Exception:
+                        pass
+
+            # 抓取內文段落 <article> / <p>
+            if not content:
+                for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+                    tag.decompose()
+                paragraphs = [p.get_text().strip() for p in soup.find_all(["p", "article"]) if len(p.get_text().strip()) > 20]
+                if paragraphs:
+                    extracted_p = "\n\n".join(paragraphs)
+                    if len(extracted_p) >= 50:
+                        content = extracted_p
+        except Exception as exc:
+            logger.debug("[search_tools] BeautifulSoup DOM 解析例外: %s", exc)
+
+    if content and len(content.strip()) >= 50:
+        return title or clean_target, content.strip(), "dom_fallback"
+
+    # ── [第三層] SPA 頁面與 Slug 搜尋聯網回退 (Fallback Search) ───────────
+    slug_kw = _extract_slug_keywords(clean_target)
+    search_query = title if (title and title not in ("MSN", "Home", "Index")) else slug_kw
+
+    search_snippets: list[str] = []
+    if search_query:
+        logger.info("[search_tools] 觸發 SPA 網頁關鍵字聯網回退檢索 => '%s'", search_query)
+        try:
+            ddg_client = DuckDuckGoSearchClient(timeout_seconds=timeout_sec)
+            items = await ddg_client.search(search_query, max_results=4)
+            for itm in items:
+                if itm.snippet:
+                    search_snippets.append(f"• 【{itm.title}】：{itm.snippet} (來源: {itm.url})")
+        except Exception as search_err:
+            logger.warning("[search_tools] 聯網回退檢索失敗: %s", search_err)
+
+    assembled_parts: list[str] = []
+    if title:
+        assembled_parts.append(f"《網頁主題》：{title}")
+    if meta_desc:
+        assembled_parts.append(f"《頁面摘要》：{meta_desc}")
+    if search_snippets:
+        assembled_parts.append("《相關新聞與時事情報檢索》：\n" + "\n".join(search_snippets))
+
+    if assembled_parts:
+        final_info = "\n\n".join(assembled_parts)
+        return title or search_query or clean_target, final_info, "search_fallback"
+
+    fallback_text = f"此網頁 ({clean_target}) 目前未提供公開靜態文字，或需要特定客戶端/登入環境渲染。"
+    return title or clean_target, fallback_text, "empty"
 
 
 class URLSummaryTool(BaseTool):
@@ -34,12 +298,13 @@ class URLSummaryTool(BaseTool):
 
     @property
     def llm_description(self) -> str:
-        return "只有當使用者的文字中『包含 http 開頭的網址』時才觸發，用來總結網頁大意。若無網址絕對不可選！"
+        return "只有當使用者的文字中包含『非 YouTube 的一般文章/新聞/網頁網址』並要求總結時才觸發。若為 YouTube 連結（youtube.com / youtu.be）絕對不可選，請選擇 MUSIC 工具！"
 
     def can_handle_by_regex(self, text: str) -> bool:
         if "youtu" in text.lower():
             return False
-        return bool(re.search(r"https?:\/\/[^\s]+", text.strip()))
+        clean_url = extract_clean_url(text)
+        return bool(clean_url)
 
     async def execute(
         self,
@@ -49,43 +314,63 @@ class URLSummaryTool(BaseTool):
         vibe_snippet: str,
         full_context: str,
         **kwargs: object,
-    ) -> None:
-        brain: BotBrain | None = bot.get_cog("BotBrain")
-        if not brain:
-            return
+    ) -> ToolResult:
+        silent = bool(kwargs.get("silent", False))
+        brain_cog = bot.get_cog("BotBrain")
+        if not brain_cog:
+            return ToolResult.error("BotBrain 未就緒。", is_direct_rendered=not silent)
+        brain: Any = brain_cog
 
-        url_match = re.search(r"https?:\/\/[^\s]+", user_query.strip())
-        if not url_match:
+        url = extract_clean_url(user_query)
+        if not url:
             from handlers.social.registry import get_fallback_tool
 
             chat_tool = get_fallback_tool()
-            return await chat_tool.execute(
-                bot, message, user_query, vibe_snippet, full_context
-            )
+            if silent or kwargs:
+                pass_kwargs = dict(kwargs)
+                pass_kwargs["silent"] = silent
+                res = await chat_tool.execute(
+                    bot, message, user_query, vibe_snippet, full_context, **pass_kwargs
+                )
+            else:
+                res = await chat_tool.execute(
+                    bot, message, user_query, vibe_snippet, full_context
+                )
+            return res if isinstance(res, ToolResult) else ToolResult.success(str(res) if res else "", is_direct_rendered=not silent)
 
-        url = url_match.group(0)
+        # 若為 YouTube 網址且使用者未明確要求總結文章/影片內容，自動轉導至 MusicTool 點歌
+        if re.search(r"(www\.youtube\.com|youtu\.?be)", url):
+            if not re.search(r"(解析|總結|大意|文章|內容|新聞|看過|重點|這部|這張|這篇|介紹|心得)", user_query):
+                from handlers.social.tools.music_tool import MusicTool
 
-        def fetch_sync(tgt: str) -> str:
-            try:
-                import trafilatura
-                downloaded = trafilatura.fetch_url(tgt)
-                if downloaded:
-                    extracted = trafilatura.extract(downloaded)
-                    if extracted:
-                        return extracted
-                return "無法連線抓取！"
-            except Exception as e:
-                logger.error("URLSummaryTool 抓取失敗: %s", e)
-                return "無法連接。"
+                logger.info("URLSummaryTool: 偵測到純 YouTube 連結，自動轉導至 MusicTool。")
+                music_tool = MusicTool()
+                if silent or kwargs:
+                    pass_kwargs = dict(kwargs)
+                    pass_kwargs["silent"] = silent
+                    res = await music_tool.execute(
+                        bot, message, user_query, vibe_snippet, full_context, **pass_kwargs
+                    )
+                else:
+                    res = await music_tool.execute(
+                        bot, message, user_query, vibe_snippet, full_context
+                    )
+                return res if isinstance(res, ToolResult) else ToolResult.success(str(res) if res else "", is_direct_rendered=True)
 
-        try:
-            site_content = await asyncio.wait_for(
-                asyncio.get_running_loop().run_in_executor(None, fetch_sync, url),
-                timeout=DEFAULT_HTTP_TIMEOUT,
-            )
-        except asyncio.TimeoutError:
-            logger.warning("URLSummaryTool: fetch_sync 超時")
-            site_content = "無法連線抓取！"
+        title, site_content, source_type = await fetch_and_extract_url(
+            url, timeout_sec=DEFAULT_HTTP_TIMEOUT
+        )
+
+        logger.info(
+            "URLSummaryTool: URL 萃取完成 -> url=%s type=%s len=%d",
+            url,
+            source_type,
+            len(site_content),
+        )
+
+        if silent:
+            summary_content = f"【網頁標題】：{title}\n【詳細情報內容】：\n{site_content[:2500]}"
+            return ToolResult.success(summary_content, is_direct_rendered=False, extra_data={"url": url, "title": title})
 
         head_persona, _tail = build_dynamic_persona(
             user_query, self.intent_name, channel_id=message.channel.id
@@ -93,21 +378,35 @@ class URLSummaryTool(BaseTool):
         dynamic_persona = head_persona
         sys_prompt = (
             f"{dynamic_persona}\n"
-            f"【獲取情報內容】：\n{site_content[:6000]}\n"
-            "請用妳的語氣，盡可能詳細、豐富地為大家總結這篇網頁的核心內容！"
+            f"【獲取情報內容 - 目標網址】：{url}\n"
+            f"【網頁標題】：{title}\n"
+            f"【詳細情報內容】：\n{site_content[:5000]}\n\n"
+            "請用妳的語氣（活潑毒舌又自信的名偵探橘雪莉），生動、豐富且一針見血地為大家總結這篇網頁的核心內容與重點！"
         )
 
+        start_time = time.time()
         loop = asyncio.get_running_loop()
-        summary_future: asyncio.Future[None] = loop.create_future()
+        summary_future: asyncio.Future[str] = loop.create_future()
 
         async def _on_summary_reply(reply: str) -> None:
             try:
-                await simulate_typing_and_send(message, reply)
+                elapsed_ms = int((time.time() - start_time) * 1000)
+                await simulate_typing_and_send(
+                    message,
+                    reply,
+                    intent_name="URL_SUMMARY",
+                    prompt=url,
+                    model=settings.PRIMARY_MODEL,
+                    system_prompt=sys_prompt,
+                    user_prompt="這篇網頁的大意是什麼呢？",
+                    latency_ms=elapsed_ms,
+                )
+                if not summary_future.done():
+                    summary_future.set_result(reply)
             except Exception as e:
                 logger.error("URLSummaryTool: 回覆發送失敗: %s", e, exc_info=True)
-            finally:
                 if not summary_future.done():
-                    summary_future.set_result(None)
+                    summary_future.set_result("")
 
         await brain.enqueue_task(
             InferenceTask(
@@ -121,16 +420,24 @@ class URLSummaryTool(BaseTool):
         )
 
         try:
-            await asyncio.wait_for(summary_future, timeout=float(settings.OLLAMA_TIMEOUT))
+            reply_text = await asyncio.wait_for(summary_future, timeout=float(settings.OLLAMA_TIMEOUT))
+            return ToolResult.success(reply_text, is_direct_rendered=True)
         except asyncio.TimeoutError:
             logger.warning("URLSummaryTool: 等待總結發送逾時 (%ds)", settings.OLLAMA_TIMEOUT)
+            return ToolResult.error("等待總結發送逾時", is_direct_rendered=False)
 
 
 async def fetch_web_and_entity_context(user_query: str) -> tuple[str, str]:
-    """
-    通用即時聯網與實體檢索函式。
+    """通用即時聯網與實體檢索函式。
+
     供 ChatTool 調用，進行新聞、時事、股票與實體資料檢索。
     回傳 (intelligence_text, top_link)。
+
+    Args:
+        user_query: 使用者原始查詢語句。
+
+    Returns:
+        tuple[str, str]: (情報內文, 最佳來源連結)。
     """
     clean_kw = re.sub(
         r"(雪莉|請問|幫我|查一下|搜尋|查詢|你覺得|怎麼樣|如何|目前|最新消息|現在|你知道|什麼是)",
@@ -149,63 +456,21 @@ async def fetch_web_and_entity_context(user_query: str) -> tuple[str, str]:
 
     # 1. 執行 DuckDuckGo 檢索
     try:
-        search_url = (
-            f"{settings.DUCKDUCKGO_SEARCH_URL}{urllib.parse.quote(clean_kw)}"
-        )
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8",
-        }
-        timeout = aiohttp.ClientTimeout(total=DEFAULT_HTTP_TIMEOUT)
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(search_url, timeout=timeout) as r:
-                if r.status == 200:
-                    html = await r.text()
-                    if "No results" not in html:
-                        a_matches = re.findall(
-                            r'<a class="result__snippet[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
-                            html,
-                            re.DOTALL | re.IGNORECASE,
-                        )
-                        if a_matches:
-                            raw_href = a_matches[0][0]
-                            u_match = re.search(r"uddg=(https?[^&]+)", raw_href)
-                            link = (
-                                urllib.parse.unquote(u_match.group(1))
-                                if u_match
-                                else raw_href
-                            )
-                            snippet_text = re.sub(
-                                r"<[^>]+>", "", a_matches[0][1]
-                            ).strip()
-                            snippet = f"《摘要節錄》：{snippet_text}\n"
+        ddg_client = DuckDuckGoSearchClient(timeout_seconds=DEFAULT_HTTP_TIMEOUT)
+        items = await ddg_client.search(clean_kw, max_results=3)
+        if items:
+            top_item = items[0]
+            link = top_item.url
+            snippet = f"《摘要節錄》：{top_item.snippet}\n"
     except Exception as e:
         logger.error("[WebContext] 搜尋受阻: %s", e)
 
     # 2. 若抓到連結，下載頁面內文
     if link:
         try:
-
-            def _extract_page(tgt_link: str) -> str:
-                import trafilatura
-                downloaded = trafilatura.fetch_url(tgt_link)
-                if downloaded:
-                    extracted = trafilatura.extract(downloaded)
-                    return extracted if extracted else ""
-                return ""
-
-            try:
-                page_data = await asyncio.wait_for(
-                    asyncio.get_running_loop().run_in_executor(None, _extract_page, link),
-                    timeout=DEFAULT_HTTP_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
-                logger.debug("[WebContext] 頁面內文抓取超時")
-                page_data = ""
+            _title, page_data, _type = await fetch_and_extract_url(
+                link, timeout_sec=DEFAULT_HTTP_TIMEOUT
+            )
             if page_data:
                 deep_text = f"《網頁詳細內文》：\n{page_data[:2000]}\n"
         except Exception as exc:
@@ -269,8 +534,8 @@ async def fetch_web_and_entity_context(user_query: str) -> tuple[str, str]:
 
 
 class AdvancedSearchTool(BaseTool):
-    """
-    相容性搜尋工具 (現已整合至 ChatTool 聯網對話系統中)。
+    """相容性搜尋工具 (現已整合至 ChatTool 聯網對話系統中)。
+
     當 Intent 強制為 SEARCH 時，會調用檢索並交由 ChatTool 個性化回覆。
     """
 
@@ -293,10 +558,16 @@ class AdvancedSearchTool(BaseTool):
         vibe_snippet: str,
         full_context: str,
         **kwargs: object,
-    ) -> None:
+    ) -> ToolResult:
+        silent = bool(kwargs.get("silent", False))
+        if silent:
+            context, link = await fetch_web_and_entity_context(user_query)
+            return ToolResult.success(context, is_direct_rendered=False, extra_data={"link": link})
+
         from handlers.social.registry import get_fallback_tool
 
         chat_tool = get_fallback_tool()
-        await chat_tool.execute(
-            bot, message, user_query, vibe_snippet, full_context
+        res = await chat_tool.execute(
+            bot, message, user_query, vibe_snippet, full_context, silent=silent, **kwargs
         )
+        return res if isinstance(res, ToolResult) else ToolResult.success(str(res) if res else "", is_direct_rendered=True)

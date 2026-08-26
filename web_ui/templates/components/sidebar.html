@@ -1,0 +1,77 @@
+<!-- ===== SIDEBAR ===== -->
+<aside class="sidebar">
+    <div class="sidebar-brand">
+        <div class="sidebar-avatar-wrap">
+            <img src="/static/sherry_avatar.png" alt="Sherry" class="sidebar-avatar-img">
+            <span class="sidebar-avatar-dot" title="Sherry AI Active"></span>
+        </div>
+        <div class="brand-text">
+            <span class="brand-name">Sherry 🔵</span>
+            <span class="brand-sub">名偵探 Console</span>
+        </div>
+    </div>
+    <nav class="sidebar-nav">
+        <!-- 1. 獨立總覽按鈕 (連線後第一畫面) -->
+        <button class="nav-btn active" id="nav-dashboard" onclick="switchView('dashboard')">
+            <span class="nav-icon">📊</span>
+            <span>總覽主控台</span>
+        </button>
+
+        <!-- 2. 核心功能 -->
+        <div class="nav-section-title">
+            <span>核心功能</span>
+        </div>
+        <button class="nav-btn" id="nav-logs" onclick="switchView('logs')">
+            <span class="nav-icon">📋</span>
+            <span>即時日誌</span>
+        </button>
+        <button class="nav-btn" id="nav-metrics" onclick="switchView('metrics')">
+            <span class="nav-icon">💻</span>
+            <span>系統資源</span>
+        </button>
+        <button class="nav-btn" id="nav-tasks" onclick="switchView('tasks')">
+            <span class="nav-icon">⏰</span>
+            <span>任務排程</span>
+        </button>
+        <button class="nav-btn" id="nav-chat" onclick="switchView('chat')">
+            <span class="nav-icon">💬</span>
+            <span>雪莉測試室</span>
+        </button>
+        <button class="nav-btn" id="nav-services" onclick="switchView('services')">
+            <span class="nav-icon">📡</span>
+            <span>地端 AI 服務</span>
+        </button>
+        <button class="nav-btn" id="nav-bot-status" onclick="switchView('bot-status')">
+            <span class="nav-icon">🎵</span>
+            <span>語音與音樂監控</span>
+        </button>
+        <button class="nav-btn" id="nav-roast" onclick="switchView('roast')">
+            <span class="nav-icon">🎯</span>
+            <span>吐槽清單</span>
+        </button>
+        <button class="nav-btn admin-only" id="nav-audit" onclick="switchView('audit')">
+            <span class="nav-icon">🛡️</span>
+            <span>管理員審計</span>
+        </button>
+        <button class="nav-btn admin-only" id="nav-mod-manager" onclick="switchView('mod-manager')">
+            <span class="nav-icon">🧩</span>
+            <span>模組管理</span>
+        </button>
+        <button class="nav-btn" id="nav-settings" onclick="switchView('settings')">
+            <span class="nav-icon">⚙️</span>
+            <span>系統設定</span>
+        </button>
+
+        <!-- 3. 模組功能 (由 SherryUI 根據加載的模組被動渲染) -->
+        <div id="sidebar-dynamic-mods-wrap" class="sidebar-dynamic-group">
+            <div class="nav-section-title" id="nav-mod-section-title">
+                <span>模組功能</span>
+            </div>
+            <div id="sidebar-dynamic-mods" class="sidebar-dynamic-group"></div>
+        </div>
+    </nav>
+    <div class="sidebar-status">
+        <div class="status-dot" id="status-dot"></div>
+        <span id="status-text">連線中...</span>
+    </div>
+</aside>

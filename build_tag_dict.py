@@ -1,79 +1,199 @@
-"""
-build_tag_dict.py
+"""build_tag_dict.py
 =================
-二次元標籤庫多源合併工具
+二次元標籤庫多源合併與角色別名索引建立工具。
 
-來源優先順序（後蓋前，品質越來越高）：
-  1. Danbooru /tags.json API   — 英文原始庫，約 6 萬筆高頻 tag
-  2. e621 tags CSV             — 西方/獸人風格補充，約 5 萬筆
-  3. byzod 中文翻譯包          — 社群維護的中英對照，約 1 萬筆
+資料來源：
+  1. danbooru.csv (DominikDoom / TagComplete)  — 10 萬+ 標籤（含 category 0:一般, 3:作品, 4:角色 與別名）
+  2. byzod 中文翻譯包 (Tags-zh-full-pack.csv) — 社群維護的中英對照，約 1 萬筆
+  3. 內建動漫熱門角色映射字典                 — 保底常備熱門角色中文/日文對照
 
-最終輸出格式（中文 → 英文）：
-  {
-    "初音未來": "hatsune_miku",
-    "藍色頭髮": "blue_hair",
-    ...
-  }
+輸出檔案：
+  - settings.PIXIV_TAG_PATH (file/pixiv_tag.json)     : {搜尋關鍵詞(中/英/別名): 標準Danbooru Tag}
+  - settings.TAG_METADATA_PATH (file/tag_metadata.json): {標準Tag: {"category": int, "post_count": int, "series": str}}
 
 執行方式：
   python build_tag_dict.py
-
-依賴：Python 3.8+ 標準函式庫（無需額外安裝）
-      若已安裝 opencc-python-reimplemented，會自動將簡體轉繁體。
 """
 
 from __future__ import annotations
 
-import asyncio
 import csv
 import io
 import json
 import logging
 import os
 import re
-import time
 import urllib.request
 import urllib.error
+from pathlib import Path
 from typing import Iterator
-
-# ---------------------------------------------------------------------------
-# 設定
-# ---------------------------------------------------------------------------
 
 import settings
 
-OUTPUT_FILE = str(settings.PIXIV_TAG_PATH)
-
-# Danbooru：只抓使用次數 >= 此值的 tag（過濾超冷門 tag）
-DANBOORU_MIN_POST_COUNT = settings.PIXIV_TAG_MIN_POST_COUNT
-
-# Danbooru：最多抓幾頁（每頁 1000 筆）；60 頁 ≈ 6 萬筆，遠低於 500 次/小時限制
-DANBOORU_MAX_PAGES = settings.PIXIV_TAG_MAX_PAGES
-
-# 每次 HTTP 請求之間的間隔（秒），避免對伺服器造成壓力
-REQUEST_DELAY = settings.PIXIV_TAG_REQUEST_DELAY
-
-# ---------------------------------------------------------------------------
-# 來源設定
-# ---------------------------------------------------------------------------
+OUTPUT_TAG_FILE = str(settings.PIXIV_TAG_PATH)
+OUTPUT_META_FILE = str(settings.TAG_METADATA_PATH)
 
 SOURCES: dict[str, str] = {
+    "danbooru_csv": (
+        "https://raw.githubusercontent.com/DominikDoom/"
+        "a1111-sd-webui-tagcomplete/main/tags/danbooru.csv"
+    ),
     "byzod_zh": (
         "https://raw.githubusercontent.com/byzod/"
         "a1111-sd-webui-tagcomplete-CN/main/tags/Tags-zh-full-pack.csv"
     ),
-    "e621_csv": (
-        "https://raw.githubusercontent.com/DominikDoom/"
-        "a1111-sd-webui-tagcomplete/main/tags/e621.csv"
-    ),
-    # Danbooru 用 API 分頁抓，不走這裡
 }
 
-DANBOORU_API = settings.DANBOORU_API_URL
+# 內建常備熱門角色/作品中英對照表（保證核心角色永遠精準命中）
+BUILTIN_ANIME_MAPPING: dict[str, str] = {
+    # 葬送的芙莉蓮
+    "芙莉蓮": "frieren_(sousou_no_frieren)",
+    "費倫": "fern_(sousou_no_frieren)",
+    "修塔爾克": "stark_(sousou_no_frieren)",
+    "欣梅爾": "himmel_(sousou_no_frieren)",
+    "阿烏拉": "aura_(sousou_no_frieren)",
+    "尤貝爾": "ubel_(sousou_no_frieren)",
+    # 蔚藍檔案 (Blue Archive)
+    "星野": "takanashi_hoshino_(blue_archive)",
+    "小鳥遊星野": "takanashi_hoshino_(blue_archive)",
+    "白子": "sunaookami_shiroko_(blue_archive)",
+    "砂狼白子": "sunaookami_shiroko_(blue_archive)",
+    "愛麗絲": "tendou_alice_(blue_archive)",
+    "天童愛麗絲": "tendou_alice_(blue_archive)",
+    "優香": "hayase_yuuka_(blue_archive)",
+    "早瀨優香": "hayase_yuuka_(blue_archive)",
+    "亞子": "amau_ako_(blue_archive)",
+    "天雨亞子": "amau_ako_(blue_archive)",
+    "伊織": "shiromi_iori_(blue_archive)",
+    "銀鏡伊織": "shiromi_iori_(blue_archive)",
+    "陽奈": "sorasaki_hina_(blue_archive)",
+    "空崎陽奈": "sorasaki_hina_(blue_archive)",
+    "未花": "misono_mika_(blue_archive)",
+    "聖園未花": "misono_mika_(blue_archive)",
+    # 原神 (Genshin Impact)
+    "雷電將軍": "raiden_shogun_(genshin_impact)",
+    "雷神": "raiden_shogun_(genshin_impact)",
+    "納西妲": "nahida_(genshin_impact)",
+    "胡桃": "hu_tao_(genshin_impact)",
+    "芙寧娜": "furina_(genshin_impact)",
+    "神里綾華": "kamisato_ayaka_(genshin_impact)",
+    "甘雨": "ganyu_(genshin_impact)",
+    "刻晴": "keqing_(genshin_impact)",
+    "鐘離": "zhongli_(genshin_impact)",
+    "溫迪": "venti_(genshin_impact)",
+    # 崩壞：星穹鐵道 (Honkai: Star Rail)
+    "流螢": "firefly_(honkai:_star_rail)",
+    "薩姆": "sam_(honkai:_star_rail)",
+    "黃泉": "acheron_(honkai:_star_rail)",
+    "符玄": "fu_xuan_(honkai:_star_rail)",
+    "卡芙卡": "kafka_(honkai:_star_rail)",
+    "銀狼": "silver_wolf_(honkai:_star_rail)",
+    "砂金": "aventurine_(honkai:_star_rail)",
+    "黑天鵝": "black_swan_(honkai:_star_rail)",
+    "阮梅": "ruan_mei_(honkai:_star_rail)",
+    "三月七": "march_7th_(honkai:_star_rail)",
+    # 孤獨搖滾
+    "後藤一里": "gotou_hitori",
+    "波奇醬": "gotou_hitori",
+    "波奇": "gotou_hitori",
+    "伊地知虹夏": "ijichi_nijika",
+    "山田涼": "yamada_ryo",
+    "喜多郁代": "kita_ikuyo",
+    # 咒術迴戰
+    "五條悟": "gojou_satoru",
+    "虎杖悠仁": "itadori_yuuji",
+    "伏黑惠": "fushiguro_megumi",
+    "釘崎野薔薇": "kugisaki_nobara",
+    # 鏈鋸人
+    "淀治": "denji_(chainsaw_man)",
+    "帕瓦": "power_(chainsaw_man)",
+    "瑪奇瑪": "makima_(chainsaw_man)",
+    "早川秋": "hayakawa_aki",
+    # Re:從零開始的異世界生活
+    "愛蜜莉雅": "emilia_(re:zero)",
+    "艾米莉婭": "emilia_(re:zero)",
+    "雷姆": "rem_(re:zero)",
+    "拉姆": "ram_(re:zero)",
+    # 尼爾：自動人形
+    "2b": "2b_(nier:automata)",
+    "9s": "9s_(nier:automata)",
+    "a2": "a2_(nier:automata)",
+    # 名偵探柯南 & 原創
+    "橘雪莉": "tachibana_sherry",
+    "雪莉": "tachibana_sherry",
+    "sherry": "tachibana_sherry",
+    # 常備服裝
+    "泳裝": "swimsuit",
+    "泳衣": "swimsuit",
+    "水著": "swimsuit",
+    "女僕": "maid",
+    "女僕裝": "maid",
+    "水手服": "sailor_suit",
+    "兔女郎": "bunny_girl",
+    "和服": "kimono",
+    "禮服": "dress",
+    "制服": "school_uniform",
+    "校服": "school_uniform",
+    "護士服": "nurse",
+    "旗袍": "china_dress",
+    "睡衣": "pajamas",
+    # 常備動作與表情
+    "吃東西": "eating",
+    "吃": "eating",
+    "喝水": "drinking",
+    "喝": "drinking",
+    "微笑": "smile",
+    "笑": "smile",
+    "大笑": "laughing",
+    "哭": "crying",
+    "生氣": "angry",
+    "害羞": "blush",
+    "眨眼": "wink",
+    "坐著": "sitting",
+    "坐": "sitting",
+    "站著": "standing",
+    "躺著": "lying",
+    "睡覺": "sleeping",
+    "跑": "running",
+    # 常備場景與背景
+    "雪地": "snow",
+    "雪景": "snow",
+    "下雪": "snow",
+    "海邊": "beach",
+    "海灘": "beach",
+    "教室": "classroom",
+    "學校": "school",
+    "室內": "indoors",
+    "房間": "room",
+    "室外": "outdoors",
+    "戶外": "outdoors",
+    "櫻花": "cherry_blossoms",
+    "夜晚": "night",
+    "夜景": "night",
+    "森林": "forest",
+    "溫泉": "onsen",
+    "下雨": "rain",
+    "雨中": "rain",
+    # 常備身材與外觀
+    "巨乳": "large_breasts",
+    "大胸": "large_breasts",
+    "大奶": "large_breasts",
+    "貧乳": "small_breasts",
+    "平胸": "small_breasts",
+    "雙馬尾": "twintails",
+    "單馬尾": "ponytail",
+    "白髮": "white_hair",
+    "黑髮": "black_hair",
+    "金髮": "blonde_hair",
+    "銀髮": "silver_hair",
+    "藍髮": "blue_hair",
+    "粉髮": "pink_hair",
+    "貓耳": "cat_ears",
+    "狐耳": "fox_ears",
+    "兔耳": "rabbit_ears",
+    "獸耳": "animal_ears",
+}
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
 
 logging.basicConfig(
     level=logging.INFO,
@@ -82,9 +202,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# OpenCC（選用）
-# ---------------------------------------------------------------------------
 
 def _make_converter():
     """嘗試載入 OpenCC 簡轉繁，失敗時回傳 None。"""
@@ -97,55 +214,103 @@ def _make_converter():
         logger.warning("未安裝 opencc-python-reimplemented，保留原始字元。")
         return None
 
+
 _CC = _make_converter()
 
+
 def to_traditional(text: str) -> str:
+    """簡轉繁工具。"""
     return _CC.convert(text) if _CC else text
 
-# ---------------------------------------------------------------------------
-# HTTP 工具
-# ---------------------------------------------------------------------------
-
-def _get(url: str, timeout: int = 30) -> str:
-    """同步 HTTP GET，回傳 response body 字串。"""
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": "build_tag_dict/2.0 (static JSON builder)"},
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8")
-
-# ---------------------------------------------------------------------------
-# 各來源解析器
-# ---------------------------------------------------------------------------
 
 def _clean_zh(raw: str) -> str:
-    """
-    清洗中文字串：
-    - 簡轉繁
-    - 移除尾端括號注釋：「初音未來 (Vocaloid)」→「初音未來」
-    - 去除首尾空白
-    """
+    """清洗中文字串。"""
     converted = to_traditional(raw)
     cleaned = re.split(r"[（(]", converted)[0].strip()
     return cleaned
 
 
+def _get(url: str, timeout: int = 30) -> str:
+    """同步 HTTP GET。"""
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "build_tag_dict/3.0 (anime companion platform)"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8", errors="ignore")
+
+
+def _parse_danbooru_csv(
+    text: str,
+) -> tuple[dict[str, dict[str, object]], dict[str, str]]:
+    """解析 DominikDoom danbooru.csv。
+
+    格式：name, category, post_count, aliases
+    category 定義：
+      0 = general (一般特徵/姿勢/服裝)
+      1 = artist (畫師)
+      3 = copyright (作品/版權)
+      4 = character (角色)
+      5 = meta (元標籤)
+
+    Returns:
+        (metadata_dict, alias_to_canonical_dict)
+    """
+    metadata: dict[str, dict[str, object]] = {}
+    alias_map: dict[str, str] = {}
+
+    reader = csv.reader(io.StringIO(text))
+    for row in reader:
+        if len(row) < 3:
+            continue
+        name = row[0].strip().lower()
+        if not name:
+            continue
+
+        try:
+            category = int(row[1].strip())
+        except ValueError:
+            category = 0
+
+        try:
+            post_count = int(row[2].strip())
+        except ValueError:
+            post_count = 0
+
+        # 擷取作品名稱（若為角色 tag 且含有 (series)）
+        series = ""
+        series_match = re.search(r"\((.*?)\)$", name)
+        if series_match:
+            series = series_match.group(1).strip()
+
+        metadata[name] = {
+            "category": category,
+            "post_count": post_count,
+            "series": series,
+        }
+
+        # 解析別名欄位
+        if len(row) >= 4 and row[3].strip():
+            aliases_raw = row[3].strip()
+            # 別名可能用逗號隔開
+            for raw_alias in aliases_raw.split(","):
+                clean_alias = raw_alias.strip().lower()
+                if clean_alias and clean_alias != name and not clean_alias.startswith("/"):
+                    alias_map[clean_alias] = name
+
+    return metadata, alias_map
+
+
 def _parse_byzod_csv(text: str) -> Iterator[tuple[str, str]]:
-    """
-    解析 byzod 中文翻譯包 CSV。
-    格式：英文tag, 中文名稱[, 其他欄位...]
-    yield: (中文, 英文)
-    """
+    """解析 byzod 中文翻譯包 CSV。"""
     reader = csv.reader(io.StringIO(text))
     for row in reader:
         if len(row) < 2:
             continue
-        en = row[0].strip()
+        en = row[0].strip().lower()
         zh_raw = row[1].strip()
         if not en or not zh_raw:
             continue
-        # 跳過純數字或明顯非中文的欄位
         if not re.search(r"[\u4e00-\u9fff\u3040-\u30ff]", zh_raw):
             continue
         zh = _clean_zh(zh_raw)
@@ -153,165 +318,118 @@ def _parse_byzod_csv(text: str) -> Iterator[tuple[str, str]]:
             yield zh, en
 
 
-def _parse_e621_csv(text: str) -> Iterator[tuple[str, str]]:
-    """
-    解析 e621 CSV（英文 tag 庫，無中文）。
-    格式：英文tag, 類型ID[, 其他欄位...]
-    這裡只建立「英文 → 英文」的備用條目，
-    主要目的是讓 byzod 能用英文 key 補充覆蓋。
-    實際上跳過純英文條目，只在被 byzod 引用時才有意義。
-
-    ※ e621 本身沒有中文，此函數保留給未來接中文翻譯層使用。
-       目前僅 log 統計用。
-    """
-    reader = csv.reader(io.StringIO(text))
-    count = 0
-    for row in reader:
-        if len(row) >= 1 and row[0].strip():
-            count += 1
-    logger.info("e621 CSV 讀取完成，共 %d 筆英文 tag（備用庫）。", count)
-    return iter([])  # 目前不直接產生輸出
-
-
-def _fetch_danbooru_page(page: int) -> list[dict]:
-    """
-    抓取 Danbooru tag 列表的一頁（1000 筆）。
-    回傳原始 JSON list。
-    """
-    params = (
-        f"?limit=1000"
-        f"&page={page}"
-        f"&order=count"
-        f"&search[post_count]=>={DANBOORU_MIN_POST_COUNT}"
-    )
-    url = DANBOORU_API + params
-    raw = _get(url)
-    return json.loads(raw)
-
-
-def _danbooru_name_to_zh(name: str) -> str:
-    """
-    將 Danbooru 英文 tag name 轉成「可讀的中文候選詞」。
-    這只是格式清洗，不是真正翻譯；真正的中文對照由 byzod 覆蓋。
-    規則：底線換空格，方便之後若要接翻譯 API 使用。
-    """
-    return name.replace("_", " ")
-
-
-# ---------------------------------------------------------------------------
-# 主流程
-# ---------------------------------------------------------------------------
-
 def build() -> None:
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    """執行全量標籤庫建置。"""
+    os.makedirs(os.path.dirname(OUTPUT_TAG_FILE), exist_ok=True)
 
-    # 最終字典：{中文: 英文}
     tag_dict: dict[str, str] = {}
+    tag_metadata: dict[str, dict[str, object]] = {}
 
-    # ── 第一層：Danbooru API（英文原始庫）────────────────────────────────
-    logger.info("═" * 50)
-    logger.info("【第一層】Danbooru API — 高頻英文 tag 庫")
-    logger.info("最小使用次數門檻：%d，最多 %d 頁", DANBOORU_MIN_POST_COUNT, DANBOORU_MAX_PAGES)
-
-    danbooru_en_pool: set[str] = set()  # 純英文備用池，供後續對照
-
-    for page in range(1, DANBOORU_MAX_PAGES + 1):
-        try:
-            items = _fetch_danbooru_page(page)
-        except urllib.error.HTTPError as exc:
-            logger.error("Danbooru HTTP 錯誤 page=%d: %s", page, exc)
-            break
-        except Exception as exc:
-            logger.error("Danbooru 例外 page=%d: %s", page, exc)
-            break
-
-        if not items:
-            logger.info("Danbooru 第 %d 頁為空，停止抓取。", page)
-            break
-
-        for item in items:
-            name: str = item.get("name", "").strip()
-            if name:
-                danbooru_en_pool.add(name)
-
-        fetched = len(danbooru_en_pool)
+    # 1. 載入 DominikDoom danbooru.csv
+    logger.info("═" * 60)
+    logger.info("【階段 1】下載並解析 Danbooru 全量標籤庫（含角色與作品分類）")
+    try:
+        danbooru_csv_text = _get(SOURCES["danbooru_csv"], timeout=45)
+        metadata, alias_map = _parse_danbooru_csv(danbooru_csv_text)
+        tag_metadata.update(metadata)
         logger.info(
-            "  page %3d／%d — 累積 %d 筆英文 tag",
-            page, DANBOORU_MAX_PAGES, fetched,
+            "Danbooru CSV 解析完成：共 %d 個標籤，%d 個別名映射。",
+            len(metadata), len(alias_map),
         )
-        time.sleep(REQUEST_DELAY)
 
-    logger.info("Danbooru 完成，英文 tag 池共 %d 筆。", len(danbooru_en_pool))
-
-    # ── 第二層：e621 CSV（補充英文池）────────────────────────────────────
-    logger.info("═" * 50)
-    logger.info("【第二層】e621 CSV — 西方風格補充庫")
-    try:
-        e621_text = _get(SOURCES["e621_csv"])
-        list(_parse_e621_csv(e621_text))  # 只做統計 log
-    except Exception as exc:
-        logger.warning("e621 CSV 載入失敗（非致命）: %s", exc)
-
-    # ── 第三層：byzod 中文翻譯包（主力中文對照）─────────────────────────
-    logger.info("═" * 50)
-    logger.info("【第三層】byzod 中文翻譯包 — 中英對照主力來源")
-    try:
-        byzod_text = _get(SOURCES["byzod_zh"])
-        byzod_count = 0
-        skipped = 0
-        for zh, en in _parse_byzod_csv(byzod_text):
-            # 只收錄英文 tag 在 Danbooru 池中有出現的（確保 tag 有效）
-            # 若 Danbooru 拉取失敗（danbooru_en_pool 為空），則全收
-            if danbooru_en_pool and en not in danbooru_en_pool:
-                skipped += 1
+        # 建立英文標準詞與可讀詞索引
+        for tag_name, meta in metadata.items():
+            cat = meta.get("category", 0)
+            # 僅收錄 general(0), copyright(3), character(4)
+            if cat not in (0, 3, 4):
                 continue
-            tag_dict[zh] = en
-            byzod_count += 1
 
-        logger.info(
-            "byzod 完成：收錄 %d 筆，略過無效 tag %d 筆。",
-            byzod_count, skipped,
-        )
+            tag_dict[tag_name] = tag_name
+            readable = tag_name.replace("_", " ")
+            if readable not in tag_dict:
+                tag_dict[readable] = tag_name
+
+            # 如果是角色標籤且帶有作品後綴 (如 frieren_(sousou_no_frieren))
+            # 額外把純角色名 frieren 與 frieren (sousou no frieren) 作為 alias 索引
+            if cat == 4 and "(" in tag_name:
+                base_char = re.sub(r"_\(.*?\)$", "", tag_name).strip()
+                if base_char and base_char not in tag_dict:
+                    tag_dict[base_char] = tag_name
+                base_char_readable = base_char.replace("_", " ")
+                if base_char_readable and base_char_readable not in tag_dict:
+                    tag_dict[base_char_readable] = tag_name
+
+        # 加入別名映射
+        for alias, canonical in alias_map.items():
+            if canonical in metadata:
+                if alias not in tag_dict:
+                    tag_dict[alias] = canonical
+                alias_readable = alias.replace("_", " ")
+                if alias_readable not in tag_dict:
+                    tag_dict[alias_readable] = canonical
+
+    except Exception as exc:
+        logger.error("Danbooru CSV 載入失敗: %s", exc)
+
+    # 2. 載入 byzod 中文翻譯包
+    logger.info("═" * 60)
+    logger.info("【階段 2】下載並解析 byzod 中文翻譯包")
+    try:
+        byzod_text = _get(SOURCES["byzod_zh"], timeout=30)
+        byzod_count = 0
+        for zh, en in _parse_byzod_csv(byzod_text):
+            tag_dict[zh] = en
+            # 同時也保留簡體版以提高匹配容錯率
+            tag_dict[zh.lower()] = en
+            byzod_count += 1
+        logger.info("byzod 中文翻譯包完成：共加入 %d 筆中文對照。", byzod_count)
     except Exception as exc:
         logger.error("byzod 載入失敗: %s", exc)
 
-    # ── 補充：將 Danbooru 英文池中未被 byzod 覆蓋的 tag 以「英文空格版」存入 ──
-    # 讓使用者輸入英文也能查到（例如輸入 "blue hair" → "blue_hair"）
-    logger.info("═" * 50)
-    logger.info("【補充】將未被中文覆蓋的 Danbooru tag 以英文可讀格式存入")
+    # 3. 載入內建熱門動漫角色與作品映射（最高優先級，覆蓋前述項目）
+    logger.info("═" * 60)
+    logger.info("【階段 3】載入內建熱門動漫角色/作品精確對照表")
+    builtin_count = 0
+    for alias_key, standard_tag in BUILTIN_ANIME_MAPPING.items():
+        tag_dict[alias_key] = standard_tag
+        tag_dict[alias_key.lower()] = standard_tag
+        # 自動補充角色元資料
+        if standard_tag not in tag_metadata:
+            series = ""
+            sm = re.search(r"\((.*?)\)$", standard_tag)
+            if sm:
+                series = sm.group(1).strip()
+            tag_metadata[standard_tag] = {
+                "category": 4,  # character
+                "post_count": 99999,
+                "series": series,
+            }
+        builtin_count += 1
+    logger.info("內建熱門動漫角色完成：共加入 %d 筆精確對照。", builtin_count)
 
-    covered_en = set(tag_dict.values())
-    extra_count = 0
-    for en_tag in danbooru_en_pool:
-        readable = _danbooru_name_to_zh(en_tag)  # "blue_hair" → "blue hair"
-        if readable not in tag_dict and en_tag not in covered_en:
-            tag_dict[readable] = en_tag
-            extra_count += 1
+    # 4. 寫入檔案
+    logger.info("═" * 60)
+    total_tags = len(tag_dict)
+    total_meta = len(tag_metadata)
+    logger.info("總計：%d 筆 Tag 索引，%d 筆元資料，開始寫入磁碟...", total_tags, total_meta)
 
-    logger.info("補充英文可讀 tag：%d 筆。", extra_count)
+    # 排序輸出
+    sorted_tag_dict = dict(sorted(tag_dict.items()))
+    sorted_metadata = dict(sorted(tag_metadata.items()))
 
-    # ── 輸出 ──────────────────────────────────────────────────────────────
-    logger.info("═" * 50)
-    total = len(tag_dict)
-    logger.info("總計：%d 筆 tag，開始寫入 %s ...", total, OUTPUT_FILE)
+    tmp_tag_file = OUTPUT_TAG_FILE + ".tmp"
+    with open(tmp_tag_file, "w", encoding="utf-8") as f:
+        json.dump(sorted_tag_dict, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_tag_file, OUTPUT_TAG_FILE)
 
-    # 按鍵排序，方便人工檢視
-    sorted_dict = dict(sorted(tag_dict.items()))
+    tmp_meta_file = OUTPUT_META_FILE + ".tmp"
+    with open(tmp_meta_file, "w", encoding="utf-8") as f:
+        json.dump(sorted_metadata, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_meta_file, OUTPUT_META_FILE)
 
-    tmp_path = OUTPUT_FILE + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(sorted_dict, f, ensure_ascii=False, indent=2)
-    os.replace(tmp_path, OUTPUT_FILE)
-
-    logger.info("✅ 完成！共 【%d】 筆 tag 已儲存至 %s", total, OUTPUT_FILE)
-    logger.info("═" * 50)
-
-    # ── 統計摘要 ──────────────────────────────────────────────────────────
-    zh_count = sum(
-        1 for k in sorted_dict if re.search(r"[\u4e00-\u9fff\u3040-\u30ff]", k)
-    )
-    en_count = total - zh_count
-    logger.info("中文 key：%d 筆 ／ 英文可讀 key：%d 筆", zh_count, en_count)
+    logger.info("✅ 成功儲存 Tag 字典至：%s", OUTPUT_TAG_FILE)
+    logger.info("✅ 成功儲存 Metadata 至：%s", OUTPUT_META_FILE)
+    logger.info("═" * 60)
 
 
 if __name__ == "__main__":

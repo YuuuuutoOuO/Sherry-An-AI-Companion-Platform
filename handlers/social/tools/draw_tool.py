@@ -9,9 +9,11 @@ from pathlib import Path
 import aiohttp
 import discord
 from discord.ext import commands
+from typing import Any
 
 import settings
 from handlers.bot_brain import BotBrain, InferenceTask
+from handlers.social.contracts import ToolCategory, ToolResult
 from handlers.social.tool_base import BaseTool, ToolResponseMode
 from handlers.social.utils import append_draw_thinking_log
 from mod.clients import GeminiImageClient
@@ -34,36 +36,36 @@ class DrawControlView(discord.ui.View):
         await interaction.followup.send("好的！我重新畫一張，請稍候...", ephemeral=True)
         from handlers.social.registry import TOOL_LIST
         draw_tool = next((t for t in TOOL_LIST if t.intent_name == "DRAW"), None)
-        if draw_tool:
+        if draw_tool and isinstance(interaction.client, commands.Bot) and interaction.message is not None:
             asyncio.create_task(draw_tool.execute(interaction.client, interaction.message, self.user_query, "", ""))
 
     @discord.ui.button(label="📝 修改提示詞", style=discord.ButtonStyle.secondary)
-    async def edit_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def edit_prompt_button(self, interaction: discord.Interaction, button: discord.ui.Button[Any]) -> None:
         if interaction.user != self.original_author:
             await interaction.response.send_message("❌ 這是別人要求的畫作喔！", ephemeral=True)
             return
             
         # 在 Python 中類別的作用域限制，所以把 Modal 放在方法內
         class PromptModal(discord.ui.Modal, title="修改畫圖提示詞"):
-            prompt_input = discord.ui.TextInput(
+            prompt_input = discord.ui.TextInput[Any](
                 label="想畫什麼呢？",
                 style=discord.TextStyle.long,
                 default=self.user_query,
                 required=True
             )
-            async def on_submit(self, modal_interaction: discord.Interaction):
+            async def on_submit(self, modal_interaction: discord.Interaction) -> None:
                 await modal_interaction.response.defer(ephemeral=True)
                 await modal_interaction.followup.send("收到新的提示詞！立刻重畫...", ephemeral=True)
                 new_query = self.prompt_input.value
                 from handlers.social.registry import TOOL_LIST
                 draw_tool = next((t for t in TOOL_LIST if t.intent_name == "DRAW"), None)
-                if draw_tool:
+                if draw_tool and isinstance(modal_interaction.client, commands.Bot) and interaction.message is not None:
                     asyncio.create_task(draw_tool.execute(modal_interaction.client, interaction.message, new_query, "", ""))
         
         await interaction.response.send_modal(PromptModal())
 
 class DrawTool(BaseTool):
-    def __init__(self):
+    def __init__(self) -> None:
         # 在初始化時一次性載入 pixiv_tag.json 字典，供角色名 → Danbooru tag 轉換使用
         dict_path = settings.PIXIV_TAG_PATH
         self._pixiv_dict: dict[str, str] = {}
@@ -75,8 +77,13 @@ class DrawTool(BaseTool):
             except Exception as e:
                 logger.error("DrawTool: pixiv_tag.json 載入失敗: %s", e)
         self._sorted_pixiv_keys: list[str] = sorted(self._pixiv_dict.keys(), key=len, reverse=True)
+        self._session: aiohttp.ClientSession | None = None
 
-    # --- 強制附加的正向提示詞（雲端 + 地端通用）---
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """取得或惰性初始化共用的 aiohttp.ClientSession 連線池。"""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(trust_env=True)
+        return self._session
     MANDATORY_POSITIVE = [
         "masterpiece",
         "best quality",
@@ -236,9 +243,9 @@ class DrawTool(BaseTool):
         )
 
         loop = asyncio.get_running_loop()
-        future = loop.create_future()
+        future: asyncio.Future[str] = loop.create_future()
 
-        async def on_reply(reply: str):
+        async def on_reply(reply: str) -> None:
             if not future.done():
                 future.set_result(reply.strip())
 
@@ -309,31 +316,31 @@ class DrawTool(BaseTool):
         }
 
         try:
-            async with aiohttp.ClientSession(trust_env=True) as session:
-                async with session.post(
-                    url, json=payload, headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=settings.HF_IMAGE_TIMEOUT_SECONDS)
-                ) as resp:
-                    if resp.status == 200:
-                        content_type = resp.headers.get("Content-Type", "")
-                        if "image" in content_type or "application/octet-stream" in content_type:
-                            data = await resp.read()
-                            logger.info("DrawTool: HF Animagine 生成成功 (%d bytes)", len(data))
-                            return data
-                        else:
-                            # 可能是 JSON 錯誤訊息
-                            err = await resp.text()
-                            logger.error("DrawTool: HF 回傳非圖片 content_type=%s body=%s", content_type, err[:200])
-                            return None
-                    elif resp.status == 503:
-                        # 模型正在加載中，可嘗試等待再嘗
-                        err = await resp.text()
-                        logger.warning("DrawTool: HF 模型初始化中 (503)，跳過: %s", err[:100])
-                        return None
+            session = await self._get_session()
+            async with session.post(
+                url, json=payload, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=settings.HF_IMAGE_TIMEOUT_SECONDS)
+            ) as resp:
+                if resp.status == 200:
+                    content_type = resp.headers.get("Content-Type", "")
+                    if "image" in content_type or "application/octet-stream" in content_type:
+                        data = await resp.read()
+                        logger.info("DrawTool: HF Animagine 生成成功 (%d bytes)", len(data))
+                        return data
                     else:
+                        # 可能是 JSON 錯誤訊息
                         err = await resp.text()
-                        logger.error("DrawTool: HF 失敗 HTTP %d: %s", resp.status, err[:200])
+                        logger.error("DrawTool: HF 回傳非圖片 content_type=%s body=%s", content_type, err[:200])
                         return None
+                elif resp.status == 503:
+                    # 模型正在加載中，可嘗試等待再嘗
+                    err = await resp.text()
+                    logger.warning("DrawTool: HF 模型初始化中 (503)，跳過: %s", err[:100])
+                    return None
+                else:
+                    err = await resp.text()
+                    logger.error("DrawTool: HF 失敗 HTTP %d: %s", resp.status, err[:200])
+                    return None
         except asyncio.TimeoutError:
             logger.warning("DrawTool: HF Animagine 超時 (%ds)", settings.HF_IMAGE_TIMEOUT_SECONDS)
             return None
@@ -341,7 +348,7 @@ class DrawTool(BaseTool):
             logger.error("DrawTool: HF Animagine 連線失敗: %s", e)
             return None
 
-    def _build_animagine_prompt(self, seed_tags: list[str], expanded_prompt: str) -> str:
+    def _build_animagine_prompt(self, seed_tags: list[str], expanded_prompt: str) -> tuple[str, str]:
         """
         针對 Animagine-XL-3.1 的最佳 prompt 格式組裝。
         Animagine 最好的格式：
@@ -399,18 +406,18 @@ class DrawTool(BaseTool):
             url += f"&negative={encoded_negative}"
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url,
-                    timeout=aiohttp.ClientTimeout(total=settings.POLLINATIONS_TIMEOUT_SECONDS)
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.read()
-                        logger.info(f"Pollinations.ai 生成成功 ({len(data)} bytes)")
-                        return data
-                    else:
-                        logger.error(f"Pollinations.ai 錯誤: HTTP {resp.status}")
-                        return None
+            session = await self._get_session()
+            async with session.get(
+                url,
+                timeout=aiohttp.ClientTimeout(total=settings.POLLINATIONS_TIMEOUT_SECONDS)
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+                    logger.info(f"Pollinations.ai 生成成功 ({len(data)} bytes)")
+                    return data
+                else:
+                    logger.error(f"Pollinations.ai 錯誤: HTTP {resp.status}")
+                    return None
         except asyncio.TimeoutError:
             logger.warning(f"Pollinations.ai 超時 ({settings.POLLINATIONS_TIMEOUT_SECONDS}s)")
             return None
@@ -432,19 +439,19 @@ class DrawTool(BaseTool):
             "sampler_name": settings.SD_DEFAULT_SAMPLER,
         }
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{settings.SD_WEBUI_URL}/sdapi/v1/txt2img",
-                    json=payload,
-                    timeout=settings.SD_TIMEOUT_SECONDS
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        image_b64 = data["images"][0]
-                        return base64.b64decode(image_b64)
-                    else:
-                        logger.error(f"本地 SD WebUI 錯誤: {resp.status}")
-                        return None
+            session = await self._get_session()
+            async with session.post(
+                f"{settings.SD_WEBUI_URL}/sdapi/v1/txt2img",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=settings.SD_TIMEOUT_SECONDS)
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    image_b64 = data["images"][0]
+                    return base64.b64decode(image_b64)
+                else:
+                    logger.error(f"本地 SD WebUI 錯誤: {resp.status}")
+                    return None
         except Exception as e:
             logger.error(f"連線本地 SD WebUI 失敗: {e}")
             return None
@@ -456,21 +463,26 @@ class DrawTool(BaseTool):
         user_query: str,
         vibe_snippet: str,
         full_context: str,
-        *,
-        silent: bool = False,
         **kwargs: object,
-    ) -> str | None:
+    ) -> ToolResult | str | None:
         """畫圖工具核心。
 
         Args:
-            silent: 若為 True，不直接發送確認訊息，執行完成後回傳結果狀態字串。
+            bot: Discord Bot 實例。
+            message: 觸發訊息。
+            user_query: 使用者查詢。
+            vibe_snippet: 頻道氛圍。
+            full_context: 完整提示文本。
+            **kwargs: 包含 silent (bool) 等擴充參數。
 
         Returns:
-            silent=False 時回傳 None；silent=True 時回傳 str 狀態摘要。
+            標準 ToolResult 成果合約、字串摘要或 None。
         """
-        brain: BotBrain = bot.get_cog("BotBrain")
-        if not brain:
+        silent = bool(kwargs.get("silent", False))
+        brain_cog = bot.get_cog("BotBrain")
+        if not brain_cog:
             return "BotBrain 未就緒。" if silent else None
+        brain: Any = brain_cog
 
         # 狀態機檢查
         if getattr(brain, "_voice_mode_active", False):
@@ -546,12 +558,9 @@ class DrawTool(BaseTool):
                 _success = True
                 file = discord.File(fp=io.BytesIO(img_bytes), filename="generated.png")
                 view = DrawControlView(user_query=user_query, original_author=message.author)
-                if silent:
-                    await message.reply(file=file, view=view, mention_author=True)
-                    return f"畫圖完成！來源：{_source_label}"
                 await message.reply("畫好了！你看！", file=file, view=view, mention_author=True)
                 logger.info("DrawTool: 畫圖成功，來源: %s", _source_label)
-                return None
+                return ToolResult.success(f"畫圖完成！來源：{_source_label}", is_direct_rendered=True)
 
             # --- 層級 4: 本地 SD WebUI ---
             if not silent:
@@ -567,15 +576,13 @@ class DrawTool(BaseTool):
                 _success = True
                 file = discord.File(fp=io.BytesIO(img_bytes), filename="generated.png")
                 view = DrawControlView(user_query=user_query, original_author=message.author)
-                if silent:
-                    await message.reply(file=file, view=view, mention_author=True)
-                    return f"畫圖完成！來源：本地 SD WebUI"
                 await message.reply("畫好了！你看！", file=file, view=view, mention_author=True)
+                return ToolResult.success("畫圖完成！來源：本地 SD WebUI", is_direct_rendered=True)
             else:
                 _source_label = "failed"
                 err_msg = "嗚嗚，畫筆好像壞掉了，畫不出來..."
-                if silent: return err_msg
                 await message.reply(err_msg, mention_author=True)
+                return ToolResult.error(err_msg, is_direct_rendered=True)
 
         finally:
             brain._sd_generating = False

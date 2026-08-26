@@ -18,12 +18,13 @@ from typing import Any, Dict, List, Optional
 import imageio_ffmpeg  # type: ignore[import-untyped]
 import yt_dlp  # type: ignore[import-untyped]
 
+from mod.video_clipper import config
 from mod.video_clipper.contracts import AbstractVideoGifClient
 from mod.video_clipper.domain import VideoClipRequest, VideoClipResult
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CLIP_TIMEOUT_SEC: int = 90
+DEFAULT_CLIP_TIMEOUT_SEC: int = config.DEFAULT_CLIP_TIMEOUT_SEC
 
 
 class YoutubeGifClient(AbstractVideoGifClient):

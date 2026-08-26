@@ -1,6 +1,7 @@
 import logging
 import discord
 from discord.ext import commands
+from typing import Any
 import settings
 from handlers.bot_brain import BotBrain, InferenceTask
 from handlers.social.persona import build_dynamic_persona
@@ -24,7 +25,7 @@ class WelcomeCog(commands.Cog):
         if not channel:
             return
 
-        brain: BotBrain | None = self.bot.get_cog("BotBrain")
+        brain: Any = self.bot.get_cog("BotBrain")
         if not brain:
             await channel.send(f"歡迎 {member.mention} 來到 **{member.guild.name}**！")
             return

@@ -1,0 +1,88 @@
+<!-- ===== METRICS VIEW ===== -->
+<div class="view hidden" id="view-metrics">
+    <div class="metrics-grid">
+        <!-- CPU Card -->
+        <div class="metric-card">
+            <div class="metric-header">
+                <div class="metric-title">
+                    <span class="metric-icon">⚡</span>
+                    <span>CPU 處理器</span>
+                </div>
+                <span class="metric-badge badge-cpu" id="cpu-percent-badge">0%</span>
+            </div>
+            <div class="metric-body">
+                <div class="metric-value" id="cpu-percent-val">0%</div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill bar-cpu" id="cpu-bar" style="width: 0%"></div>
+                </div>
+                <div class="metric-footer">
+                    <span id="cpu-cores-text">核心數: --</span>
+                    <span id="cpu-freq-text">時脈: -- MHz</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- RAM Card -->
+        <div class="metric-card">
+            <div class="metric-header">
+                <div class="metric-title">
+                    <span class="metric-icon">🧠</span>
+                    <span>RAM 記憶體</span>
+                </div>
+                <span class="metric-badge badge-ram" id="ram-percent-badge">0%</span>
+            </div>
+            <div class="metric-body">
+                <div class="metric-value" id="ram-usage-val">0.0 GB / 0.0 GB</div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill bar-ram" id="ram-bar" style="width: 0%"></div>
+                </div>
+                <div class="metric-footer">
+                    <span id="ram-percent-text">使用率: 0%</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- GPU Card -->
+        <div class="metric-card" id="gpu-card-container">
+            <div class="metric-header">
+                <div class="metric-title">
+                    <span class="metric-icon">🎮</span>
+                    <span>GPU 顯示卡</span>
+                </div>
+                <span class="metric-badge badge-gpu" id="gpu-status-badge">檢測中</span>
+            </div>
+            <div class="metric-body" id="gpu-card-body">
+                <div class="placeholder-msg">正在檢測獨立顯示卡與 VRAM...</div>
+            </div>
+        </div>
+
+        <!-- Network Card -->
+        <div class="metric-card">
+            <div class="metric-header">
+                <div class="metric-title">
+                    <span class="metric-icon">🌐</span>
+                    <span>網路流量</span>
+                </div>
+                <span class="metric-badge badge-net">即時傳輸</span>
+            </div>
+            <div class="metric-body">
+                <div class="net-rates">
+                    <div class="net-rate-item">
+                        <span class="net-arrow arrow-up">↑</span>
+                        <span class="net-label">發送 (上傳):</span>
+                        <span class="net-val" id="net-sent-rate">0.0 KB/s</span>
+                    </div>
+                    <div class="net-rate-item">
+                        <span class="net-arrow arrow-down">↓</span>
+                        <span class="net-label">接收 (下載):</span>
+                        <span class="net-val" id="net-recv-rate">0.0 KB/s</span>
+                    </div>
+                </div>
+                <div class="metric-footer">
+                    <span id="net-total-sent">總發送: 0 MB</span>
+                    <span id="net-total-recv">總接收: 0 MB</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

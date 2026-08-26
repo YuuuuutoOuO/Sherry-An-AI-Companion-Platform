@@ -1,0 +1,240 @@
+<!-- ===== TOAST CONTAINER ===== -->
+<div class="toast-container" id="toast-container"></div>
+
+<!-- ===== ROAST ADD/EDIT MODAL ===== -->
+<div class="modal-backdrop hidden" id="roast-modal-backdrop" onclick="closeRoastModal()">
+    <div class="modal modal-roast modal-wide" onclick="event.stopPropagation()">
+        <div class="modal-header modal-header--gold">
+            <div class="modal-header-inner">
+                <span id="roast-modal-title" class="modal-title modal-title--gold">🎯 新增吐槽規則</span>
+            </div>
+            <button class="modal-close" onclick="closeRoastModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <input type="hidden" id="roast-modal-id" value="">
+
+            <!-- Row 1: Keyword & Match Mode Grid -->
+            <div class="modal-form-grid">
+                <div>
+                    <label class="modal-label">
+                        <span>觸發關鍵字 (Keyword)</span>
+                        <span class="modal-label-required">必填</span>
+                    </label>
+                    <input type="text" id="roast-modal-kw" class="select-input modal-input" placeholder="例如：== 或 你是笨蛋">
+                </div>
+                <div>
+                    <label class="modal-label">
+                        <span>匹配模式 (Match Mode)</span>
+                    </label>
+                    <select id="roast-modal-mode" class="select-input modal-input" onchange="onRoastModalModeChange(this.value)">
+                        <option value="contains">包含關鍵字 (Contains)</option>
+                        <option value="exact">完全一致 (Exact Match)</option>
+                        <option value="regex">正規表達式 (Regex Pattern)</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Dynamic Keyword Mode Hint -->
+            <div id="roast-modal-kw-hint" class="modal-hint-box">
+                💡 <strong>包含模式</strong>：只要群友發言中含有該關鍵字即可觸發。
+            </div>
+
+            <!-- Row 2: Reply Guide Textarea -->
+            <div class="modal-field">
+                <label class="modal-label">
+                    <span>吐槽回覆導引 (Reply Guide)</span>
+                    <span class="modal-label-hint">雪莉將以此導引結合 15 歲傲嬌名偵探人設深度發揮</span>
+                </label>
+                <textarea id="roast-modal-guide" class="select-input modal-textarea" rows="4" placeholder="輸入雪莉吐槽的核心主張/指引（例如：= = 中間要空格啦！連顏文字都不會打的大笨蛋～）"></textarea>
+            </div>
+
+            <!-- Row 3: Probability Card with Quick Presets -->
+            <div class="modal-prob-card">
+                <div class="modal-prob-header">
+                    <div class="modal-prob-title-row">
+                        <span class="modal-prob-icon">🎲</span>
+                        <span class="modal-prob-title">獨立觸發機率 (0% ~ 100%)</span>
+                    </div>
+                    <span id="roast-modal-prob-display" class="modal-prob-display">100%</span>
+                </div>
+                <input type="range" id="roast-modal-prob" min="0" max="100" value="100" class="modal-prob-slider" oninput="document.getElementById('roast-modal-prob-display').textContent = this.value + '%'">
+                <div class="modal-prob-presets">
+                    <div class="modal-preset-btns">
+                        <button type="button" class="modal-preset-btn" onclick="setModalProb(10)">10%</button>
+                        <button type="button" class="modal-preset-btn" onclick="setModalProb(25)">25%</button>
+                        <button type="button" class="modal-preset-btn" onclick="setModalProb(50)">50%</button>
+                        <button type="button" class="modal-preset-btn" onclick="setModalProb(80)">80%</button>
+                        <button type="button" class="modal-preset-btn modal-preset-btn--gold" onclick="setModalProb(100)">100% 必定</button>
+                    </div>
+                    <span class="modal-prob-hint">0% = 永不觸發 | 100% = 每次發言命中必吐槽</span>
+                </div>
+            </div>
+
+            <!-- Row 4: Enable Switch -->
+            <div class="modal-enable-row">
+                <label class="modal-enable-label">
+                    <div>
+                        <div class="modal-enable-title">⚡ 啟用此吐槽規則</div>
+                        <div class="modal-enable-desc">若關閉，雪莉將暫停監聽此關鍵字</div>
+                    </div>
+                    <input type="checkbox" id="roast-modal-enabled" checked class="modal-enable-checkbox">
+                </label>
+            </div>
+
+            <!-- Modal Footer Buttons -->
+            <div class="modal-footer">
+                <button class="btn-cancel" onclick="closeRoastModal()">取消</button>
+                <button class="btn-confirm-login modal-btn-confirm" onclick="saveRoastRuleFromModal()">儲存規則</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ===== LOG DETAIL MODAL ===== -->
+<div class="modal-backdrop hidden" id="modal-backdrop" onclick="closeModal()">
+    <div class="modal" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <span>日誌詳情</span>
+            <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <pre class="modal-body" id="modal-body"></pre>
+    </div>
+</div>
+
+<!-- ===== AUDIT DETAIL MODAL ===== -->
+<div class="modal-backdrop hidden" id="audit-detail-modal-backdrop" onclick="closeAuditDetailModal()">
+    <div class="modal modal-audit-detail" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <span>📋 操作履歷歷程</span>
+            <button class="modal-close" onclick="closeAuditDetailModal()">✕</button>
+        </div>
+        <div class="modal-body" id="audit-detail-modal-body">
+            <!-- Timeline content -->
+        </div>
+    </div>
+</div>
+
+<!-- ===== LOGIN MODAL ===== -->
+<div class="modal-backdrop hidden" id="login-modal-backdrop" onclick="closeLoginModal()">
+    <div class="modal modal-login" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <span>🔐 管理員身份驗證</span>
+            <button class="modal-close" onclick="closeLoginModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <p class="modal-desc">輸入管理員帳號與密碼解鎖修改設定、重啟雪莉與任務管理權限。</p>
+            <div class="modal-field">
+                <label class="modal-label-simple">管理員帳號</label>
+                <input type="text" id="login-username-input" class="select-input modal-input" value="admin" placeholder="admin">
+            </div>
+            <div class="modal-field">
+                <label class="modal-label-simple">管理員密碼</label>
+                <input type="password" id="login-password-input" class="select-input modal-input" placeholder="輸入管理員密碼..." onkeydown="if(event.key==='Enter') executeLogin()">
+            </div>
+            <div class="modal-footer">
+                <button class="btn-cancel" onclick="closeLoginModal()">取消</button>
+                <button class="btn-confirm-login" onclick="executeLogin()">驗證登入</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ===== RESTART CONFIRM & OVERLAY ===== -->
+<div class="modal-backdrop hidden" id="restart-modal-backdrop" onclick="closeRestartModal()">
+    <div class="modal modal-confirm" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <span>🔄 重啟雪莉</span>
+            <button class="modal-close" onclick="closeRestartModal()">✕</button>
+        </div>
+        <div class="modal-body modal-body--center">
+            <p class="modal-confirm-title">確定要重新啟動雪莉機器人嗎？</p>
+            <p class="modal-confirm-desc">這將會重新載入所有 Python 模組與最新設定，過程約需 5~10 秒。</p>
+            <div class="modal-footer">
+                <button class="btn-cancel" onclick="closeRestartModal()">取消</button>
+                <button class="btn-confirm-restart" onclick="executeRestart()">確定重啟</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ===== STOP CONFIRM & OVERLAY ===== -->
+<div class="modal-backdrop hidden" id="stop-modal-backdrop" onclick="closeStopModal()">
+    <div class="modal modal-confirm" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <span>🛑 關閉雪莉</span>
+            <button class="modal-close" onclick="closeStopModal()">✕</button>
+        </div>
+        <div class="modal-body modal-body--center">
+            <p class="modal-confirm-title modal-confirm-title--red">確定要停止並關閉雪莉機器人嗎？</p>
+            <p class="modal-confirm-desc">此操作將會立即終止 Python 主程序與控制台 Web UI。<br>如需重新開機，請於地端終端機執行 <code>restart_sherry.bat</code>。</p>
+            <div class="modal-footer">
+                <button class="btn-cancel" onclick="closeStopModal()">取消</button>
+                <button class="btn-confirm-stop" onclick="executeStop()">確定關閉</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="restart-overlay hidden" id="restart-overlay">
+    <div class="restart-spinner"></div>
+    <h2 class="restart-overlay-title">🚀 雪莉正在重新啟動中...</h2>
+    <p class="restart-overlay-desc" id="restart-overlay-desc">已傳送重啟指令，正等待伺服器連線恢復...</p>
+</div>
+
+<div class="stop-overlay hidden" id="stop-overlay">
+    <div class="stop-overlay-icon">🛑</div>
+    <h2 class="stop-overlay-title">雪莉機器人已成功關閉與停止</h2>
+    <p class="stop-overlay-desc">程序已終止。如需再次啟用，請於地端執行 <code>restart_sherry.bat</code> 啟動服務。</p>
+</div>
+
+<!-- ===== DEEP SEARCH MODAL ===== -->
+<div class="modal-backdrop hidden" id="deep-search-modal-backdrop" onclick="closeDeepSearchModal()">
+    <div class="modal modal-wide" onclick="event.stopPropagation()">
+        <div class="modal-header modal-header--blue">
+            <div class="modal-header-inner">
+                <span class="modal-title modal-title--blue">🔬 發起多輪深度研究專案</span>
+            </div>
+            <button class="modal-close" onclick="closeDeepSearchModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <!-- Topic Input -->
+            <div class="modal-field">
+                <label class="modal-label">
+                    <span>研究主題與核心探討目標 (Topic / Context)</span>
+                    <span class="modal-label-required">必填</span>
+                </label>
+                <textarea id="ds-modal-topic" class="select-input modal-textarea" rows="3" placeholder="例如：2026年常溫超導體最新研究進展與實驗重現狀況、量子計算對 RSA 密碼體系的實質威脅與抗量子演算法移轉..."></textarea>
+            </div>
+
+            <!-- Model Selection & Research Rounds Grid -->
+            <div class="modal-form-grid">
+                <div>
+                    <label class="modal-label">
+                        <span>推演 LLM 模型 (Model)</span>
+                    </label>
+                    <input type="text" id="ds-modal-model" class="select-input modal-input" placeholder="留空使用預設主力模型 (PRIMARY_MODEL)">
+                </div>
+                <div>
+                    <label class="modal-label">
+                        <span>探討子專題輪數 (Rounds: 2~8 輪)</span>
+                    </label>
+                    <select id="ds-modal-rounds" class="select-input modal-input">
+                        <option value="3">3 輪深度探討 (約 5~10 分鐘)</option>
+                        <option value="4" selected>4 輪深度探討 (標準推薦，約 10~15 分鐘)</option>
+                        <option value="6">6 輪極致探討 (學術論文級，約 20~30 分鐘)</option>
+                        <option value="8">8 輪全景窮盡探討 (約 30+ 分鐘)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="modal-hint-box">
+                💡 <strong>提示</strong>：深度研究將自動拆解探討維度、連網檢索大量文獻並逐篇精讀去噪，最後產出無人格的萬字專案報告。推演期間您可在 Web UI 實時追蹤思考軌跡。
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn-cancel" onclick="closeDeepSearchModal()">取消</button>
+                <button class="btn-primary" onclick="submitDeepSearchFromModal()">🚀 啟動深度研究</button>
+            </div>
+        </div>
+    </div>
+</div>

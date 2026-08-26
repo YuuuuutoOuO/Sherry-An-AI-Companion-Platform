@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 import aiohttp
 import discord
 from discord.ext import commands, tasks
@@ -24,8 +25,8 @@ class WebExplorer(commands.Cog):
     async def cog_unload(self) -> None:
         self._explore_loop.cancel()
 
-    def _get_brain(self) -> BotBrain | None:
-        brain: BotBrain | None = self.bot.get_cog("BotBrain")
+    def _get_brain(self) -> Any:
+        brain: Any = self.bot.get_cog("BotBrain")
         return brain
 
     def _pick_target_channels(self) -> list[discord.TextChannel]:

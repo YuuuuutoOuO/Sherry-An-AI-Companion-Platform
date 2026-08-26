@@ -51,7 +51,12 @@ class _FakeMessage:
     async def reply(self, content: str | None = None, *, embed: discord.Embed | None = None, mention_author: bool = False) -> Any:
         """將 reply 轉發至 interaction.followup.send()。"""
         try:
-            return await self._interaction.followup.send(content=content, embed=embed)
+            kwargs: dict[str, Any] = {}
+            if content is not None:
+                kwargs["content"] = content
+            if embed is not None:
+                kwargs["embed"] = embed
+            return await self._interaction.followup.send(**kwargs)
         except discord.HTTPException as e:
             logger.error("FakeMessage.reply failed: %s", e)
             return None
@@ -86,7 +91,7 @@ class ExecutorCog(commands.Cog):
         根據使用者選擇的 intent，直接調用對應 Tool 執行 content。
         完全繞過 route_and_execute_tag() 的 LLM 分類流程。
         """
-        brain: BotBrain | None = self.bot.get_cog("BotBrain")
+        brain: Any = self.bot.get_cog("BotBrain")
         if not brain:
             await interaction.response.send_message(
                 "❌ BotBrain 未加載，無法執行任何意圖！",
@@ -126,10 +131,10 @@ class ExecutorCog(commands.Cog):
         )
         full_context = f"{context_script}\n\n{trigger_line}" if context_script else trigger_line
 
-        vibe_mgr = self.bot.get_cog("VibeManager")
+        vibe_mgr: Any = self.bot.get_cog("VibeManager")
         vibe_snippet = vibe_mgr.get_top_topics_snippet(channel.id) if vibe_mgr else ""
 
-        mem_mgr = self.bot.get_cog("MemoryManager")
+        mem_mgr: Any = self.bot.get_cog("MemoryManager")
         if mem_mgr:
             user_long_memory = mem_mgr.get_user_memory_snippet(interaction.user.id)
             if user_long_memory:

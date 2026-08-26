@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands, tasks
 
-import settings
+from mod.dnd import config
 from mod.dnd.storage import append_world_history, load_world_state, save_world_state
 
 if TYPE_CHECKING:

@@ -85,10 +85,16 @@ def append_debug_log(text: str) -> None:
 
 # ======================= (解析與記憶抽取核心) =======================
 
-async def fetch_context_script(channel: discord.TextChannel, before_message: discord.Message) -> str:
+async def fetch_context_script(channel: Any, before_message: discord.Message | None = None) -> str:
+    if not hasattr(channel, "history"):
+        return ""
+    guild = getattr(channel, "guild", None)
+    me = getattr(guild, "me", None)
+    me_id = getattr(me, "id", None)
+
     raw: list[discord.Message] = []
     async for msg in channel.history(limit=settings.CONTEXT_HISTORY_LIMIT, before=before_message, oldest_first=False):
-        if msg.author.bot and msg.author.id != channel.guild.me.id: continue
+        if msg.author.bot and (me_id is None or msg.author.id != me_id): continue
         raw.append(msg)
     if not raw: return ""
     
@@ -109,7 +115,7 @@ async def fetch_context_script(channel: discord.TextChannel, before_message: dis
     BOT_FULL_PRESERVE_COUNT = 3
     recent_bot_msg_ids: set[int] = set()
     for msg in reversed(truncated):
-        if msg.author.id == channel.guild.me.id:
+        if me_id is not None and msg.author.id == me_id:
             recent_bot_msg_ids.add(msg.id)
             if len(recent_bot_msg_ids) >= BOT_FULL_PRESERVE_COUNT:
                 break
@@ -133,7 +139,7 @@ async def fetch_context_script(channel: discord.TextChannel, before_message: dis
         return False
 
     def _format_msg(msg: discord.Message, is_older: bool) -> str:
-        is_self = (msg.author.id == channel.guild.me.id)
+        is_self = (me_id is not None and msg.author.id == me_id)
         speaker = f"妳自己(雪莉)" if is_self else f"群友 [{msg.author.display_name}]"
         content = msg.clean_content.strip()
         
@@ -171,11 +177,17 @@ async def fetch_context_script(channel: discord.TextChannel, before_message: dis
 
 
 
-async def fetch_recent_script(channel: discord.TextChannel, limit: int) -> str:
+async def fetch_recent_script(channel: Any, limit: int) -> str:
+    if not hasattr(channel, "history"):
+        return ""
+    guild = getattr(channel, "guild", None)
+    me = getattr(guild, "me", None)
+    me_id = getattr(me, "id", None)
+
     # 這裡主要是給主動插話 (Interject) 看的，一樣要上閹割手術防幻覺！
     raw: list[discord.Message] = []
     async for msg in channel.history(limit=limit * 2, oldest_first=False):
-        if msg.author.bot and msg.author.id != channel.guild.me.id: continue
+        if msg.author.bot and (me_id is None or msg.author.id != me_id): continue
         raw.append(msg)
         if len(raw) >= limit: break
     raw.reverse()
@@ -227,12 +239,12 @@ def _process_micro_cot_extraction(reply: str, prompt: str = "", intent: str = "C
     """Returns (clean_text, thought_log)"""
     reply = reply.strip()
     thought_log = ""
-    thought_match = re.search(r'(?is)<thought>(.*?)</thought>', reply)
+    thought_match = re.search(r'(?is)<(?:thought|think)>(.*?)</(?:thought|think)>', reply)
     if thought_match:
         thought_log = thought_match.group(1).strip()
         
-    clean_text = re.sub(r'(?is)<thought>.*?</thought>\n*', '', reply).strip()
-    clean_text = clean_text.replace("<thought>", "").replace("</thought>", "")
+    clean_text = re.sub(r'(?is)<(?:thought|think)>.*?</(?:thought|think)>\n*', '', reply).strip()
+    clean_text = re.sub(r'</?(?:thought|think)>', '', clean_text)
     if not clean_text: 
         return "（盯——你這是在說甚麼難懂的話呢！）", thought_log
         
@@ -273,7 +285,7 @@ def _chunk_message(text: str, max_length: int = 1900) -> list[str]:
 
 async def remove_hourglass_reaction(
     target: discord.Message | Any,
-    bot_user: discord.User | discord.Member | None = None,
+    bot_user: discord.User | discord.Member | discord.ClientUser | None = None,
 ) -> None:
     """安全移除訊息上的 ⏳ 沙漏反應。"""
     if not hasattr(target, "remove_reaction"):
@@ -299,8 +311,71 @@ async def remove_hourglass_reaction(
         logger.debug("utils: failed to remove hourglass reaction: %s", e)
 
 
+def build_debug_detail_embed(
+    final_reply: str,
+    intent_name: str = "CHAT",
+    prompt: str = "",
+    model: str = "",
+    latency_ms: int = 0,
+    thought_log: str = "",
+    bot_user: Any = None,
+) -> discord.Embed:
+    """建構精美 Discord Embed 卡片式回覆 (Debug Detail 模式)。"""
+    from datetime import datetime, timezone
+
+    embed = discord.Embed(
+        title=f"🔍 [{intent_name}] 推理分析與回應卡片",
+        color=0xE74C3C,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    if bot_user and getattr(bot_user, "display_avatar", None):
+        embed.set_author(name="橘雪莉 (Tachibana Sherry)", icon_url=bot_user.display_avatar.url)
+
+    if prompt:
+        short_prompt = prompt.strip()
+        if len(short_prompt) > 800:
+            short_prompt = short_prompt[:800] + "..."
+        embed.add_field(
+            name="👤 使用者提問 / 上下文",
+            value=f"> {short_prompt}",
+            inline=False,
+        )
+
+    used_model = model or getattr(settings, "PRIMARY_MODEL", "unknown")
+    embed.add_field(
+        name="⚡ 執行資訊",
+        value=f"• **意圖標籤**: `{intent_name}`\n• **執行耗時**: `{latency_ms}` ms\n• **使用模型**: `{used_model}`",
+        inline=False,
+    )
+
+    if thought_log and thought_log.strip():
+        cot_text = thought_log.strip()
+        if len(cot_text) > 800:
+            cot_text = cot_text[:800] + "\n...(更多思考鏈已記錄於後台)"
+        embed.add_field(
+            name="🧠 思考過程 (CoT)",
+            value=f"```{cot_text}```",
+            inline=False,
+        )
+
+    if len(final_reply) <= 1024:
+        embed.add_field(
+            name="🐱 雪莉回覆",
+            value=final_reply,
+            inline=False,
+        )
+    else:
+        embed.description = f"**🐱 雪莉回覆**：\n{final_reply[:4000]}"
+
+    embed.set_footer(
+        text=f"橘雪莉 AI 偵錯模式 (Debug Detail) • ⚡ 耗時 {latency_ms} ms"
+    )
+    return embed
+
+
 async def simulate_typing_and_send(
-    target: discord.Message | discord.TextChannel | Any,
+    target: Any,
     reply: str,
     intent_name: str = "CHAT",
     prompt: str = "",
@@ -308,15 +383,19 @@ async def simulate_typing_and_send(
     system_prompt: str = "",
     user_prompt: str = "",
     latency_ms: int = 0,
+    thought_log: str = "",
 ) -> None:
-    is_message = isinstance(target, discord.Message) or hasattr(target, "reply")
-    channel = target.channel if is_message else target
+    is_message = hasattr(target, "reply")
+    channel: Any = getattr(target, "channel", target)
 
-    final_reply, thought_log = _process_micro_cot_extraction(
+    extracted_reply, extracted_thought = _process_micro_cot_extraction(
         reply, prompt=prompt, intent=intent_name,
         model=model, system_prompt=system_prompt, user_prompt=user_prompt,
         latency_ms=latency_ms,
     )
+    final_reply = extracted_reply
+    final_thought = thought_log.strip() if thought_log and thought_log.strip() else extracted_thought
+
     if not final_reply or not final_reply.strip():
         final_reply = "（盯——你這是在說甚麼難懂的話呢！）"
 
@@ -332,18 +411,35 @@ async def simulate_typing_and_send(
         await asyncio.sleep(delay)
 
     try:
-        chunks = _chunk_message(final_reply, max_length=1900)
         sent_msg = None
-        for idx, chunk in enumerate(chunks):
-            if idx == 0 and is_message:
-                sent_msg = await target.reply(chunk, mention_author=False)
+        if getattr(settings, "DEBUG_DETAIL", False):
+            client = getattr(channel, "_state", None)
+            bot_user = getattr(client, "user", None)
+            embed = build_debug_detail_embed(
+                final_reply=final_reply,
+                intent_name=intent_name,
+                prompt=prompt,
+                model=model,
+                latency_ms=latency_ms,
+                thought_log=final_thought,
+                bot_user=bot_user,
+            )
+            if is_message:
+                sent_msg = await target.reply(embed=embed, mention_author=False)
             else:
-                current_sent = await channel.send(chunk)
-                if idx == 0:
-                    sent_msg = current_sent
+                sent_msg = await channel.send(embed=embed)
+        else:
+            chunks = _chunk_message(final_reply, max_length=1900)
+            for idx, chunk in enumerate(chunks):
+                if idx == 0 and is_message:
+                    sent_msg = await target.reply(chunk, mention_author=False)
+                else:
+                    current_sent = await channel.send(chunk)
+                    if idx == 0:
+                        sent_msg = current_sent
 
         if sent_msg:
-            BOT_MESSAGE_INTENTS[sent_msg.id] = {"intent": intent_name, "thought": thought_log, "prompt": prompt}
+            BOT_MESSAGE_INTENTS[sent_msg.id] = {"intent": intent_name, "thought": final_thought, "prompt": prompt}
             if len(BOT_MESSAGE_INTENTS) > 1000:
                 keys = list(BOT_MESSAGE_INTENTS.keys())
                 for k in keys[:-500]: del BOT_MESSAGE_INTENTS[k]
@@ -369,6 +465,8 @@ async def simulate_typing_and_send_to_channel(
     model: str = "",
     system_prompt: str = "",
     user_prompt: str = "",
+    latency_ms: int = 0,
+    thought_log: str = "",
 ) -> None:
     await simulate_typing_and_send(
         channel,
@@ -378,4 +476,6 @@ async def simulate_typing_and_send_to_channel(
         model=model,
         system_prompt=system_prompt,
         user_prompt=user_prompt,
+        latency_ms=latency_ms,
+        thought_log=thought_log,
     )

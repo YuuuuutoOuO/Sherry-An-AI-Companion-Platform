@@ -5,9 +5,9 @@ import discord
 logger = logging.getLogger(__name__)
 
 class VoiceRecorder:
-    def __init__(self, vad) -> None:
+    def __init__(self, vad: object = None) -> None:
         self.vad = vad
-        self.queue = asyncio.Queue()
+        self.queue: asyncio.Queue[tuple[int, bytes]] = asyncio.Queue()
 
     # Note: discord.py does not natively support voice receive well yet.
     # We provide a stub interface for future extension or using discord.ext.voice_recv

@@ -88,20 +88,24 @@ def test_market_cog_schedule_morning_verify_trigger() -> None:
     bot = MagicMock(spec=commands.Bot)
     bot.wait_until_ready = AsyncMock()
     bot.loop = MagicMock(spec=asyncio.AbstractEventLoop)
+    bot.loop.create_task.side_effect = lambda coro: coro.close()
     cog = MarketCog(bot)
 
-    test_dt = datetime(2026, 8, 1, 7, 0, 0, tzinfo=TAIWAN_TZ)
+    test_dt = datetime(2026, 8, 3, 7, 0, 0, tzinfo=TAIWAN_TZ)
 
     # Act 1: First trigger at 07:00
     with (
         patch.object(cog, "_task_morning_verify", new_callable=AsyncMock),
         patch("mod.market_plugin.cog.datetime") as mock_dt,
+        patch("mod.market_plugin.cog.cfg.MORNING_VERIFY", True),
+        patch("mod.market_plugin.cog.cfg.MORNING_VERIFY_HOUR", 7),
+        patch("mod.market_plugin.cog.cfg.MORNING_VERIFY_MINUTE", 0),
     ):
         mock_dt.now.return_value = test_dt
         asyncio.run(cog._market_schedule_loop.coro(cog))
 
     # Assert 1
-    assert cog._last_triggered.get("morning_verify") == "2026-08-01"
+    assert cog._last_triggered.get("morning_verify") == "2026-08-03"
     assert bot.loop.create_task.call_count == 1
 
     # Act 2: Second run on the same day at 07:00
@@ -109,6 +113,9 @@ def test_market_cog_schedule_morning_verify_trigger() -> None:
     with (
         patch.object(cog, "_task_morning_verify", new_callable=AsyncMock),
         patch("mod.market_plugin.cog.datetime") as mock_dt,
+        patch("mod.market_plugin.cog.cfg.MORNING_VERIFY", True),
+        patch("mod.market_plugin.cog.cfg.MORNING_VERIFY_HOUR", 7),
+        patch("mod.market_plugin.cog.cfg.MORNING_VERIFY_MINUTE", 0),
     ):
         mock_dt.now.return_value = test_dt
         asyncio.run(cog._market_schedule_loop.coro(cog))
@@ -123,14 +130,17 @@ def test_market_cog_schedule_etf_monitor_trigger() -> None:
     bot = MagicMock(spec=commands.Bot)
     bot.wait_until_ready = AsyncMock()
     bot.loop = MagicMock(spec=asyncio.AbstractEventLoop)
+    bot.loop.create_task.side_effect = lambda coro: coro.close()
     cog = MarketCog(bot)
 
-    test_dt = datetime(2026, 8, 1, 10, 20, 0, tzinfo=TAIWAN_TZ)
+    test_dt = datetime(2026, 8, 3, 10, 20, 0, tzinfo=TAIWAN_TZ)
 
     # Act 1: First check at 10:20 (divisible by 10)
     with (
         patch.object(cog, "_task_etf_monitor", new_callable=AsyncMock),
         patch("mod.market_plugin.cog.datetime") as mock_dt,
+        patch("mod.market_plugin.cog.cfg.ETF_MONITOR_INTERVAL", True),
+        patch("mod.market_plugin.cog.cfg.ETF_MONITOR_INTERVAL_MINUTES", 10),
     ):
         mock_dt.now.return_value = test_dt
         asyncio.run(cog._market_schedule_loop.coro(cog))
@@ -144,6 +154,8 @@ def test_market_cog_schedule_etf_monitor_trigger() -> None:
     with (
         patch.object(cog, "_task_etf_monitor", new_callable=AsyncMock),
         patch("mod.market_plugin.cog.datetime") as mock_dt,
+        patch("mod.market_plugin.cog.cfg.ETF_MONITOR_INTERVAL", True),
+        patch("mod.market_plugin.cog.cfg.ETF_MONITOR_INTERVAL_MINUTES", 10),
     ):
         mock_dt.now.return_value = test_dt
         asyncio.run(cog._market_schedule_loop.coro(cog))

@@ -1,0 +1,22 @@
+<!-- ===== TASKS VIEW ===== -->
+<div class="view hidden" id="view-tasks">
+    <div class="tasks-wrapper">
+        <!-- Section 1: Brain Inference Queue -->
+        <div class="tasks-header-info">
+            <h3 class="tasks-section-title tasks-section-title--blue">🧠 大腦即時推理佇列 (LLM Task Queue)</h3>
+            <p class="tasks-section-desc">當前正等待大腦 Worker 派發與 GPU 運算執行的 InferenceTask 佇列。</p>
+        </div>
+        <div class="tasks-container" id="brain-queue-container">
+            <div class="placeholder-msg">正在載入大腦佇列...</div>
+        </div>
+
+        <!-- Section 2: Scheduled Reminders -->
+        <div class="tasks-header-info">
+            <h3 class="tasks-section-title">📅 背景排程與定時提醒 (Schedule Reminders)</h3>
+            <p class="tasks-section-desc">列出目前 `schedule.json` 中已登記監控的單次提醒與 Cron 週期任務。</p>
+        </div>
+        <div class="tasks-container" id="tasks-container">
+            <div class="placeholder-msg">正在載入排程提醒...</div>
+        </div>
+    </div>
+</div>

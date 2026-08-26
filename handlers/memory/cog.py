@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from typing import Any
 import discord
 from discord.ext import commands
 
@@ -28,7 +29,7 @@ class MemoryManager(commands.Cog):
         self.relations: RelationshipManager = RelationshipManager()
 
         # 積滿幾句話它才會覺得對方有資訊量並背景運轉抽出知識精華入庫。
-        self.MEM_DIGEST_THRESHOLD = 5
+        self.MEM_DIGEST_THRESHOLD: int = getattr(settings, "MEM_DIGEST_THRESHOLD", 10)
         # 追蹤每日首次對話（用於好感度加權）
         self._daily_first_conversation: dict[int, str] = {}
 
@@ -79,11 +80,22 @@ class MemoryManager(commands.Cog):
         if not diverse_facts:
             return ""
 
-        facts_text = "\n".join([f"- {f['fact']}" for f in diverse_facts])
+        rule_facts = [f for f in diverse_facts if f.get("category") == "rule"]
+        other_facts = [f for f in diverse_facts if f.get("category") != "rule"]
+
+        parts: list[str] = []
+        if rule_facts:
+            rule_text = "\n".join([f"  ⚠️ {f['fact']}" for f in rule_facts])
+            parts.append(f"🔒 【與這個人說話時必須遵守的規則】：\n{rule_text}")
+        if other_facts:
+            other_text = "\n".join([f"- {f['fact']}" for f in other_facts])
+            parts.append(
+                f"📖 這個靈魂長存於你記憶區最重要的知識點歸納 (深沉過往：可結合你目前發生的話題引用吐槽):\n{other_text}"
+            )
 
         snippet = (
             f"📌 這個人類曾登錄使用過的暱稱或代稱含有：{known_aliases}\n"
-            f"📖 這個靈魂長存於你記憶區最重要的知識點歸納 (深沉過往：可結合你目前發生的話題引用吐槽):\n{facts_text}"
+            + "\n\n".join(parts)
         )
         return snippet
 
@@ -131,15 +143,18 @@ class MemoryManager(commands.Cog):
     # Vector萃取封包 - 強打碎長篇話術取出人物標記
     # ==========================
     async def _run_reflection_extract(self, author: discord.Member | discord.User, texts: str) -> None:
-        brain: BotBrain | None = self.bot.get_cog("BotBrain")
-        if not brain:
+        brain_cog = self.bot.get_cog("BotBrain")
+        if not brain_cog:
             return
+        brain: Any = brain_cog
 
         uid_str = str(author.id)
 
         # 📝 只讀取當前 facts 文字供 LLM Prompt 參考（不在閉包中快照 profile，避免 Lost-Update 競態）
+        profile = self._store.get(uid_str) if isinstance(self._store, dict) else None
+        facts_list = profile.get("facts", []) if isinstance(profile, dict) else []
         current_facts_text = "\n".join(
-            f"- {f['fact']}" for f in self._store.get(uid_str, {}).get("facts", [])
+            f"- {f.get('fact', '')}" for f in facts_list if isinstance(f, dict) and f.get("fact")
         ) or "（目前無已知長期記憶）"
 
         # 請 LLM 返回帶有 category 與 importance 的新格式
@@ -158,16 +173,20 @@ class MemoryManager(commands.Cog):
             "4. 發言紀錄中出現的「[某群友]」是發話者在訊息中 TAG 的其他人，絕對不是發話者本人！\n"
             "5. 分類規範（category）：\n"
             "   - identity: 真實身份/職業/居住地/個人自稱\n"
-            "   - interest: 明確熱愛的遊戲/動漫/技術/興趣\n"
-            "   - habit: 穩固生活作息/口頭禪\n"
-            "   - relationship: 與雪莉（橘雪莉）的長期互動模式\n"
-            "   - opinion: 對重要事物的穩定看法\n"
+            "   - preference: 明確熱愛的遊戲/動漫/技術/興趣/食物\n"
+            "   - habit: 穩固生活作息/口頭禪/反覆出現的行為\n"
+            "   - social: 與其他人（群友、家人、朋友）的關係，或他正在進行的長期項目\n"
+            "   - rule: 【最重要】他對雪莉（橘雪莉）的明確要求或溝通規則，如『叫我OO』『不要用模糊詞』『說話要直接』\n"
             "6. 每條 fact 必須附上 importance（1~5整數）：\n"
-            "   1=短暫狀態  2=一般偏好  3=穩固習慣  4=重要特質  5=核心身份\n\n"
+            "   1=短暫狀態  2=一般偏好  3=穩固習慣  4=重要特質  5=核心身份或最高規則\n\n"
             "請只返回 JSON 格式，不可有任何其他文字：\n"
             '```json\n'
             '{"aliases": ["真實的綽號或自稱(若無則空陣列)"],\n'
-            ' "facts": [{"fact": "他平時喜歡寫Python", "importance": 3, "category": "interest"}]}\n'
+            ' "facts": [\n'
+            '   {"fact": "他平時喜歡寫Python", "importance": 3, "category": "preference"},\n'
+            '   {"fact": "請叫他歐潤吉", "importance": 5, "category": "rule"},\n'
+            '   {"fact": "他正在開發雪莉 Discord 機器人", "importance": 4, "category": "social"}\n'
+            ' ]}\n'
             '```'
         )
 
@@ -214,6 +233,6 @@ class MemoryManager(commands.Cog):
             system_prompt=prompt,
             user_prompt=author.display_name,
             callback=_save_extracted,
-            model=settings.CLASSIFIER_MODEL,
+            model=getattr(settings, "MEMORY_EXTRACT_MODEL", settings.PRIMARY_MODEL),
             task_id=f"memory-sync-{author.id}",
-        ))
+        ))

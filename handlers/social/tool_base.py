@@ -1,20 +1,16 @@
-from enum import Enum
+from __future__ import annotations
+
 import discord
 from discord.ext import commands
 
+from handlers.social.contracts import (
+    ToolCategory,
+    ToolExecutionStatus,
+    ToolResult,
+)
 
-class ToolResponseMode(str, Enum):
-    """工具對話與回應模式。
-
-    DIRECT_UI:
-        工具執行時會直接向 Discord 頻道發送獨立 Embed/圖片/媒體或控制語音（例如 MusicTool, DrawTool, ImageSearchTool）。
-        若使用者無額外聊天/心得要求，可進行行為自適應終止（Early Termination）以避免多餘文字重複洗版。
-    DATA_ONLY:
-        工具執行時主要為查詢純資料、API 數據或文字摘要（例如 StockTool, WeatherTool, SearchTool）。
-        必須交由 PRIMARY_MODEL 進行最終的性格發言合成以傳達結果給使用者。
-    """
-    DIRECT_UI = "DIRECT_UI"
-    DATA_ONLY = "DATA_ONLY"
+# 向下相容別名
+ToolResponseMode = ToolCategory
 
 
 class BaseTool:
@@ -30,8 +26,8 @@ class BaseTool:
 
     @property
     def response_mode(self) -> ToolResponseMode:
-        """工具的回應模式，預設為 DATA_ONLY。自帶 Discord 渲染/語音的工具可覆寫為 DIRECT_UI。"""
-        return ToolResponseMode.DATA_ONLY
+        """工具的回應模式，預設為 DATA_PROVIDER。自帶 Discord 渲染/語音的工具可覆寫為 DIRECT_UI。"""
+        return ToolCategory.DATA_PROVIDER
 
     def can_handle_by_regex(self, text: str) -> bool:
         """最高速匹配層：針對非常明顯的使用情境直接啟動不廢話"""
@@ -45,7 +41,7 @@ class BaseTool:
         vibe_snippet: str,
         full_context: str,
         **kwargs: object,
-    ) -> str | None:
+    ) -> ToolResult | str | None:
         """工具核心：此功能實際上的運作邏輯。
 
         Args:
@@ -54,9 +50,9 @@ class BaseTool:
             user_query: 使用者的文字輸入。
             vibe_snippet: 頻道近期話題氛圍摘要。
             full_context: 含上下文的完整提示文本。
-            **kwargs: 擴充參數，例如 silent=True 使工具靜默執行並回傳狀態字串。
+            **kwargs: 擴充參數，例如 images: list[str]。
 
         Returns:
-            None（直接回覆 Discord）或 str（silent 模式時回傳執行狀態字串）。
+            標準 ToolResult 實例、字串摘要或 None。
         """
         raise NotImplementedError

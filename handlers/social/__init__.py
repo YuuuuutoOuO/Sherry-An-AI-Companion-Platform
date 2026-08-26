@@ -2,6 +2,7 @@ import asyncio
 import logging
 import discord
 from discord.ext import commands
+from typing import Any
 
 import settings
 from handlers.social.interject import InterjectState, maybe_interject
@@ -42,7 +43,7 @@ class SocialChat(commands.Cog):
             # 若 50 筆訊息在 180 秒內完成，代表極度熱烈，建立 Thread
             is_hot = (last_time > 0 and (now - last_time) < 180)
             
-            vibe_mgr = self.bot.get_cog("VibeManager")
+            vibe_mgr: Any = self.bot.get_cog("VibeManager")
             if vibe_mgr:
                 await vibe_mgr.request_vibe_update(message.channel)
                 
@@ -77,11 +78,11 @@ class SocialChat(commands.Cog):
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
-        if payload.user_id == self.bot.user.id:
+        if not self.bot.user or payload.user_id == self.bot.user.id:
             return
 
         channel = self.bot.get_channel(payload.channel_id)
-        if not channel: return
+        if not channel or not hasattr(channel, "fetch_message"): return
         try:
             message = await channel.fetch_message(payload.message_id)
         except discord.NotFound:

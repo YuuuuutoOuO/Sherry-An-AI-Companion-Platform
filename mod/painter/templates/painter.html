@@ -1,0 +1,170 @@
+<!-- ===== MOD: PAINTER & ART GALLERY VIEW ===== -->
+<div class="view hidden" id="view-painter">
+    <div class="panel-header" style="margin-bottom: 20px;">
+        <div class="panel-title-group">
+            <h1 class="panel-title" style="font-size: 1.5rem; font-weight: 700; color: #FFF; margin: 0 0 6px 0;">🎨 雪莉藝術畫布工作室</h1>
+            <p class="panel-desc" style="font-size: 0.9rem; color: var(--text-muted); margin: 0;">即時觀看雪莉的創作進度、瀏覽過往歷史畫廊，或親自使用調色盤與特色筆刷動手作畫！</p>
+        </div>
+        <div class="panel-actions">
+            <button class="btn btn-secondary btn-sm" onclick="refreshPaintingGallery()">
+                <span class="btn-icon">🔄</span>
+                <span>重整畫廊</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- ===== TOP TABS ===== -->
+    <div class="painter-tabs" style="display: flex; gap: 10px; margin-bottom: 20px;">
+        <button class="btn btn-primary" id="tab-btn-gallery" onclick="switchPainterTab('gallery')">
+            <span>🖼️ 歷史畫廊 (./data/painting)</span>
+        </button>
+        <button class="btn btn-secondary" id="tab-btn-ai" onclick="switchPainterTab('ai')">
+            <span>✨ 委託雪莉創作</span>
+        </button>
+        <button class="btn btn-secondary" id="tab-btn-interactive" onclick="switchPainterTab('interactive')">
+            <span>🖌️ 互動調色盤畫板</span>
+        </button>
+    </div>
+
+    <!-- ===== SECTION 1: GALLERY VIEW ===== -->
+    <div id="painter-tab-gallery" class="painter-tab-content">
+        <div class="glass-card" style="margin-bottom: 20px; padding: 14px 20px; background: rgba(255,255,255,0.03); border-radius: 10px; border: 1px solid var(--border-color);">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h3 style="margin: 0; font-size: 1.05rem; color: var(--text-bright);">📁 畫作典藏館 (<span id="gallery-count">0</span> 幅)</h3>
+                <span style="font-size: 0.85rem; color: var(--text-muted);">檔案保存路徑：<code>./data/painting/*.jpg</code></span>
+            </div>
+        </div>
+
+        <div id="gallery-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 20px;">
+            <div class="glass-card" style="text-align: center; padding: 40px; color: var(--text-muted); grid-column: 1 / -1;">
+                正在載入畫廊中...
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== SECTION 2: AI DRAWING & LIVE PREVIEW ===== -->
+    <div id="painter-tab-ai" class="painter-tab-content" style="display: none;">
+        <div class="grid-2-col" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            <!-- Control Column -->
+            <div class="glass-card" style="padding: 20px; background: rgba(255,255,255,0.03); border-radius: 10px; border: 1px solid var(--border-color);">
+                <h3 style="margin-top: 0; color: var(--accent-pink);">🎨 靈感委託與風格設定</h3>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 6px; font-weight: 500;">想讓雪莉畫什麼？</label>
+                    <textarea id="ai-draw-prompt" rows="4" class="form-control" style="width: 100%; border-radius: 8px; padding: 10px; background: rgba(0,0,0,0.2); color: #FFF; border: 1px solid var(--border-color); box-sizing: border-box;" placeholder="例如：月夜竹林裡的黑貓與硃砂紅梅、櫻花飄落的午後咖啡廳、星空下的賽博龐克少女..."></textarea>
+                </div>
+
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 6px; font-weight: 500;">藝術風格</label>
+                    <select id="ai-draw-style" class="form-control" style="width: 100%; border-radius: 8px; padding: 10px; background: rgba(20,20,35,0.8); color: #FFF; border: 1px solid var(--border-color); box-sizing: border-box;">
+                        <option value="ink_wash">🖌️ 水墨畫 (古典國風墨韻/濃淡飛白)</option>
+                        <option value="watercolor">🎨 水彩畫 (清新通透疊色與水痕)</option>
+                        <option value="doodle">✏️ 簡筆塗鴉 (可愛手繪線條)</option>
+                        <option value="pixel_art">👾 像素藝術 (8-bit 復古點陣)</option>
+                        <option value="neon">🌃 賽博霓虹 (夜間電光發光)</option>
+                        <option value="crayon">🖍️ 粉筆蠟筆 (童趣顆粒質感)</option>
+                        <option value="oil">🖼️ 厚塗油畫 (經典飽和質感)</option>
+                        <option value="freestyle" selected>✨ 隨機自由 (由雪莉靈感決定)</option>
+                    </select>
+                </div>
+
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 6px; font-weight: 500;">📷 參考圖片 (選填：啟用 Gemma 多模態視覺臨摹)</label>
+                    <input type="file" id="ai-draw-image-file" accept="image/*" class="form-control" style="width: 100%; border-radius: 8px; padding: 6px; background: rgba(0,0,0,0.2); color: #FFF; border: 1px solid var(--border-color); box-sizing: border-box;">
+                </div>
+
+                <div style="margin-bottom: 20px;">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.9rem; color: var(--accent-pink); user-select: none;">
+                        <input type="checkbox" id="ai-draw-refine" style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-pink);">
+                        <span>✨ 啟用 Gemma 4 雙階段自我審視精修 (Two-Pass Refine)</span>
+                    </label>
+                    <small style="display: block; margin-top: 4px; color: var(--text-muted); font-size: 0.75rem;">讓 Gemma 4 畫完草稿後以視覺 Vision 審視自己的畫作，追加高光與細部精修（受 120 秒上限保護）</small>
+                </div>
+
+                <button id="btn-trigger-ai-draw" class="btn btn-primary" style="width: 100%; padding: 12px; font-size: 1rem;" onclick="triggerAiDrawing()">
+                    <span>🚀 讓雪莉開始作畫！</span>
+                </button>
+            </div>
+
+            <!-- Live Progress / Preview Column -->
+            <div class="glass-card" style="padding: 20px; background: rgba(255,255,255,0.03); border-radius: 10px; border: 1px solid var(--border-color); display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 400px; text-align: center;">
+                <h3 style="margin-top: 0; align-self: flex-start; color: var(--accent-cyan);">📺 雪莉即時畫布 (Live Preview)</h3>
+                
+                <div id="ai-live-status-box" style="width: 100%; margin-bottom: 15px;">
+                    <div id="ai-status-text" style="font-size: 0.95rem; color: var(--text-muted); margin-bottom: 10px;">目前閒置中，等待新的創作靈感...</div>
+                    <div class="progress-bar-wrap" style="width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden; display: none;" id="ai-progress-wrap">
+                        <div id="ai-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--accent-pink), var(--accent-cyan)); transition: width 0.3s;"></div>
+                    </div>
+                </div>
+
+                <div id="ai-result-preview" style="max-width: 100%; max-height: 360px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border-color); display: none;">
+                    <img id="ai-result-img" src="" alt="Sherry Artwork" style="width: 100%; height: auto; display: block;">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== SECTION 3: INTERACTIVE CANVAS ===== -->
+    <div id="painter-tab-interactive" class="painter-tab-content" style="display: none;">
+        <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+            <!-- Canvas Toolbar -->
+            <div class="glass-card" style="flex: 1; min-width: 260px; max-width: 320px; padding: 20px; background: rgba(255,255,255,0.03); border-radius: 10px; border: 1px solid var(--border-color);">
+                <h4 style="margin-top: 0;">🛠️ 畫具工具箱</h4>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="font-size: 0.85rem; color: var(--text-muted);">選擇筆刷</label>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px;">
+                        <button class="btn btn-secondary btn-sm active" id="brush-pencil" onclick="selectWebBrush('pencil')">鉛筆</button>
+                        <button class="btn btn-secondary btn-sm" id="brush-ink" onclick="selectWebBrush('ink_wash')">水墨筆</button>
+                        <button class="btn btn-secondary btn-sm" id="brush-watercolor" onclick="selectWebBrush('watercolor')">水彩筆</button>
+                        <button class="btn btn-secondary btn-sm" id="brush-crayon" onclick="selectWebBrush('crayon')">蠟筆</button>
+                        <button class="btn btn-secondary btn-sm" id="brush-airbrush" onclick="selectWebBrush('airbrush')">噴槍</button>
+                        <button class="btn btn-secondary btn-sm" id="brush-marker" onclick="selectWebBrush('marker')">麥克筆</button>
+                        <button class="btn btn-secondary btn-sm" id="brush-pixel" onclick="selectWebBrush('pixel')">像素筆</button>
+                        <button class="btn btn-secondary btn-sm" id="brush-eraser" onclick="selectWebBrush('eraser')">橡皮擦</button>
+                    </div>
+                </div>
+
+                <div style="margin-bottom: 15px;">
+                    <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-muted);">
+                        <span>筆刷粗細</span>
+                        <span id="brush-size-val">6px</span>
+                    </div>
+                    <input type="range" id="brush-size-slider" min="1" max="60" value="6" style="width: 100%; margin-top: 6px;" oninput="updateBrushSize(this.value)">
+                </div>
+
+                <div style="margin-bottom: 15px;">
+                    <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 6px;">RGB 調色盤</label>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <input type="color" id="web-color-picker" value="#E63946" style="width: 44px; height: 40px; border: none; border-radius: 6px; cursor: pointer;" onchange="updateWebColor(this.value)">
+                        <input type="text" id="web-color-hex" value="#E63946" class="form-control" style="width: 100px; padding: 6px 10px; font-family: monospace;" onchange="updateWebColor(this.value)">
+                    </div>
+                </div>
+
+                <div style="margin-bottom: 15px;">
+                    <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 6px;">特色推薦色票</label>
+                    <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                        <span style="width: 22px; height: 22px; border-radius: 4px; background: #0F0F0F; cursor: pointer; border: 1px solid #555;" title="玄黑" onclick="updateWebColor('#0F0F0F')"></span>
+                        <span style="width: 22px; height: 22px; border-radius: 4px; background: #BC2D28; cursor: pointer; border: 1px solid #555;" title="硃砂" onclick="updateWebColor('#BC2D28')"></span>
+                        <span style="width: 22px; height: 22px; border-radius: 4px; background: #264653; cursor: pointer; border: 1px solid #555;" title="黛藍" onclick="updateWebColor('#264653')"></span>
+                        <span style="width: 22px; height: 22px; border-radius: 4px; background: #2A6E55; cursor: pointer; border: 1px solid #555;" title="石綠" onclick="updateWebColor('#2A6E55')"></span>
+                        <span style="width: 22px; height: 22px; border-radius: 4px; background: #DAA520; cursor: pointer; border: 1px solid #555;" title="藤黃" onclick="updateWebColor('#DAA520')"></span>
+                        <span style="width: 22px; height: 22px; border-radius: 4px; background: #FFB7C5; cursor: pointer; border: 1px solid #555;" title="櫻粉" onclick="updateWebColor('#FFB7C5')"></span>
+                        <span style="width: 22px; height: 22px; border-radius: 4px; background: #00F5FF; cursor: pointer; border: 1px solid #555;" title="電光青" onclick="updateWebColor('#00F5FF')"></span>
+                        <span style="width: 22px; height: 22px; border-radius: 4px; background: #FF007F; cursor: pointer; border: 1px solid #555;" title="螢光桃紅" onclick="updateWebColor('#FF007F')"></span>
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 8px; margin-top: 20px;">
+                    <button class="btn btn-secondary btn-sm" style="flex: 1;" onclick="clearInteractiveCanvas()">🗑️ 清空</button>
+                    <button class="btn btn-primary btn-sm" style="flex: 1;" onclick="downloadInteractiveCanvas()">📥 下載</button>
+                </div>
+            </div>
+
+            <!-- Canvas Container -->
+            <div class="glass-card" style="flex: 2; display: flex; justify-content: center; align-items: center; background: #111; border-radius: 12px; padding: 20px; border: 1px solid var(--border-color);">
+                <canvas id="interactive-drawing-canvas" width="600" height="600" style="background: #FFF; border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); cursor: crosshair; touch-action: none; max-width: 100%; height: auto;"></canvas>
+            </div>
+        </div>
+    </div>
+</div>

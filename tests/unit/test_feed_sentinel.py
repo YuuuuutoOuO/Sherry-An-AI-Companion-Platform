@@ -2,6 +2,7 @@
 tests/unit/test_feed_sentinel.py
 ================================
 AI 社群情報哨兵模組 (mod.feed_sentinel) 單元測試。
+包含多維特徵正則指紋去重、資料倉儲 JSON 持久化與 Cog 巡邏流程驗證。
 """
 
 import asyncio
@@ -19,7 +20,15 @@ from discord.ext import commands
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from mod.feed_sentinel import config
-from mod.feed_sentinel.models import FeedItem
+from mod.feed_sentinel.models import (
+    FeedItem,
+    SharedPost,
+    extract_canonical_keys,
+    extract_arxiv_id,
+    normalize_title_fingerprint,
+    normalize_url,
+)
+from mod.feed_sentinel.repository import SentinelRepository
 from mod.feed_sentinel.cog import FeedSentinelCog, _load_seen_ids, _save_seen_ids
 from mod.feed_sentinel.fetcher import (
     fetch_huggingface_trending,
@@ -63,21 +72,163 @@ def test_feed_item_model():
     assert "NLP" in d["tags"]
 
 
-def test_seen_ids_persistence(tmp_path: Path):
-    """測試已推播情報 ID 快取的持久化讀寫。"""
-    test_seen_file = tmp_path / "test_seen.json"
-    with patch.object(config, "SEEN_PATH", test_seen_file):
-        # 初始應為空集合
-        seen = _load_seen_ids()
-        assert len(seen) == 0
+def test_shared_post_model():
+    """測試 SharedPost 模型與字典轉換。"""
+    post = SharedPost(
+        post_id="post_001",
+        source="arXiv",
+        title="Deep Reasoning Systems",
+        url="https://arxiv.org/abs/2608.12345",
+        original_summary="Original abstract here...",
+        sherry_analysis="💡 3大重點...",
+        author_or_repo="Sherry Lab",
+        tags=["AI", "Reasoning"],
+        published_at="2026-08-20",
+        posted_at="2026-08-21 09:00:00",
+        canonical_keys=["raw:post_001", "arxiv:2608.12345"],
+    )
 
-        # 寫入測試資料
-        test_ids = {"hf_1", "arxiv_2", "github_3"}
-        _save_seen_ids(test_ids)
+    assert post.post_id == "post_001"
+    assert post.source == "arXiv"
+    d = post.to_dict()
+    assert d["post_id"] == "post_001"
+    assert "arxiv:2608.12345" in d["canonical_keys"]
 
-        # 重新讀取
-        loaded = _load_seen_ids()
-        assert loaded == test_ids
+    reconstructed = SharedPost.from_dict(d)
+    assert reconstructed.post_id == post.post_id
+    assert reconstructed.title == post.title
+
+
+def test_canonical_deduplication_helpers():
+    """測試多維特徵正規化與指紋提取。"""
+    # 1. URL 正規化
+    assert normalize_url("https://www.arXiv.org/abs/2608.12345/") == "arxiv.org/abs/2608.12345"
+    assert normalize_url("http://github.com/Sherry/Platform") == "github.com/sherry/platform"
+
+    # 2. 標題指紋
+    assert normalize_title_fingerprint("Gemma 3: Technical Report (v1.0)!") == "gemma3technicalreportv10"
+
+    # 3. arXiv ID 提取
+    assert extract_arxiv_id("https://arxiv.org/abs/2608.99999v2") == "2608.99999"
+    assert extract_arxiv_id("https://huggingface.co/papers/2608.99999") == "2608.99999"
+
+    # 4. 跨平台指紋比對 (HuggingFace Daily Papers 與 arXiv 應共享 arxiv 指紋)
+    hf_item = FeedItem(
+        item_id="hf_paper_2608.99999",
+        source="HuggingFace Daily Papers",
+        title="Deep Reasoning Framework",
+        url="https://huggingface.co/papers/2608.99999",
+        summary="Summary...",
+    )
+    arxiv_item = FeedItem(
+        item_id="arxiv_2608.99999v1",
+        source="arXiv AI/CS Research",
+        title="Deep Reasoning Framework",
+        url="https://arxiv.org/abs/2608.99999v1",
+        summary="Summary...",
+    )
+
+    hf_keys = set(extract_canonical_keys(hf_item))
+    arxiv_keys = set(extract_canonical_keys(arxiv_item))
+
+    # 兩者必須包含相同的 arxiv:2608.99999 與 title:deepreasoningframework
+    assert "arxiv:2608.99999" in hf_keys
+    assert "arxiv:2608.99999" in arxiv_keys
+    assert "title:deepreasoningframework" in hf_keys
+    assert "title:deepreasoningframework" in arxiv_keys
+    assert len(hf_keys.intersection(arxiv_keys)) >= 2
+
+
+def test_sentinel_repository_crud_and_dedup(tmp_path: Path):
+    """測試 SentinelRepository 增刪查改、分頁與多維去重。"""
+    posts_file = tmp_path / "feed_sentinel" / "posts.json"
+    seen_file = tmp_path / "feed_sentinel" / "sentinel_seen.json"
+    legacy_file = tmp_path / "legacy_seen.json"
+
+    # 建立舊版 legacy 快取以測試自動遷移
+    legacy_file.write_text(json.dumps(["legacy_item_1", "legacy_item_2"]), encoding="utf-8")
+
+    repo = SentinelRepository(
+        posts_path=posts_file,
+        seen_path=seen_file,
+        legacy_seen_path=legacy_file,
+    )
+
+    # 檢查 legacy 是否被納入
+    assert repo.is_duplicate(FeedItem(item_id="legacy_item_1", source="", title="", url="", summary="")) is True
+
+    # 儲存第一篇文章
+    post1 = SharedPost(
+        post_id="hf_paper_2608.11111",
+        source="HuggingFace Daily Papers",
+        title="Attention Is All You Need 2026",
+        url="https://huggingface.co/papers/2608.11111",
+        original_summary="Original abstract",
+        sherry_analysis="💡 3大重點: 1. 突破",
+        author_or_repo="Ashish",
+        tags=["Transformer", "NLP"],
+        published_at="2026-08-20",
+        posted_at="2026-08-21 08:30:00",
+    )
+    repo.save_post(post1)
+
+    assert len(repo.load_posts()) == 1
+    assert posts_file.exists()
+    assert seen_file.exists()
+
+    # 測試去重防禦：嘗試抓取同篇論文的 arXiv 來源
+    duplicate_arxiv_item = FeedItem(
+        item_id="arxiv_2608.11111v1",
+        source="arXiv",
+        title="Attention Is All You Need 2026",
+        url="https://arxiv.org/abs/2608.11111v1",
+        summary="Different wording summary",
+    )
+    assert repo.is_duplicate(duplicate_arxiv_item) is True
+
+    # 測試全新非重複文章
+    fresh_item = FeedItem(
+        item_id="github_openai_new_agent",
+        source="GitHub AI Trending",
+        title="openai/new-agent",
+        url="https://github.com/openai/new-agent",
+        summary="A new open source repo",
+    )
+    assert repo.is_duplicate(fresh_item) is False
+
+    # 儲存第二篇文章
+    post2 = SharedPost(
+        post_id="github_openai_new_agent",
+        source="GitHub AI Trending",
+        title="openai/new-agent",
+        url="https://github.com/openai/new-agent",
+        original_summary="A new open source repo",
+        sherry_analysis="💡 銳評...",
+        author_or_repo="openai",
+        tags=["GitHub", "Agent"],
+        published_at="2026-08-21",
+        posted_at="2026-08-21 09:30:00",
+    )
+    repo.save_post(post2)
+
+    # 測試搜尋與過濾
+    items, total = repo.list_posts(limit=10, offset=0, source="GitHub")
+    assert total == 1
+    assert items[0].post_id == "github_openai_new_agent"
+
+    items_search, total_search = repo.list_posts(query="Transformer")
+    assert total_search == 1
+    assert items_search[0].post_id == "hf_paper_2608.11111"
+
+    # 測試統計
+    stats = repo.get_stats()
+    assert stats["total_posts"] == 2
+    assert stats["source_counts"]["huggingface"] == 1
+    assert stats["source_counts"]["github"] == 1
+
+    # 測試刪除
+    assert repo.delete_post("github_openai_new_agent") is True
+    assert len(repo.load_posts()) == 1
 
 
 def test_fetch_huggingface_trending_mock():
@@ -185,7 +336,7 @@ def test_feed_sentinel_cog_schedule_window_and_cooldown():
 
 
 def test_feed_sentinel_process_and_post(tmp_path: Path):
-    """測試情報抓取、AI 銳評生成與 Discord Embed 發送閉環。"""
+    """測試情報抓取、AI 銳評生成、Discord Embed 發送與文章持久化存檔。"""
     async def _run():
         bot = MagicMock(spec=commands.Bot)
         mock_channel = MagicMock(spec=discord.TextChannel)
@@ -200,21 +351,30 @@ def test_feed_sentinel_process_and_post(tmp_path: Path):
             summary="New SOTA open weights model released.",
         )
 
-        cog = FeedSentinelCog(bot)
-        cog._seen_ids = set()
+        test_posts_file = tmp_path / "feed_sentinel" / "posts.json"
+        test_seen_file = tmp_path / "feed_sentinel" / "sentinel_seen.json"
+        repo = SentinelRepository(posts_path=test_posts_file, seen_path=test_seen_file)
+
+        cog = FeedSentinelCog(bot, repository=repo)
 
         with (
             patch("mod.feed_sentinel.cog.fetch_all_feeds", new_callable=AsyncMock, return_value=[test_item]),
             patch.object(cog, "_generate_sherry_briefing", new_callable=AsyncMock, return_value="💡 **【重點】**\n1. 效能大幅提升\n\n🕵️‍♀️ **【雪莉銳評】**\n這模型確實有點料！"),
-            patch.object(config, "SEEN_PATH", tmp_path / "seen.json"),
         ):
             success = await cog._process_feed_and_post()
             assert success is True
-            assert "test_post_001" in cog._seen_ids
+            assert repo.is_duplicate(test_item) is True
             mock_channel.send.assert_called_once()
             sent_embed = mock_channel.send.call_args.kwargs.get("embed")
             assert sent_embed is not None
             assert "Gemma 3" in sent_embed.title
             assert "雪莉銳評" in sent_embed.description
 
+            # 驗證 posts.json 確實有存入
+            saved_posts = repo.load_posts()
+            assert len(saved_posts) == 1
+            assert saved_posts[0].post_id == "test_post_001"
+            assert "Gemma 3" in saved_posts[0].title
+
     asyncio.run(_run())
+

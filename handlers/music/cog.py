@@ -227,7 +227,7 @@ class MusicHandler(commands.Cog):
             start_idx = page * per_page
             end_idx = min(len(queue), start_idx + per_page)
             page_songs = queue[start_idx:end_idx]
-            q_lines = []
+            q_lines: list[str] = []
             for i, song in enumerate(page_songs, start=start_idx + 1):
                 duration_str = self.format_duration(song.get("duration", 0) or 0)
                 title = song["title"]
@@ -235,7 +235,8 @@ class MusicHandler(commands.Cog):
                     title = title[:37] + "..."
                 s_url = self.shorten_url(song.get("webpage_url", ""))
                 line = f"**{i}.** [{title}]({s_url}) `[{duration_str}]`"
-                if sum(len(x) for x in desc_parts) + sum(len(x) for x in q_lines) + len(line) > 3800:
+                total_len = sum((len(x) for x in desc_parts), 0) + sum((len(x) for x in q_lines), 0) + len(line)
+                if total_len > 3800:
                     q_lines.append("*(...字數已達上限，部分歌曲省略顯示)*")
                     break
                 q_lines.append(line)
@@ -300,7 +301,7 @@ class MusicHandler(commands.Cog):
                 msg = self.current_message.get(guild_id)
                 song = self.current_song.get(guild_id)
                 guild = self.bot.get_guild(guild_id)
-                vc = guild.voice_client if guild else None
+                vc: Any = guild.voice_client if guild else None
                 if not msg or not song or not vc or not vc.is_connected():
                     break
                 if vc.is_playing() or vc.is_paused():
@@ -376,7 +377,7 @@ class MusicHandler(commands.Cog):
         guild = text_channel.guild
         guild_id = guild.id
 
-        vc = guild.voice_client
+        vc: Any = guild.voice_client
         try:
             if vc is None:
                 vc = await voice_channel.connect()
@@ -394,43 +395,82 @@ class MusicHandler(commands.Cog):
 
         try:
             loop = asyncio.get_running_loop()
-            data = await loop.run_in_executor(None, lambda: ytdl_client.extract_info(search_query, download=False))
+            data: dict[str, Any] | None = await loop.run_in_executor(
+                None, lambda: ytdl_client.extract_info(search_query, download=False)
+            )
+            if not data:
+                await text_channel.send("❌ 橘雪莉找不到這首歌，請換個關鍵字或連結試試看！")
+                return
 
-            if 'entries' in data:
+            if 'entries' in data and data['entries']:
                 entries = [e for e in data['entries'] if e]
-                added_items = []
+                added_items: list[dict[str, Any]] = []
                 for entry in entries:
-                    url = entry.get('webpage_url', entry.get('url'))
-                    if url and not url.startswith('http'):
+                    url = entry.get('webpage_url') or entry.get('url')
+                    if url and not str(url).startswith('http'):
                         url = f"https://www.youtube.com/watch?v={url}"
+                    elif not url and entry.get('id'):
+                        url = f"https://www.youtube.com/watch?v={entry.get('id')}"
+
+                    thumb = entry.get('thumbnail')
+                    if not thumb and entry.get('thumbnails'):
+                        thumb = entry['thumbnails'][0].get('url')
+
                     added_items.append({
                         'title': entry.get('title', '未知曲目'),
-                        'webpage_url': url,
+                        'webpage_url': url or '',
                         'duration': entry.get('duration', 0) or 0,
-                        'thumbnail': entry.get('thumbnail'),
+                        'thumbnail': thumb,
+                        'extractor': entry.get('extractor', 'youtube'),
                     })
+                if not added_items:
+                    await text_channel.send("❌ 橘雪莉找不到這首歌，請換個關鍵字或連結試試看！")
+                    return
                 if insert_at_top:
                     self.queues[guild_id] = added_items + self.queues[guild_id]
                 else:
                     self.queues[guild_id].extend(added_items)
+                count = len(added_items)
             else:
-                song_item = {
+                url = data.get('webpage_url') or data.get('url')
+                if url and not str(url).startswith('http'):
+                    url = f"https://www.youtube.com/watch?v={url}"
+                elif not url and data.get('id'):
+                    url = f"https://www.youtube.com/watch?v={data.get('id')}"
+
+                thumb = data.get('thumbnail')
+                if not thumb and data.get('thumbnails'):
+                    thumb = data['thumbnails'][0].get('url')
+
+                song_item: dict[str, Any] = {
                     'title': data.get('title', '未知曲目'),
-                    'webpage_url': data.get('webpage_url', data.get('url')),
+                    'webpage_url': url or '',
                     'duration': data.get('duration', 0) or 0,
-                    'thumbnail': data.get('thumbnail'),
+                    'thumbnail': thumb,
+                    'extractor': data.get('extractor', 'youtube'),
                 }
                 if insert_at_top:
                     self.queues[guild_id].insert(0, song_item)
                 else:
                     self.queues[guild_id].append(song_item)
+                count = 1
+
+            is_currently_playing = bool(vc and hasattr(vc, "is_playing") and (vc.is_playing() or vc.is_paused()))
+            total_queue_len = len(self.queues[guild_id])
+            if total_queue_len == count and not is_currently_playing:
+                first_song = self.queues[guild_id][0]
+                dur_str = self.format_duration(first_song.get("duration", 0) or 0)
+                await text_channel.send(f"🎵 偵探橘雪莉已就定位！開始播放：**{first_song['title']}** `[{dur_str}]`")
+                self._play_next(guild, text_channel)
+            else:
+                target_song = self.queues[guild_id][0] if insert_at_top else self.queues[guild_id][-1]
+                dur_str = self.format_duration(target_song.get("duration", 0) or 0)
+                await text_channel.send(f"📥 已加入播放佇列（第 **{total_queue_len}** 首）：**{target_song['title']}** `[{dur_str}]`")
 
         except Exception as e:
+            logger.error("headless_play 提取歌曲失敗: %s", e, exc_info=True)
             await text_channel.send(f"⚠️ 找不到這首歌耶，是不是被消音了？ (`{str(e)}`)")
             return
-
-        if not vc.is_playing() and not vc.is_paused():
-            self._play_next(guild, text_channel)
 
     def _play_next(self, guild: discord.Guild, text_channel: discord.TextChannel) -> None:
         """背景播放下一首歌曲引擎。
@@ -440,7 +480,7 @@ class MusicHandler(commands.Cog):
             text_channel: 文字頻道。
         """
         guild_id = guild.id
-        vc = guild.voice_client
+        vc: Any = guild.voice_client
 
         if vc is None or not vc.is_connected():
             self._stop_progress_updater(guild_id)
@@ -454,24 +494,44 @@ class MusicHandler(commands.Cog):
             async def background_fetch_and_play() -> None:
                 try:
                     loop = asyncio.get_running_loop()
-                    fresh_song = await loop.run_in_executor(
-                        None, lambda: ytdl_client.extract_info(song['webpage_url'], download=False)
+                    target_url = song.get('webpage_url') or song.get('url')
+                    if not target_url:
+                        raise ValueError("歌曲項目缺少有效的網址")
+
+                    fresh_song: Any = await loop.run_in_executor(
+                        None, lambda: ytdl_client.extract_info(target_url, download=False)
                     )
 
-                    if not fresh_song:
+                    if not fresh_song or not isinstance(fresh_song, dict):
                         raise ValueError("yt-dlp 無法解析影片，可能缺少 JS 執行環境或影片受限")
 
-                    true_audio_stream = fresh_song.get('url')
+                    song_data: dict[str, Any] = fresh_song
+                    if 'entries' in song_data and song_data['entries']:
+                        first_entry = song_data['entries'][0]
+                        if isinstance(first_entry, dict):
+                            song_data = first_entry
+
+                    true_audio_stream = song_data.get('url')
+                    formats = song_data.get('formats')
+                    if not true_audio_stream and isinstance(formats, list):
+                        audio_formats = [
+                            f for f in formats
+                            if isinstance(f, dict) and f.get('acodec') != 'none' and f.get('url')
+                        ]
+                        if audio_formats:
+                            true_audio_stream = audio_formats[-1]['url']
+
                     if not true_audio_stream:
                         raise ValueError("成功解析但找不到音頻串流 URL")
 
-                    song['duration'] = fresh_song.get('duration', 0) or song.get('duration', 0) or 0
-                    song['thumbnail'] = fresh_song.get('thumbnail') or song.get('thumbnail')
+                    song['duration'] = song_data.get('duration', 0) or song.get('duration', 0) or 0
+                    song['thumbnail'] = song_data.get('thumbnail') or song.get('thumbnail')
 
                     raw_source = discord.FFmpegPCMAudio(
                         true_audio_stream,
                         executable=FFMPEG_EXE_PATH,
-                        **FFMPEG_OPTIONS
+                        before_options=str(FFMPEG_OPTIONS.get("before_options", "")),
+                        options=str(FFMPEG_OPTIONS.get("options", "")),
                     )
                     vol = getattr(settings, "MUSIC_DEFAULT_VOLUME", 1.2)
                     source = discord.PCMVolumeTransformer(raw_source, volume=vol)
@@ -490,13 +550,20 @@ class MusicHandler(commands.Cog):
                             self.queues[guild_id].append(song)
 
                         self.current_song[guild_id] = None
+                        self.is_paused[guild_id] = False
                         self.bot.loop.call_soon_threadsafe(self._play_next, guild, text_channel)
+
+                    # 如果當前已在播放中，先安全停止避免 ClientException
+                    if vc and hasattr(vc, "is_playing") and (vc.is_playing() or vc.is_paused()):
+                        vc.stop()
+                        await asyncio.sleep(0.05)
 
                     self.playback_start_time[guild_id] = time.time()
                     self.playback_accumulated_time[guild_id] = 0.0
                     self.is_paused[guild_id] = False
 
-                    vc.play(source, after=after_playback)
+                    if vc and hasattr(vc, "play"):
+                        vc.play(source, after=after_playback)
 
                     await self._delete_song_message(guild_id)
                     view = MusicControlView()
@@ -519,6 +586,7 @@ class MusicHandler(commands.Cog):
         else:
             self._stop_progress_updater(guild_id)
             self.current_song[guild_id] = None
+            self.is_paused[guild_id] = False
 
     # ──────────────────────────────────────────────────────────
     # 單一 /play 指令（合併所有操作為下拉選單）
@@ -557,7 +625,7 @@ class MusicHandler(commands.Cog):
             return
         queue    = self.queues.get(guild_id, [])
         current  = self.current_song.get(guild_id)
-        vc       = interaction.guild.voice_client if interaction.guild else None
+        vc: Any  = interaction.guild.voice_client if interaction.guild else None
         user_vc  = (
             interaction.user.voice.channel
             if interaction.user and hasattr(interaction.user, "voice") and interaction.user.voice
@@ -617,7 +685,7 @@ class MusicHandler(commands.Cog):
 
         # ── skip ────────────────────────────────────────────────
         elif play_type == "skip":
-            if vc and (vc.is_playing() or vc.is_paused()):
+            if vc and hasattr(vc, "is_playing") and (vc.is_playing() or vc.is_paused()):
                 vc.stop()
                 await interaction.response.send_message("⏭️ 已跳過當前歌曲！", delete_after=5)
             else:
@@ -639,7 +707,7 @@ class MusicHandler(commands.Cog):
                     f"❌ 找不到第 `{idx}` 首！佇列目前共 {len(queue)} 首，請確認編號。", ephemeral=True
                 )
                 return
-            if vc and (vc.is_playing() or vc.is_paused()):
+            if vc and hasattr(vc, "stop") and (vc.is_playing() or vc.is_paused()):
                 vc.stop()  # 觸發 after_playback → _play_next → 立刻播 jump 過去的歌
             await interaction.response.send_message(f"🎯 跳至第 **{idx}** 首：**{song['title']}**！", delete_after=5)
 

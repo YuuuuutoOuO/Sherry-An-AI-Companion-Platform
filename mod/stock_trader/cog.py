@@ -46,7 +46,7 @@ class StockTraderCog(commands.Cog, name="Sherry Stock Trader"):
         self._last_indicators_hash: Optional[str] = None  # 上次行情數據特徵碼
 
         # 將本 cog 注入到 bot 實例，方便 Web UI 直接調用
-        bot._stock_trader_cog = self
+        setattr(bot, "_stock_trader_cog", self)
 
         logger.info("[stock_trader] StockTraderCog 初始化完成 ($10,000 虛擬本金已到位)")
 
@@ -416,7 +416,8 @@ class StockTraderCog(commands.Cog, name="Sherry Stock Trader"):
                 embed.add_field(name="💡 雪莉下單理由", value=f"*{t.reason}*", inline=False)
                 embed.set_footer(text="橘雪莉虛擬量化交易系統 ‧ 獨立 Mod 通報")
 
-                await channel.send(embed=embed)
+                if hasattr(channel, "send"):
+                    await channel.send(embed=embed)
 
         except Exception as e:
             logger.error("[stock_trader] ❌ 推送交易紀錄至 Discord 頻道失敗: %s", e)

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Literal
+from typing import Literal, Any
 
 import discord
 from discord import app_commands
@@ -19,6 +19,7 @@ from discord.ext import commands
 import settings
 from handlers.bot_brain import BotBrain, InferenceTask
 from handlers.social.utils import simulate_typing_and_send
+from mod.dnd import config
 from mod.dnd.character import create_character
 from mod.dnd.combat import CombatManager
 from mod.dnd.dice import advantage_roll, disadvantage_roll, roll, roll_dice
@@ -43,6 +44,8 @@ MAX_HISTORY_ROUNDS: int = 6
 
 class DndCog(commands.Cog):
     """D&D AI World Engine Cog."""
+
+    dnd_group = app_commands.Group(name="dnd", description="🐉 D&D 跑團冒險系統")
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -200,7 +203,7 @@ class DndCog(commands.Cog):
         characters = load_characters()
         char = characters.get(message.author.id)
 
-        brain: BotBrain | None = self.bot.get_cog("BotBrain")
+        brain: Any = self.bot.get_cog("BotBrain")
         if not brain:
             return
 
@@ -247,25 +250,26 @@ class DndCog(commands.Cog):
             finally:
                 # Remove loading reaction once processing is complete
                 try:
-                    await message.remove_reaction("⏳", self.bot.user)
+                    if self.bot.user:
+                        await message.remove_reaction("⏳", self.bot.user)
                 except Exception:
                     pass
 
         task = InferenceTask(
-            priority=getattr(settings, "PRIORITY_TAG_RESPONSE", 1),
+            priority=config.DEFAULT_PRIORITY,
             system_prompt=sys_prompt,
             user_prompt=user_prompt,
             callback=_on_dm_reply,
-            model=settings.PRIMARY_MODEL,
+            model=config.DEFAULT_MODEL or getattr(settings, "PRIMARY_MODEL", "lms:gemma-4"),
             task_id=f"dnd-session-{message.author.id}-{int(message.created_at.timestamp())}",
         )
         await brain.enqueue_task(task)
 
     # ---------------------------------------------------------------------------
-    # Slash Commands
+    # /dnd Subcommand Group
     # ---------------------------------------------------------------------------
 
-    @app_commands.command(name="dnd_join", description="🎲 創建你的 D&D 冒險者角色卡")
+    @dnd_group.command(name="join", description="🎲 創建你的 D&D 冒險者角色卡")
     @app_commands.choices(
         race=[
             app_commands.Choice(name="人類 (+全屬性 +1)", value="人類"),
@@ -318,11 +322,11 @@ class DndCog(commands.Cog):
             f"✨ 魅力: {char.stats.charisma} (+{char.stats.modifier('charisma')})"
         )
         embed.add_field(name="📊 核心屬性", value=stats_str, inline=False)
-        embed.set_footer(text="提示：使用 /dnd_session start 可開啟本頻道的自然打字對話模式！")
+        embed.set_footer(text="提示：使用 /dnd session start 可開啟本頻道的自然打字對話模式！")
 
         await interaction.followup.send(embed=embed)
 
-    @app_commands.command(name="dnd_session", description="🏰 開啟或關閉本頻道的 D&D 自動遊戲模式")
+    @dnd_group.command(name="session", description="🏰 開啟或關閉本頻道的 D&D 自動遊戲模式")
     @app_commands.choices(
         action=[
             app_commands.Choice(name="▶️ 開啟 (本頻道打字自動視為 D&D 行動)", value="start"),
@@ -337,6 +341,9 @@ class DndCog(commands.Cog):
         """Toggle D&D session mode for channel."""
         world = load_world_state()
         cid = interaction.channel_id
+        if cid is None:
+            await interaction.response.send_message("❌ 無法取得當前頻道 ID！", ephemeral=True)
+            return
 
         if action.value == "start":
             if cid not in world.active_channels:
@@ -357,7 +364,7 @@ class DndCog(commands.Cog):
                 ephemeral=False,
             )
 
-    @app_commands.command(name="dnd_action", description="📜 執行冒險行動（向 DM 提出動作描述）")
+    @dnd_group.command(name="action", description="📜 執行冒險行動（向 DM 提出動作描述）")
     async def dnd_action(self, interaction: discord.Interaction, action_text: str) -> None:
         """Perform action in D&D world."""
         await interaction.response.defer(ephemeral=False)
@@ -366,7 +373,7 @@ class DndCog(commands.Cog):
         characters = load_characters()
         char = characters.get(uid)
 
-        brain: BotBrain | None = self.bot.get_cog("BotBrain")
+        brain: Any = self.bot.get_cog("BotBrain")
         if not brain:
             await interaction.followup.send("⚠️ 系統錯誤：無法連接 BotBrain 大腦伺服器。")
             return
@@ -401,16 +408,16 @@ class DndCog(commands.Cog):
             await interaction.followup.send(embed=embed, view=story_view)
 
         task = InferenceTask(
-            priority=getattr(settings, "PRIORITY_TAG_RESPONSE", 1),
+            priority=config.DEFAULT_PRIORITY,
             system_prompt=sys_prompt,
             user_prompt=user_prompt,
             callback=_on_action_reply,
-            model=settings.PRIMARY_MODEL,
+            model=config.DEFAULT_MODEL or getattr(settings, "PRIMARY_MODEL", "lms:gemma-4"),
             task_id=f"dnd-action-{uid}-{int(interaction.created_at.timestamp())}",
         )
         await brain.enqueue_task(task)
 
-    @app_commands.command(name="dnd_roll", description="🎲 進行 D&D 擲骰判定 (支援 d20, d6, 優勢/劣勢)")
+    @dnd_group.command(name="roll", description="🎲 進行 D&D 擲骰判定 (支援 d20, d6, 優勢/劣勢)")
     @app_commands.choices(
         mode=[
             app_commands.Choice(name="一般擲骰", value="normal"),
@@ -458,7 +465,7 @@ class DndCog(commands.Cog):
         )
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="dnd_status", description="📊 查看你的角色卡狀態")
+    @dnd_group.command(name="status", description="📊 查看你的角色卡狀態")
     async def dnd_status(self, interaction: discord.Interaction) -> None:
         """View character status."""
         uid = interaction.user.id
@@ -466,7 +473,7 @@ class DndCog(commands.Cog):
         char = characters.get(uid)
 
         if not char:
-            await interaction.response.send_message("❌ 你還沒有創建角色！請先使用 `/dnd_join` 創角。", ephemeral=True)
+            await interaction.response.send_message("❌ 你還沒有創建角色！請先使用 `/dnd join` 創角。", ephemeral=True)
             return
 
         world = load_world_state()
@@ -495,7 +502,7 @@ class DndCog(commands.Cog):
 
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="dnd_inventory", description="🎒 查看背包內的裝備與物品")
+    @dnd_group.command(name="inventory", description="🎒 查看背包內的裝備與物品")
     async def dnd_inventory(self, interaction: discord.Interaction) -> None:
         """View character inventory."""
         uid = interaction.user.id
@@ -503,7 +510,7 @@ class DndCog(commands.Cog):
         char = characters.get(uid)
 
         if not char:
-            await interaction.response.send_message("❌ 你還沒有創建角色！請使用 `/dnd_join` 創角。", ephemeral=True)
+            await interaction.response.send_message("❌ 你還沒有創建角色！請使用 `/dnd join` 創角。", ephemeral=True)
             return
 
         embed = discord.Embed(
@@ -523,7 +530,7 @@ class DndCog(commands.Cog):
         embed.set_footer(text=f"金幣: {char.inventory.gold} | 銀幣: {char.inventory.silver} | 銅幣: {char.inventory.copper}")
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="dnd_world", description="🌍 查看世界時間與勢力狀態")
+    @dnd_group.command(name="world", description="🌍 查看世界時間與勢力狀態")
     async def dnd_world(self, interaction: discord.Interaction) -> None:
         """View global D&D world state."""
         setting = load_world_setting()

@@ -33,11 +33,11 @@ logger = logging.getLogger(__name__)
 # 動態提醒文案 Prompt（Task 4）
 # ---------------------------------------------------------------------------
 _NOTIFICATION_SYSTEM_PROMPT = (
-    "妊是橘雪莉，15歲的可愛名偵探。現在有一個排程任務到期了，請用妳的語氣生成一句短短的「提醒呼嗚語」（不超過 20 字）。"
+    "妳是橘雪莉，15歲的可愛名偵探。現在有一個排程任務到期了，請用妳的語氣生成一句短短的「提醒呼喚語」（不超過 20 字）。"
     "《需要遵守的規則》："
-    "1. 不要包含任何人名、不要重複提醒內容（下方會已自動顏示）。"
-    "2. 只輸出一句呼嗚語，不要其他文字。"
-    "例子：「彈彈！時間到囉！」「哼！名偵探特地來提醒你喔～」"
+    "1. 不要包含任何人名、不要重複提醒內容（下方會自動顯示）。"
+    "2. 只輸出一句呼喚語，不要其他文字。"
+    "例子：「叮咚！時間到囉！」「哼！名偵探特地來提醒你喔～」"
 )
 
 
@@ -154,7 +154,7 @@ class ScheduleWorker(commands.Cog):
           2. callback 中用 Discord API 發送至 channel_id。
           3. 透過 asyncio.Future 等待結果。
         """
-        brain: BotBrain | None = self.bot.get_cog("BotBrain")
+        brain: Any = self.bot.get_cog("BotBrain")
         if not brain:
             logger.error("ScheduleWorker: BotBrain 不可用，無法觸發提醒 task=%s", task.get("task_id"))
             return

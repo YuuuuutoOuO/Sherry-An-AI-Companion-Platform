@@ -37,7 +37,7 @@ class DiscordChannelHandler(logging.Handler):
 class HealthMonitor(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        self._discord_handler = None
+        self._discord_handler: DiscordChannelHandler | None = None
 
     async def cog_load(self) -> None:
         level_map = {
@@ -80,7 +80,7 @@ class HealthMonitor(commands.Cog):
         if settings.HEALTH_ALERT_CHANNEL_ID == 0:
             return
         channel = self.bot.get_channel(settings.HEALTH_ALERT_CHANNEL_ID)
-        if channel:
+        if channel and hasattr(channel, "send"):
             await channel.send(f"⚠️ **[系統警報]** {message}")
         else:
             logger.warning(f"HealthMonitor: 無法取得警告頻道 {settings.HEALTH_ALERT_CHANNEL_ID}")

@@ -61,16 +61,19 @@ class GeminiImageClient:
             ),
         )
 
-        for candidate in response.candidates:
-            for part in candidate.content.parts:
-                if part.inline_data and part.inline_data.data:
-                    # part.inline_data.data 是 bytes 物件
-                    data = part.inline_data.data
-                    if isinstance(data, bytes):
-                        return data
-                    # 若為 BufferedReader / IO 物件則讀取
-                    if hasattr(data, "read"):
-                        return data.read()
+        if response.candidates:
+            for candidate in response.candidates:
+                if candidate.content and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        if part.inline_data and part.inline_data.data:
+                            # part.inline_data.data 是 bytes 物件
+                            data = part.inline_data.data
+                            if isinstance(data, bytes):
+                                return data
+                            # 若為 BufferedReader / IO 物件則讀取
+                            if hasattr(data, "read"):
+                                read_data = data.read()
+                                return read_data if isinstance(read_data, bytes) else bytes(read_data)
 
         logger.error("GeminiImageClient: API 回傳中找不到有效的圖片資料")
         return None

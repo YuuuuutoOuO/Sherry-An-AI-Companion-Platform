@@ -157,7 +157,10 @@ def log_error(
     _write_line(_ERROR_LOG_PATH, entry)
 
 
-def make_timer() -> "callable[[], int]":
+from typing import Any, Callable
+
+
+def make_timer() -> Callable[[], int]:
     """回傳一個 callable，呼叫時回傳距離建立時的毫秒數。
 
     使用方式：

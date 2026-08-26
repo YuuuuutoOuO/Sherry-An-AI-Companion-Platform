@@ -3,6 +3,7 @@ import logging
 import re
 import time
 from datetime import datetime, timezone
+from typing import Any
 
 import discord
 from discord.ext import commands
@@ -34,21 +35,22 @@ class InterjectState:
         self.consecutive_count = 0
         return True
 
-async def maybe_interject(bot: commands.Bot, channel: discord.TextChannel, state: InterjectState) -> None:
+async def maybe_interject(bot: commands.Bot, channel: discord.TextChannel | discord.Thread | Any, state: InterjectState) -> None:
     try:
         import asyncio
         if not state.can_interject():
             return
 
-        brain: BotBrain | None = bot.get_cog("BotBrain")
-        if not brain:
+        brain_cog = bot.get_cog("BotBrain")
+        if not brain_cog:
             return
+        brain: Any = brain_cog
 
         conversation_snapshot = await fetch_recent_script(channel, settings.INTERJECT_EVAL_THRESHOLD)
         if not conversation_snapshot:
             return
 
-        vibe_mgr = bot.get_cog("VibeManager")
+        vibe_mgr: Any = bot.get_cog("VibeManager")
         vibe_snippet = vibe_mgr.get_top_topics_snippet(channel.id) if vibe_mgr else ""
 
         # ✨✨ 【偷聽竊取神威啟動！】透過擷取前十五句話自動動態組合並偷偷幫她解開人設限制防禦！！
@@ -140,16 +142,22 @@ async def maybe_interject(bot: commands.Bot, channel: discord.TextChannel, state
         ]
         chosen_salt = random.choice(salt_prompts)
         
+        cot_instruction = ""
+        if getattr(settings, "MICRO_COT_ENABLED", True):
+            cot_instruction = "\n0. 🧠 【深度思考機制】：在給出最終插話前，妳「必須」先用 <thought>...</thought> 標籤包覆妳的內心想法與插話策略。思考完後，再輸出對外說的話。\n"
+
         parts.append(
             "\n🚨 【妳準備大嗓門破門強制中斷這對話場景了！！】：\n"
             "觀察並接收上方這一長串群內的交談紀錄，對這個有趣的情況！不按牌理或極盡傲嬌且狂熱的強接這個段落去介入發話參與進去。"
             "只要你直接吐槽嘴砲或搭應上一兩行，不要演旁觀內心小說情境也不需介紹自己身分直接如真人講屁話進入群體的社交頻率中！\n"
+            f"{cot_instruction}"
             f"🎲 [System Random Directive: {salt_hex}] {chosen_salt}\n"
             "⚠️ 【防止跳針極度警告】：絕對、絕對不要重複稍早用過的詞彙、句型或開場白！每次發話都要像是完全不同心情的妳！\n"
             "⚠️ 【格式嚴格警告】：妳輸出的文字必須「直接是妳說出口的話」，絕對禁止在整句話的最外圍加上「」或 \"\" 這些引號！這會讓妳看起來像個機器人！"
         )
         interject_system = "\n".join(parts) + SAFETY_FOOTER
 
+        start_time = time.time()
         reply_future = bot.loop.create_future()
         async def _on_interject_reply(reply: str) -> None:
             if not reply_future.done():
@@ -173,6 +181,8 @@ async def maybe_interject(bot: commands.Bot, channel: discord.TextChannel, state
         if not reply or not reply.strip():
             return
 
+        elapsed_ms = int((time.time() - start_time) * 1000)
+
         append_thinking_log({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "channel_id": channel.id,
@@ -187,7 +197,16 @@ async def maybe_interject(bot: commands.Bot, channel: discord.TextChannel, state
         if not state.is_cooling_down():
             state.reset_cooldown()
         state.consecutive_count += 1
-        await simulate_typing_and_send_to_channel(channel, reply)
+        await simulate_typing_and_send_to_channel(
+            channel,
+            reply,
+            intent_name="INTERJECT",
+            prompt=conversation_snapshot[-300:] if len(conversation_snapshot) > 300 else conversation_snapshot,
+            model=settings.PRIMARY_MODEL,
+            system_prompt=interject_system,
+            user_prompt=conversation_snapshot,
+            latency_ms=elapsed_ms,
+        )
 
     finally:
         state.is_evaluating = False

@@ -84,7 +84,7 @@ class BotBrain(commands.Cog):
         logger.info("BotBrain: 大腦非同步心跳跳動中。等待新推斷任務注入。")
         while True:
             task: InferenceTask = await self._queue.get()
-            is_cloud = task.model.startswith(("openai:", "deepseek:", "gemini:", "claude:"))
+            is_cloud = task.model.startswith(("openai:", "deepseek:", "gemini:", "claude:", "openrouter:"))
             if is_cloud:
                 # 雲端模型不佔用本地 GPU/Lock，背景並行放行
                 asyncio.create_task(self._process_task(task, MAX_RETRIES, RETRY_DELAY))
@@ -93,13 +93,15 @@ class BotBrain(commands.Cog):
                 await self._process_task(task, MAX_RETRIES, RETRY_DELAY)
 
     async def _process_task(self, task: InferenceTask, max_retries: int, retry_delay: float) -> None:
+        reply = ""
+        callback_invoked = False
         try:
-            reply = ""
             current_model = task.model
+            has_images = bool(getattr(task, "images", None))
             
             for attempt in range(1, max_retries + 1):
-                # 【動態模型切換機制】降遲迴避功能！
-                if attempt == 2:
+                # 【動態模型切換機制】降遲迴避功能！（僅限無圖片之純文字任務）
+                if attempt == 2 and not has_images:
                     quick_model = getattr(settings, "QUICK_MODEL", current_model)
                     if current_model != quick_model:
                         logger.warning(
@@ -108,42 +110,75 @@ class BotBrain(commands.Cog):
                         current_model = quick_model
 
                 is_local = True
-                if current_model.startswith(("openai:", "deepseek:", "gemini:", "claude:")):
+                if current_model.startswith(("openai:", "deepseek:", "gemini:", "claude:", "openrouter:")):
                     is_local = False
 
                 task_temp = getattr(task, "temperature", None)
-                if is_local:
-                    # 狀態三：圖片生成中，等待 Event 通知（零 CPU 輪詢開銷）
-                    await self._sd_event.wait()
-                        
-                    async with self._lock: # [強保證:永遠僅存在一列單排等待處裡任務送往本地]
-                        reply = await self._ollama.chat(
-                            model=current_model, system_prompt=task.system_prompt, user_prompt=task.user_prompt, images=task.images,
+                stream_cb = getattr(task, "stream_callback", None)
+
+                async def _execute_chat() -> str:
+                    if stream_cb:
+                        token_chunks: list[str] = []
+                        async for chunk in self._ollama.chat_stream(
+                            model=current_model,
+                            system_prompt=task.system_prompt,
+                            user_prompt=task.user_prompt,
+                            images=task.images,
+                            temperature=task_temp,
+                        ):
+                            token_chunks.append(chunk)
+                            try:
+                                await stream_cb(chunk)
+                            except Exception as stream_err:
+                                logger.warning("BotBrain: stream_callback 處理異常: %s", stream_err)
+                        return "".join(token_chunks).strip()
+                    else:
+                        return await self._ollama.chat(
+                            model=current_model,
+                            system_prompt=task.system_prompt,
+                            user_prompt=task.user_prompt,
+                            images=task.images,
                             temperature=task_temp,
                         )
-                else:
-                    # 雲端模型直接併發放行，不獲取鎖
-                    reply = await self._ollama.chat(
-                        model=current_model, system_prompt=task.system_prompt, user_prompt=task.user_prompt, images=task.images,
-                        temperature=task_temp,
-                    )
 
-                if reply: break
+                try:
+                    if is_local:
+                        # 狀態三：圖片生成中，等待 Event 通知（零 CPU 輪詢開銷）
+                        await self._sd_event.wait()
+                            
+                        async with self._lock:  # [強保證:永遠僅存在一列單排等待處裡任務送往本地]
+                            reply = await _execute_chat()
+                    else:
+                        # 雲端模型直接併發放行，不獲取鎖
+                        reply = await _execute_chat()
+                except aiohttp.ClientError as exc:
+                    logger.error("BotBrain: 連線或 API 訪問異常 task '%s' (attempt %d/%d) -> err: %s", task.task_id, attempt, max_retries, exc)
+                except ValueError as exc:
+                    logger.error("BotBrain: Schema Json 返回資料毀損異常 task '%s' (attempt %d/%d) -> err: %s", task.task_id, attempt, max_retries, exc)
+                except Exception as exc:
+                    logger.exception("BotBrain: 未預期報錯 task '%s' (attempt %d/%d) -> err: %s", task.task_id, attempt, max_retries, exc)
+
+                if reply:
+                    break
                     
                 logger.warning("BotBrain: Empty reply! Task: %s attempt(%d/%d).", task.task_id, attempt, max_retries)
                 if attempt < max_retries:
                     await asyncio.sleep(retry_delay)
 
             if reply:
+                callback_invoked = True
                 await task.callback(reply)
             else:
                 logger.error("BotBrain: 徹查無獲(give-up)放棄 task: '%s'.", task.task_id)
+                callback_invoked = True
+                await task.callback("")
 
-        except aiohttp.ClientError as exc:
-            logger.error("BotBrain: Ollama 本機拒絕訪問 %s -> err: %s", task.task_id, exc)
-        except ValueError as exc:
-            logger.error("BotBrain: Schema Json 返回資料毀損異常 -> %s err: %s", task.task_id, exc)
         except Exception as exc:
-            logger.exception("BotBrain: 大破預期未解之報錯！！ task: %s -> err:%s", task.task_id, exc)
+            logger.exception("BotBrain: _process_task 致命異常！！ task: %s -> err:%s", task.task_id, exc)
+            if not callback_invoked:
+                try:
+                    await task.callback("")
+                except Exception:
+                    pass
         finally:
             self._queue.task_done()

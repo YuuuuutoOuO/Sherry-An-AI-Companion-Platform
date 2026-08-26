@@ -11,7 +11,7 @@ import logging
 import random
 from typing import Any
 
-import settings
+from mod.game_center import config
 from handlers.bot_brain.client import OllamaClient
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ class SherryGameAIService:
             "請以雪莉的個性發表一句充滿人設魅力的勝負感言！"
         )
         try:
-            model = getattr(settings, "PRIMARY_MODEL", "ollama:llama3.2")
+            model = config.DEFAULT_MODEL
             res = await self._client.chat(
                 model=model,
                 system_prompt=SHERRY_GAME_SYSTEM_PROMPT,
@@ -105,7 +105,7 @@ class SherryGameAIService:
             "雪莉發言：(雪莉向玩家說的生動對白)"
         )
         try:
-            model = getattr(settings, "PRIMARY_MODEL", "ollama:llama3.2")
+            model = config.DEFAULT_MODEL
             res = await self._client.chat(
                 model=model,
                 system_prompt=SHERRY_GAME_SYSTEM_PROMPT,
@@ -148,7 +148,7 @@ class SherryGameAIService:
             "請以雪莉名偵探的身份，給予玩家一句鼓勵、直覺觀察或幽默地雷提示！"
         )
         try:
-            model = getattr(settings, "PRIMARY_MODEL", "ollama:llama3.2")
+            model = config.DEFAULT_MODEL
             res = await self._client.chat(
                 model=model,
                 system_prompt=SHERRY_GAME_SYSTEM_PROMPT,
@@ -176,7 +176,7 @@ class SherryGameAIService:
             "請判斷玩家的問題，並用雪莉傲嬌名偵探的語氣回答（明確指出是/否/無關，並加上一句雪莉式點評）！"
         )
         try:
-            model = getattr(settings, "PRIMARY_MODEL", "ollama:llama3.2")
+            model = config.DEFAULT_MODEL
             res = await self._client.chat(
                 model=model,
                 system_prompt=SHERRY_GAME_SYSTEM_PROMPT,
@@ -202,7 +202,7 @@ class SherryGameAIService:
             f"若是第 {q_count} 題，請用雪莉名偵探口吻提出下一個能縮小範圍的好問題，或者若很有把握直接猜測答案！"
         )
         try:
-            model = getattr(settings, "PRIMARY_MODEL", "ollama:llama3.2")
+            model = config.DEFAULT_MODEL
             res = await self._client.chat(
                 model=model,
                 system_prompt=SHERRY_GAME_SYSTEM_PROMPT,
@@ -228,7 +228,7 @@ class SherryGameAIService:
             "請以雪莉夥伴的視角描繪調查發現與搞笑/緊張氛圍！"
         )
         try:
-            model = getattr(settings, "PRIMARY_MODEL", "ollama:llama3.2")
+            model = config.DEFAULT_MODEL
             res = await self._client.chat(
                 model=model,
                 system_prompt=SHERRY_GAME_SYSTEM_PROMPT,

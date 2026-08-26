@@ -30,7 +30,6 @@ class SpeechToText:
                 snapshot_download(
                     repo_id=settings.VOICE_STT_REPO_ID,
                     local_dir=model_dir,
-                    local_dir_use_symlinks=False
                 )
                 logger.info("Download complete.")
                 

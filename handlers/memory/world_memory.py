@@ -117,15 +117,29 @@ def read_recent_events(days: int = 1) -> list[dict]:
     return events
 
 
-# ---------------------------------------------------------------------------
-# 世界記憶摘要（壓縮後的持久化版本）
-# ---------------------------------------------------------------------------
+import time
+
+_WORLD_MEMORY_CACHE_TTL: float = 60.0
+_WORLD_MEMORY_SNIPPET_CACHE: dict[tuple[int, int], tuple[float, str]] = {}
+
+
+def clear_world_memory_cache() -> None:
+    """清除世界記憶的記憶體快取。"""
+    _WORLD_MEMORY_SNIPPET_CACHE.clear()
+
 
 def get_world_memory_snippet(days: int = 1, min_importance: int = 3) -> str:
     """
-    取得可注入 LLM prompt 的世界近期事件摘要文字。
+    取得可注入 LLM prompt 的世界近期事件摘要文字（具備 60 秒 TTL 記憶體快取）。
     優先讀取壓縮檔 world_memory.json，若不存在則從 raw log 即時產生。
     """
+    now = time.time()
+    cache_key = (days, min_importance)
+    if cache_key in _WORLD_MEMORY_SNIPPET_CACHE:
+        cached_ts, cached_snippet = _WORLD_MEMORY_SNIPPET_CACHE[cache_key]
+        if now - cached_ts < _WORLD_MEMORY_CACHE_TTL:
+            return cached_snippet
+
     events = _load_compressed_memory(days, min_importance)
     if not events:
         events = [
@@ -134,6 +148,7 @@ def get_world_memory_snippet(days: int = 1, min_importance: int = 3) -> str:
         ]
 
     if not events:
+        _WORLD_MEMORY_SNIPPET_CACHE[cache_key] = (now, "")
         return ""
 
     lines = ["🌍【世界近期大事】"]
@@ -142,7 +157,9 @@ def get_world_memory_snippet(days: int = 1, min_importance: int = 3) -> str:
         loc = f" [{e['location']}]" if e.get("location") else ""
         lines.append(f"- {ts}{loc} {e['summary']}")
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    _WORLD_MEMORY_SNIPPET_CACHE[cache_key] = (now, result)
+    return result
 
 
 def _load_compressed_memory(days: int, min_importance: int) -> list[dict]:
@@ -212,6 +229,7 @@ def compress_daily_events(date_str: str) -> int:
         with tmp.open("w", encoding="utf-8") as f:
             json.dump(existing, f, ensure_ascii=False, indent=2)
         tmp.replace(_WORLD_MEMORY_PATH)
+        clear_world_memory_cache()
     except Exception as exc:
         logger.error("world_memory: 寫入壓縮記憶失敗: %s", exc)
 
