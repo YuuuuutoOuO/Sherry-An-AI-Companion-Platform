@@ -16,13 +16,15 @@ import logging
 import re
 import time
 from datetime import datetime, timezone, timedelta
+from typing import Any
 
 import discord
 from discord.ext import commands
 
 import settings
 from handlers.bot_brain import BotBrain, InferenceTask
-from handlers.social.tool_base import BaseTool
+from handlers.social.contracts import ToolCategory, ToolResult
+from handlers.social.tool_base import BaseTool, ToolResponseMode
 from handlers import schedule_storage
 
 logger = logging.getLogger(__name__)
@@ -140,7 +142,7 @@ async def _resolve_task_id_prefix(user_id: str, prefix: str) -> str | None:
     tasks = await schedule_storage.load_tasks_by_user(user_id)
     matches = [t for t in tasks if t.get("task_id", "").startswith(prefix)]
     if len(matches) == 1:
-        return matches[0]["task_id"]
+        return str(matches[0]["task_id"])
     if len(matches) > 1:
         return "MULTIPLE"
     return None
@@ -157,7 +159,7 @@ def _format_task_list_embed(tasks: list[dict], user_display_name: str) -> discor
     )
 
     if not tasks:
-        embed.description += "\n\n*沒有任何排程喔～*"
+        embed.description = (embed.description or "") + "\n\n*沒有任何排程喔～*"
         return embed
 
     for i, t in enumerate(tasks, 1):
@@ -265,11 +267,15 @@ class ScheduleTool(BaseTool):
         vibe_snippet: str,
         full_context: str,
         **kwargs: object,
-    ) -> None:
-        brain: BotBrain | None = bot.get_cog("BotBrain")
-        if not brain:
-            await message.reply("名偵探的大腦暫時當機了…排程功能無法使用！", mention_author=True)
-            return
+    ) -> ToolResult:
+        silent = bool(kwargs.get("silent", False))
+        brain_cog = bot.get_cog("BotBrain")
+        if not brain_cog:
+            msg = "名偵探的大腦暫時當機了…排程功能無法使用！"
+            if not silent:
+                await message.reply(msg, mention_author=True)
+            return ToolResult.error(msg, is_direct_rendered=not silent)
+        brain: Any = brain_cog
 
         user_id = str(message.author.id)
         channel_id = str(message.channel.id)
@@ -280,40 +286,37 @@ class ScheduleTool(BaseTool):
             embed = _format_task_list_embed(tasks, message.author.display_name)
             await message.reply(embed=embed, mention_author=True)
             logger.info("schedule_tool: listed %d tasks for user=%s", len(tasks), user_id)
-            return
+            return ToolResult.success("已在頻道列出排程清單。", is_direct_rendered=True)
 
         # ── [NEW] 子命令：刪除排程 ──
         task_id_prefix = _detect_delete_intent(user_query)
         if task_id_prefix:
             resolved = await _resolve_task_id_prefix(user_id, task_id_prefix)
             if resolved is None:
-                await message.reply(
+                msg = (
                     f"嗯…名偵探翻遍了排程手帳，找不到編號 `{task_id_prefix}` 的任務耶！\n"
-                    f"用 `/schedule list` 可以查看你目前所有的排程喔～",
-                    mention_author=True,
+                    f"用 `/schedule list` 可以查看你目前所有的排程喔～"
                 )
-                return
+                await message.reply(msg, mention_author=True)
+                return ToolResult.error(msg, is_direct_rendered=True)
             if resolved == "MULTIPLE":
-                await message.reply(
+                msg = (
                     f"嗚哇～編號 `{task_id_prefix}` 匹配到多個排程！\n"
-                    f"請用更長的編號來指定要刪除哪一個～",
-                    mention_author=True,
+                    f"請用更長的編號來指定要刪除哪一個～"
                 )
-                return
+                await message.reply(msg, mention_author=True)
+                return ToolResult.error(msg, is_direct_rendered=True)
             # 單一匹配 → 執行刪除
             success = await schedule_storage.remove_task(resolved)
             if success:
-                await message.reply(
-                    f"碰！💥 名偵探已經把排程 `{resolved[:8]}` 給消滅了！",
-                    mention_author=True,
-                )
+                msg = f"碰！💥 名偵探已經把排程 `{resolved[:8]}` 給消滅了！"
+                await message.reply(msg, mention_author=True)
                 logger.info("schedule_tool: deleted task=%s by user=%s", resolved, user_id)
+                return ToolResult.success(msg, is_direct_rendered=True)
             else:
-                await message.reply(
-                    f"奇怪…明明找到了 `{resolved[:8]}` 但在刪除時消失了？再試一次看看？",
-                    mention_author=True,
-                )
-            return
+                msg = f"奇怪…明明找到了 `{resolved[:8]}` 但在刪除時消失了？再試一次看看？"
+                await message.reply(msg, mention_author=True)
+                return ToolResult.error(msg, is_direct_rendered=True)
 
         # ── Phase 1: 正規表達式快速解析 ──
         regex_result = _parse_by_regex(user_query)
@@ -328,15 +331,19 @@ class ScheduleTool(BaseTool):
                 trigger_time=trigger_ts,
             )
             trigger_time_str = datetime.fromtimestamp(trigger_ts).strftime("%Y-%m-%d %H:%M:%S")
-            await message.reply(
+            msg = (
                 f"哼哼～名偵探收到啦！已經幫你設定好提醒：\n"
                 f"📌 **{content}**\n"
                 f"⏰ 時間：{trigger_time_str}\n"
-                f"任務編號：`{task['task_id'][:8]}`",
-                mention_author=True,
+                f"任務編號：`{task['task_id'][:8]}`"
             )
+            if not silent:
+                await message.reply(msg, mention_author=True)
             logger.info("schedule_tool: regex parsed task=%s", task["task_id"])
-            return
+            return ToolResult.success(
+                f"已設定提醒：{content}（{trigger_time_str}）",
+                is_direct_rendered=not silent,
+            )
 
         # ── Phase 2: LLM 解析（支援單一或多排程陣列）──
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -380,20 +387,22 @@ class ScheduleTool(BaseTool):
         try:
             parsed = await asyncio.wait_for(result_future, timeout=settings.SCHEDULE_PARSE_TIMEOUT)
         except asyncio.TimeoutError:
-            await message.reply(
-                "嗚…名偵探的腦袋轉不過來了，解析時間失敗！請用 `/schedule 3min 吃泡麵` 這種格式再試一次～",
-                mention_author=True,
-            )
-            return
+            if not silent:
+                await message.reply(
+                    "嗚…名偵探的腦袋轉不過來了，解析時間失敗！請用 `/schedule 3min 吃泡麵` 這種格式再試一次～",
+                    mention_author=True,
+                )
+            return ToolResult.error("解析時間失敗", is_direct_rendered=not silent)
 
         if parsed is None:
-            await message.reply(
-                "嗯…名偵探聽不太懂你想什麼時候提醒耶！\n"
-                "試試看這樣說：`@雪莉 提醒我3分鐘後吃泡麵`\n"
-                "或是：`/schedule 30min 買股票`",
-                mention_author=True,
-            )
-            return
+            if not silent:
+                await message.reply(
+                    "嗯…名偵探聽不太懂你想什麼時候提醒耶！\n"
+                    "試試看這樣說：`@雪莉 提醒我3分鐘後吃泡麵`\n"
+                    "或是：`/schedule 30min 買股票`",
+                    mention_author=True,
+                )
+            return ToolResult.error("無法理解提醒時間", is_direct_rendered=not silent)
 
         # 統一正規化為 list
         items = parsed if isinstance(parsed, list) else [parsed]
@@ -406,8 +415,8 @@ class ScheduleTool(BaseTool):
             schedule_type = item.get("type", "once")
             content = item.get("content", user_query)
 
-            trigger_ts: int | None = None
-            cron_expr: str | None = None
+            item_trigger_ts: int | None = None
+            item_cron_expr: str | None = None
 
             if parsed_time_str:
                 try:
@@ -415,15 +424,15 @@ class ScheduleTool(BaseTool):
                         try:
                             dt = datetime.strptime(parsed_time_str, fmt)
                             dt = dt.replace(tzinfo=timezone(timedelta(hours=8)))
-                            trigger_ts = int(dt.timestamp())
+                            item_trigger_ts = int(dt.timestamp())
                             break
                         except ValueError:
                             continue
                 except Exception:
                     logger.error("schedule_tool: 無法解析 LLM 回傳的 parsed_time: %s", parsed_time_str)
 
-            if schedule_type == "once" and trigger_ts is None:
-                trigger_ts = int(time.time()) + 60
+            if schedule_type == "once" and item_trigger_ts is None:
+                item_trigger_ts = int(time.time()) + 60
 
             task_entry = await schedule_storage.add_task(
                 user_id=user_id,
@@ -431,37 +440,43 @@ class ScheduleTool(BaseTool):
                 schedule_type=schedule_type if schedule_type in ("once", "cron") else "once",
                 content=content,
                 display_name=message.author.display_name,
-                trigger_time=trigger_ts,
-                cron_expr=cron_expr,
+                trigger_time=item_trigger_ts,
+                cron_expr=item_cron_expr,
             )
-            added_results.append((task_entry, trigger_ts, content))
+            added_results.append((task_entry, item_trigger_ts, content))
 
         if not added_results:
-            await message.reply("嗯…名偵探沒有成功解析出任何有效排程耶！", mention_author=True)
-            return
+            msg = "嗯…名偵探沒有成功解析出任何有效排程耶！"
+            if not silent:
+                await message.reply(msg, mention_author=True)
+            return ToolResult.no_data(msg, is_direct_rendered=not silent)
 
         if len(added_results) == 1:
-            task_entry, trigger_ts, content = added_results[0]
-            if trigger_ts:
-                t_str = datetime.fromtimestamp(trigger_ts).strftime("%Y-%m-%d %H:%M:%S")
-                await message.reply(
-                    f"哼哼～名偵探收到啦！已經幫你設定好提醒：\n"
-                    f"📌 **{content}**\n"
-                    f"⏰ 時間：{t_str}\n"
-                    f"任務編號：`{task_entry['task_id'][:8]}`",
-                    mention_author=True,
-                )
-            else:
-                await message.reply(
-                    f"收到～排程已記錄！\n"
-                    f"📌 **{content}**\n"
-                    f"任務編號：`{task_entry['task_id'][:8]}`",
-                    mention_author=True,
-                )
+            task_entry, res_ts, content = added_results[0]
+            t_str = datetime.fromtimestamp(res_ts).strftime("%Y-%m-%d %H:%M:%S") if res_ts else "定時"
+            if not silent:
+                if res_ts:
+                    await message.reply(
+                        f"哼哼～名偵探收到啦！已經幫你設定好提醒：\n"
+                        f"📌 **{content}**\n"
+                        f"⏰ 時間：{t_str}\n"
+                        f"任務編號：`{task_entry['task_id'][:8]}`",
+                        mention_author=True,
+                    )
+                else:
+                    await message.reply(
+                        f"收到～排程已記錄！\n"
+                        f"📌 **{content}**\n"
+                        f"任務編號：`{task_entry['task_id'][:8]}`",
+                        mention_author=True,
+                    )
+            return ToolResult.success(f"已設定提醒：{content}（{t_str}）", is_direct_rendered=not silent)
         else:
             lines = [f"哼哼～名偵探一次幫你設定好 **{len(added_results)}** 個提醒囉！ ✨"]
-            for task_entry, trigger_ts, content in added_results:
-                t_str = datetime.fromtimestamp(trigger_ts).strftime("%H:%M:%S") if trigger_ts else "定時"
+            for task_entry, res_ts, content in added_results:
+                t_str = datetime.fromtimestamp(res_ts).strftime("%H:%M:%S") if res_ts else "定時"
                 lines.append(f"• 📌 **{content}** (`{t_str}`) — 編號: `{task_entry['task_id'][:8]}`")
             lines.append("\n可以在 Web UI 或輸入 `/schedule list` 查看全部任務喔！")
-            await message.reply("\n".join(lines), mention_author=True)
+            if not silent:
+                await message.reply("\n".join(lines), mention_author=True)
+            return ToolResult.success(f"已設定 {len(added_results)} 個提醒", is_direct_rendered=not silent)

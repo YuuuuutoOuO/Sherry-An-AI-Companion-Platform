@@ -24,18 +24,19 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import discord
 from discord.ext import commands
 
 import settings
 from handlers.bot_brain import BotBrain, InferenceTask
-from handlers.social.persona import build_dynamic_persona
+from handlers.social.contracts import ToolCategory, ToolResult
 from handlers.social.memory_builder import build_user_memory_block
-from handlers.social.utils import simulate_typing_and_send, remove_hourglass_reaction
-from handlers.social.tool_base import BaseTool, ToolResponseMode
 from handlers.social.observability import log_event
+from handlers.social.persona import build_dynamic_persona
+from handlers.social.tool_base import BaseTool, ToolResponseMode
+from handlers.social.utils import remove_hourglass_reaction, simulate_typing_and_send
 
 if TYPE_CHECKING:
     pass
@@ -152,6 +153,10 @@ _PARALLEL_PLANNER_SYSTEM_TEMPLATE = """[SYSTEM: PARALLEL TASK DISPATCH & CHAT SU
 案例 6（純日常對話 / 打招呼）：
 使用者：「今天天氣真好，妳在做什麼呢？」
 {{"thought": "一般日常社交閒聊，無需任何外部工具，直接交由性格模型回覆。", "tasks": [], "needs_persona_reply": true}}
+
+案例 7（YouTube 網址點歌）：
+使用者：「https://www.youtube.com/watch?v=dQw4w9WgXcQ」
+{{"thought": "使用者提供 YouTube 網址，為音樂播放請求，發動 MUSIC 工具。自帶 UI 播放，抑制多餘對話。", "tasks": [{{"tool": "MUSIC", "input": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}}], "needs_persona_reply": false}}
 """
 
 _USER_MESSAGE_TEMPLATE = "使用者（{author}）說：「{content}」"
@@ -299,7 +304,7 @@ class ParallelAgentTool(BaseTool):
                 future.set_result(reply)
 
         target_model = getattr(settings, "PARALLEL_PLANNER_MODEL", settings.CLASSIFIER_MODEL)
-        step_timeout = getattr(settings, "PARALLEL_STEP_TIMEOUT", 30.0)
+        step_timeout = getattr(settings, "PARALLEL_STEP_TIMEOUT", 60.0)
 
         task = InferenceTask(
             priority=settings.PRIORITY_TAG_RESPONSE,
@@ -325,6 +330,7 @@ class ParallelAgentTool(BaseTool):
         message: discord.Message,
         vibe_snippet: str,
         full_context: str,
+        images: list[str] | None = None,
     ) -> tuple[str, ToolResponseMode, str]:
         """非同步執行單一工具任務。
 
@@ -336,7 +342,7 @@ class ParallelAgentTool(BaseTool):
         if not tool:
             err_msg = f"找不到工具 [{task.tool}]"
             logger.warning("ParallelAgent: %s", err_msg)
-            return canonical_name, ToolResponseMode.DATA_ONLY, err_msg
+            return canonical_name, ToolCategory.DATA_PROVIDER, err_msg
 
         logger.info(
             "⚡ [Parallel Tool 發動] 工具: [%s] | 模式: %s | 參數: '%s'",
@@ -348,13 +354,21 @@ class ParallelAgentTool(BaseTool):
             result = await tool.execute(
                 bot, message, task.input, vibe_snippet, full_context,
                 silent=True,
+                images=images,
             )
-            obs = str(result) if result is not None else f"工具 {canonical_name} 執行完畢。"
+            if isinstance(result, ToolResult):
+                is_direct = result.is_direct_rendered
+                obs = result.summary_text
+                category = ToolCategory.DIRECT_UI if is_direct else ToolCategory.DATA_PROVIDER
+            else:
+                category = tool.response_mode
+                obs = str(result) if result is not None else f"工具 {canonical_name} 執行完畢。"
+
             obs_clipped = obs[:getattr(settings, "REACT_MAX_OBSERVATION_LENGTH", 1200)]
-            return canonical_name, tool.response_mode, obs_clipped
+            return canonical_name, category, obs_clipped
         except Exception as exc:
             logger.error("ParallelAgent: 工具 %s 執行失敗: %s", canonical_name, exc, exc_info=True)
-            return canonical_name, tool.response_mode, f"工具 {canonical_name} 執行失敗: {exc}"
+            return canonical_name, ToolCategory.DATA_PROVIDER, f"工具 {canonical_name} 執行失敗: {exc}"
 
     def _should_early_terminate(
         self,
@@ -376,8 +390,8 @@ class ParallelAgentTool(BaseTool):
         if not executed_results:
             return False
 
-        # 若有任何一個工具屬於 DATA_ONLY，必須由 AI 轉述數據，不能終止
-        has_data_only_tool = any(mode == ToolResponseMode.DATA_ONLY for _, mode, _ in executed_results)
+        # 若有任何一個工具屬於 DATA_PROVIDER（非 DIRECT_UI），必須由 AI 轉述數據，不能終止
+        has_data_only_tool = any(mode != ToolCategory.DIRECT_UI for _, mode, _ in executed_results)
         if has_data_only_tool:
             return False
 
@@ -406,6 +420,7 @@ class ParallelAgentTool(BaseTool):
         observations: list[tuple[str, str]],
         vibe_snippet: str = "",
         full_context: str = "",
+        images: list[str] | None = None,
     ) -> tuple[str, str, str, str]:
         """使用 PRIMARY_MODEL 合成最終給使用者的對話文本。"""
         recent_text = (full_context[-1500:] + "\n" + user_query) if full_context else user_query
@@ -418,7 +433,11 @@ class ParallelAgentTool(BaseTool):
             f"{vibe_snippet}\n\n"
         ) if vibe_snippet else ""
 
-        author_note = f"\n{tail_lore}\n" if tail_lore else ""
+        vision_self_lore = (
+            "\n【多模態視覺自我感知提示】：若使用者傳入的圖片中出現淺藍/藍色髮色、丸子頭/甜甜圈髮髻、白鳥羽毛帽、福爾摩斯偵探斗篷/披風等特徵的少女，這就是妳自己（橘雪莉）！請以名偵探看到自己自拍或同人圖的視角自然回應。\n"
+        ) if images else ""
+
+        author_note = f"\n{tail_lore}\n{vision_self_lore}" if (tail_lore or vision_self_lore) else ""
 
         length_rule = (
             "2. 【豐富生動的對話】：請像個話多、熱情又愛互動的 15 歲台灣女高中生一樣聊天！"
@@ -464,6 +483,7 @@ class ParallelAgentTool(BaseTool):
             callback=_on_reply,
             model=settings.PRIMARY_MODEL,
             task_id=f"parallel-final-{int(time.time()*1000)}",
+            images=images,
         ))
 
         try:
@@ -494,13 +514,16 @@ class ParallelAgentTool(BaseTool):
         vibe_snippet: str,
         full_context: str,
         **kwargs: object,
-    ) -> None:
+    ) -> ToolResult | str | None:
         """Parallel Agent 主執行入口。"""
+        raw_images = kwargs.get("images")
+        images: list[str] | None = [str(x) for x in raw_images] if isinstance(raw_images, list) else None
         start_time = time.time()
-        brain: BotBrain | None = bot.get_cog("BotBrain")
-        if not brain:
+        brain_cog = bot.get_cog("BotBrain")
+        if not brain_cog:
             logger.error("ParallelAgent: BotBrain 未就緒")
-            return
+            return None
+        brain: Any = brain_cog
 
         channel_id = message.channel.id
         user_id = message.author.id
@@ -540,7 +563,7 @@ class ParallelAgentTool(BaseTool):
         executed_results: list[tuple[str, ToolResponseMode, str]] = []
         if deduped_tasks:
             coros = [
-                self._execute_single_task(t, bot, message, vibe_snippet, full_context)
+                self._execute_single_task(t, bot, message, vibe_snippet, full_context, images=images)
                 for t in deduped_tasks
             ]
             executed_results = await asyncio.gather(*coros)
@@ -574,7 +597,7 @@ class ParallelAgentTool(BaseTool):
                 latency_ms=elapsed_ms,
                 tools_invoked=invoked_tool_names,
             )
-            return
+            return None
 
         # ── 階段四：性格發言合成 (PRIMARY_MODEL) ─────────────────────────────
         obs_pairs = [(name, obs) for name, _, obs in executed_results]
@@ -588,6 +611,7 @@ class ParallelAgentTool(BaseTool):
             observations=obs_pairs,
             vibe_snippet=vibe_snippet,
             full_context=full_context,
+            images=images,
         )
 
         elapsed_ms = int((time.time() - start_time) * 1000)
@@ -626,4 +650,6 @@ class ParallelAgentTool(BaseTool):
             system_prompt=sys_prompt,
             user_prompt=user_prompt,
             latency_ms=elapsed_ms,
+            thought_log=full_cot_thought,
         )
+        return None

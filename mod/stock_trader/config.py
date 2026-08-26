@@ -61,5 +61,25 @@ ENABLE_SHERRY_PERSONA: bool = os.getenv("ENABLE_SHERRY_PERSONA", "True").lower()
 # 雪莉每筆成交的交易紀錄將自動即時發送至該頻道
 TRADE_ANNOUNCE_CHANNEL_ID: int | None = 1534924821844983858
 
+# ---------------------------------------------------------------------------
+# 策略推理模型設定
+# ---------------------------------------------------------------------------
+def get_default_model() -> str:
+    """取得美股交易模組預設模型。"""
+    try:
+        import settings
+        val = getattr(settings, "PRIMARY_MODEL", None)
+        if val and str(val).strip():
+            return str(val).strip()
+    except Exception:
+        pass
+    return os.getenv(
+        "STOCK_TRADER_MODEL",
+        os.getenv("PRIMARY_MODEL", f"freetoken:{os.getenv('LLM_MODEL_NAME', 'mistralai/Mixtral-8x7B-Instruct-v0.1')}"),
+    )
+
+DEFAULT_MODEL: str = get_default_model()
+
+
 
 

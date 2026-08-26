@@ -21,7 +21,7 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 MOD_DIR: Path = Path(__file__).resolve().parent
 PROJECT_ROOT: Path = MOD_DIR.parent.parent
-DATA_DIR: Path = PROJECT_ROOT / "data"
+DATA_DIR: Path = PROJECT_ROOT / "data" / "feed_sentinel"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
@@ -50,9 +50,11 @@ TARGET_CHANNEL_ID: int = int(
 )
 
 # ---------------------------------------------------------------------------
-# 持久化紀錄路徑 (去重快取)
+# 持久化紀錄路徑 (情報文章歷史與去重快取)
 # ---------------------------------------------------------------------------
+POSTS_PATH: Path = DATA_DIR / "posts.json"
 SEEN_PATH: Path = DATA_DIR / "sentinel_seen.json"
+LEGACY_SEEN_PATH: Path = PROJECT_ROOT / "data" / "sentinel_seen.json"
 
 # ---------------------------------------------------------------------------
 # 網路請求預設逾時 (秒)

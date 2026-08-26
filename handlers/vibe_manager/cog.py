@@ -2,6 +2,7 @@ import json
 import logging
 import discord
 from discord.ext import commands, tasks
+from typing import Any
 
 import settings
 # 分為內部同包裹載入儲存模型
@@ -29,14 +30,14 @@ class VibeManager(commands.Cog):
         logger.info("VibeManager: 重起中止-關閉自動卸除所有記憶落盤緩存。")
 
     # ==========================
-    # 開放介面：供代理人、打斷機使用提取。
+    # 輸出熱搜文本讓雪莉對話帶入
     # ==========================
     def get_top_topics_snippet(self, channel_id: int) -> str:
-        channel_topics = self._store.get(str(channel_id), {})
-        if not channel_topics:
-            return ""
-
-        qualifying = [(t, entry) for t, entry in channel_topics.items() 
+        channel_id_str = str(channel_id)
+        if channel_id_str not in self._store: return ""
+        topics = self._store[channel_id_str]
+        
+        qualifying = [(topic, entry) for topic, entry in topics.items() 
                       if entry["weight"] >= settings.VIBE_MIN_WEIGHT_TO_INJECT]
         if not qualifying: return ""
 
@@ -50,7 +51,7 @@ class VibeManager(commands.Cog):
     # 推理事件：發配總腦更新最近這話題紀錄。
     # ==========================
     async def request_vibe_update(self, channel: discord.TextChannel) -> None:
-        brain: BotBrain | None = self.bot.get_cog("BotBrain")
+        brain: Any = self.bot.get_cog("BotBrain")
         if brain is None: return
 
         lines: list[str] = []

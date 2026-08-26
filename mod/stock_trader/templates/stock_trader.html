@@ -1,0 +1,140 @@
+<!-- ===== STOCK TRADER VIEW ===== -->
+<div class="view hidden" id="view-stock-trader">
+    <div class="stock-trader-wrapper">
+        <!-- Banner -->
+        <div class="view-banner view-banner--blue-cyan">
+            <div class="view-banner-inner">
+                <div class="view-banner-avatar-wrap">
+                    <img src="/static/sherry_avatar.png" alt="Sherry Detective" class="view-banner-avatar">
+                    <span class="view-banner-avatar-tag">🔍 15歲名偵探</span>
+                </div>
+                <div class="view-banner-content">
+                    <h2 class="view-banner-title">📈 雪莉 美股虛擬量化交易控制台</h2>
+                    <div class="view-banner-quote">
+                        <p class="view-banner-quote-text">「歡迎來到名偵探雪莉的美股量化指揮中心！真相永遠只有一個！🔍」</p>
+                        <p class="view-banner-quote-meta">初始本金 $10,000 美金 | 交易時段 23:00~04:00 (03:50強看盤) | 手續費 0.1% | 碎股 &gt;= 0.01 股</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 4 Core Stat Cards -->
+        <div class="st-stat-grid">
+            <div class="st-stat-card">
+                <div class="st-stat-label">💰 總資產金額 (USD)</div>
+                <div id="st-total-asset" class="st-stat-value st-stat-value--blue">$10,000.00</div>
+                <div id="st-total-pnl-sub" class="st-stat-sub">+$0.00 (0.00%)</div>
+            </div>
+            <div class="st-stat-card">
+                <div class="st-stat-label">💵 剩餘可用現金 (USD)</div>
+                <div id="st-cash" class="st-stat-value st-stat-value--green">$10,000.00</div>
+                <div id="st-positions-count-sub" class="st-stat-sub">0 筆持倉標的</div>
+            </div>
+            <div class="st-stat-card">
+                <div class="st-stat-label">📊 1 個月累積盈餘率</div>
+                <div id="st-pnl-pct" class="st-stat-value st-stat-value--red">+0.00%</div>
+                <div id="st-day-pnl-sub" class="st-stat-sub">當日損益: $0.00</div>
+            </div>
+            <div class="st-stat-card">
+                <div class="st-stat-label">🎯 交易勝率</div>
+                <div id="st-win-rate" class="st-stat-value st-stat-value--yellow">0.0%</div>
+                <div id="st-trades-count-sub" class="st-stat-sub">0 / 0 筆交易勝場</div>
+            </div>
+        </div>
+
+        <!-- 1-Month Return Rate Line Chart -->
+        <div class="st-chart-card">
+            <div class="st-chart-card-header">
+                <h3 class="st-chart-title">📈 近 1 個月盈餘率 (Return Rate %) 走勢圖</h3>
+                <span class="st-chart-hint">每日盤末自動快照記錄</span>
+            </div>
+            <div class="st-chart-wrap">
+                <canvas id="st-return-chart"></canvas>
+            </div>
+        </div>
+
+        <!-- Grid: CoT Thinking Logs & Current Holdings -->
+        <div class="st-detail-grid">
+            <!-- CoT Log Card -->
+            <div class="st-detail-card">
+                <h3 class="st-detail-title st-detail-title--blue">🧠 名偵探雪莉思考邏輯 (CoT)</h3>
+                <div id="st-thought-container" class="st-thought-log">
+                    <div class="text-muted">載入思考日誌中...</div>
+                </div>
+            </div>
+
+            <!-- Holdings Table Card -->
+            <div class="st-detail-card">
+                <h3 class="st-detail-title st-detail-title--green">📦 當前持有標的</h3>
+                <div class="st-table-scroll">
+                    <table class="st-table">
+                        <thead>
+                            <tr class="st-table-head">
+                                <th>標的</th>
+                                <th>股數</th>
+                                <th>均價</th>
+                                <th>現價</th>
+                                <th>未實現損益</th>
+                            </tr>
+                        </thead>
+                        <tbody id="st-holdings-tbody">
+                            <tr><td colspan="5" class="st-table-empty">無持倉標的</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Full Width: Trade History -->
+        <div class="st-full-card">
+            <h3 class="st-detail-title">📋 歷史交易紀錄</h3>
+            <div class="st-table-scroll">
+                <table class="st-table">
+                    <thead>
+                        <tr class="st-table-head">
+                            <th>時間</th>
+                            <th>標的</th>
+                            <th>動作</th>
+                            <th>股數</th>
+                            <th>成交價</th>
+                            <th>手續費</th>
+                            <th>交割金額</th>
+                            <th>實現損益</th>
+                            <th>分析理由</th>
+                        </tr>
+                    </thead>
+                    <tbody id="st-trades-tbody">
+                        <tr><td colspan="9" class="st-table-empty">尚無交易紀錄</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Full Width: Target Stock Indicators -->
+        <div class="st-full-card">
+            <h3 class="st-detail-title">🔍 追蹤標的與即時技術指標</h3>
+            <div class="st-table-scroll">
+                <table class="st-table">
+                    <thead>
+                        <tr class="st-table-head">
+                            <th>標的</th>
+                            <th>最新價</th>
+                            <th>1日變動</th>
+                            <th>1月變動</th>
+                            <th>RSI (14)</th>
+                            <th>MA20</th>
+                            <th>MA60 (季線)</th>
+                            <th>EMA20</th>
+                            <th>布林上/下軌</th>
+                            <th>MACD 柱狀</th>
+                            <th>成交量比</th>
+                        </tr>
+                    </thead>
+                    <tbody id="st-targets-tbody">
+                        <tr><td colspan="11" class="st-table-empty">載入指標中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>

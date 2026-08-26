@@ -1,0 +1,12 @@
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+  - repo: local
+    hooks:
+      - id: import-linter
+        name: import-linter
+        entry: importlinter --config .importlinter
+        language: system
+        pass_filenames: false

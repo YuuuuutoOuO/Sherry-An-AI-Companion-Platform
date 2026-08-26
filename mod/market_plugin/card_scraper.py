@@ -8,8 +8,11 @@ PTCG 卡片爬蟲，從 SNKRDUNK 抓取各評級報價。
 
 from __future__ import annotations
 
+import logging
 import re
 import time
+
+logger = logging.getLogger(__name__)
 
 try:
     from bs4 import BeautifulSoup
@@ -22,7 +25,7 @@ try:
     from webdriver_manager.chrome import ChromeDriverManager
     _SELENIUM_AVAILABLE = True
 except ImportError as e:
-    print(f"[market_plugin] ⚠️ 警告：卡片爬蟲模組載入失敗，原因：{e}")
+    logger.warning("[market_plugin] ⚠️ 警告：卡片爬蟲模組載入失敗，原因：%s", e)
     _SELENIUM_AVAILABLE = False
 
 
@@ -33,7 +36,7 @@ def fetch_snkrdunk_grades_sync(card_dict: dict, target_grades: list) -> list:
     target_grades: e.g. ["A", "PSA 10", "BGS 9.5"]
     """
     if not _SELENIUM_AVAILABLE:
-        print("[market_plugin] ❌ Selenium 未安裝，卡片爬蟲無法執行")
+        logger.error("[market_plugin] ❌ Selenium 未安裝，卡片爬蟲無法執行")
         return [{"Card Name": name, "URL": url, **{g: "N/A" for g in target_grades}}
                 for name, url in card_dict.items()]
 
@@ -53,7 +56,7 @@ def fetch_snkrdunk_grades_sync(card_dict: dict, target_grades: list) -> list:
     results = []
 
     for card_name, original_url in card_dict.items():
-        print(f"[market_plugin] 🃏 掃描: {card_name} ...")
+        logger.info("[market_plugin] 🃏 掃描: %s ...", card_name)
 
         # 強制轉為英文版 trading-cards 頁面
         match = re.search(r"snkrdunk\.com/(?:en/trading-cards|apparels|products)/(\d+)", original_url)
@@ -108,7 +111,7 @@ def fetch_snkrdunk_grades_sync(card_dict: dict, target_grades: list) -> list:
                     card_data[grade] = min(prices_found)
 
         except Exception as e:
-            print(f"[market_plugin] ❌ 抓取 {card_name} 失敗: {e}")
+            logger.error("[market_plugin] ❌ 抓取 %s 失敗: %s", card_name, e)
 
         results.append(card_data)
         time.sleep(3)

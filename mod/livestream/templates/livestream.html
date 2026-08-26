@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>雪莉直播螢幕 — Sherry Livestream Screen</title>
+  <style>
+    :root {
+      --bg-primary: #0a0c14;
+      --bg-card: rgba(18, 24, 38, 0.85);
+      --accent-cyan: #00f2fe;
+      --accent-purple: #7f00ff;
+      --accent-pink: #ff007f;
+      --text-main: #f0f4f8;
+      --text-muted: #8e9bb0;
+      --border-glow: rgba(0, 242, 254, 0.25);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body, html {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+    }
+
+    /* Background Ambient Gradients */
+    .ambient-bg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+      background: radial-gradient(circle at 20% 30%, rgba(127, 0, 255, 0.15), transparent 50%),
+                  radial-gradient(circle at 80% 70%, rgba(0, 242, 254, 0.12), transparent 50%),
+                  #0a0c14;
+      pointer-events: none;
+    }
+
+    /* Screen Wrapper */
+    .screen-container {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 2;
+    }
+
+    /* Live Header Bar */
+    .stream-header {
+      position: absolute;
+      top: 24px;
+      left: 32px;
+      right: 32px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      z-index: 10;
+      pointer-events: none;
+      transition: opacity 0.5s ease;
+    }
+
+    .live-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255, 0, 85, 0.2);
+      border: 1px solid rgba(255, 0, 85, 0.5);
+      color: #ff3366;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 0 20px rgba(255, 51, 102, 0.3);
+    }
+
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: #ff0055;
+      animation: pulse-dot 1.5s infinite;
+    }
+
+    @keyframes pulse-dot {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.4); opacity: 0.4; }
+    }
+
+    .clock-display {
+      font-family: 'Consolas', 'Courier New', monospace;
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--accent-cyan);
+      background: var(--bg-card);
+      padding: 6px 18px;
+      border-radius: 20px;
+      border: 1px solid var(--border-glow);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+    }
+
+    /* Idle Screen Content */
+    .idle-view {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: 28px;
+      transition: all 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 5;
+    }
+
+    .idle-view.hidden {
+      opacity: 0;
+      transform: scale(0.95);
+      pointer-events: none;
+      display: none;
+    }
+
+    .avatar-wrapper {
+      position: relative;
+      width: 140px;
+      height: 140px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .avatar-glow {
+      position: absolute;
+      width: 160px;
+      height: 160px;
+      border-radius: 50%;
+      background: conic-gradient(from 0deg, var(--accent-cyan), var(--accent-purple), var(--accent-pink), var(--accent-cyan));
+      animation: spin-glow 6s linear infinite;
+      filter: blur(16px);
+      opacity: 0.7;
+    }
+
+    @keyframes spin-glow {
+      100% { transform: rotate(360deg); }
+    }
+
+    .avatar-img {
+      width: 130px;
+      height: 130px;
+      border-radius: 50%;
+      border: 3px solid rgba(255, 255, 255, 0.8);
+      background: #111827;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 54px;
+      z-index: 2;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+    }
+
+    .idle-title {
+      font-size: 32px;
+      font-weight: 800;
+      letter-spacing: 2px;
+      background: linear-gradient(135deg, #ffffff 0%, var(--accent-cyan) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .idle-subtitle {
+      font-size: 16px;
+      color: var(--text-muted);
+      max-width: 500px;
+      line-height: 1.6;
+    }
+
+    /* Waveform Animation */
+    .audio-waveform {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      height: 40px;
+    }
+
+    .wave-bar {
+      width: 5px;
+      height: 10px;
+      background: linear-gradient(to top, var(--accent-purple), var(--accent-cyan));
+      border-radius: 3px;
+      animation: wave 1.2s ease-in-out infinite alternate;
+    }
+
+    .wave-bar:nth-child(1) { animation-delay: 0.1s; }
+    .wave-bar:nth-child(2) { animation-delay: 0.3s; }
+    .wave-bar:nth-child(3) { animation-delay: 0.5s; }
+    .wave-bar:nth-child(4) { animation-delay: 0.2s; }
+    .wave-bar:nth-child(5) { animation-delay: 0.4s; }
+    .wave-bar:nth-child(6) { animation-delay: 0.6s; }
+    .wave-bar:nth-child(7) { animation-delay: 0.25s; }
+
+    @keyframes wave {
+      0% { height: 8px; }
+      100% { height: 38px; }
+    }
+
+    .command-hint-box {
+      background: var(--bg-card);
+      border: 1px solid var(--border-glow);
+      border-radius: 16px;
+      padding: 14px 28px;
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+    }
+
+    .command-pill {
+      background: rgba(0, 242, 254, 0.15);
+      border: 1px solid rgba(0, 242, 254, 0.4);
+      color: var(--accent-cyan);
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-family: 'Consolas', monospace;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    /* Video Player Container */
+    .player-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 4;
+      background: #000;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.6s ease;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .player-container.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    #yt-player-wrapper {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: none;
+      background: #000;
+    }
+
+    #yt-player-frame {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100% !important;
+      height: 100% !important;
+      border: none;
+      background: #000;
+    }
+
+    #local-video-player {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+      display: none;
+    }
+
+    /* Now Playing Overlay Banner */
+    .now-playing-banner {
+      position: absolute;
+      bottom: 28px;
+      left: 32px;
+      z-index: 10;
+      background: rgba(10, 12, 20, 0.88);
+      border: 1px solid var(--border-glow);
+      border-radius: 16px;
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7);
+      transform: translateY(120px);
+      opacity: 0;
+      transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+      pointer-events: none;
+      max-width: 650px;
+    }
+
+    .now-playing-banner.show {
+      transform: translateY(0);
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .requester-avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      border: 2px solid var(--accent-cyan);
+      object-fit: cover;
+      background: #1e293b;
+    }
+
+    .media-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      overflow: hidden;
+    }
+
+    .media-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .media-meta {
+      font-size: 12px;
+      color: var(--text-muted);
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .media-meta span.highlight {
+      color: var(--accent-cyan);
+      font-weight: 600;
+    }
+
+    /* Connection Status Dot */
+    .connection-status {
+      position: absolute;
+      bottom: 16px;
+      right: 20px;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.4);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      z-index: 10;
+    }
+
+    .conn-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background-color: #10b981;
+    }
+
+    .conn-dot.disconnected {
+      background-color: #ef4444;
+    }
+  </style>
+</head>
+<body>
+  <div class="ambient-bg"></div>
+
+  <div class="screen-container">
+    <!-- Header -->
+    <div class="stream-header" id="stream-header">
+      <div class="live-badge">
+        <div class="live-dot"></div>
+        SHERRY LIVE
+      </div>
+      <div class="clock-display" id="clock-text">--:--:--</div>
+    </div>
+
+    <!-- Idle View -->
+    <div class="idle-view" id="idle-view">
+      <div class="avatar-wrapper">
+        <div class="avatar-glow"></div>
+        <div class="avatar-img">🕵️‍♀️</div>
+      </div>
+      <div>
+        <h1 class="idle-title">雪莉 直播串流台</h1>
+        <p class="idle-subtitle">目前待機中，隨時等待頻道內的探員發送點播指令！</p>
+      </div>
+
+      <div class="audio-waveform">
+        <div class="wave-bar"></div>
+        <div class="wave-bar"></div>
+        <div class="wave-bar"></div>
+        <div class="wave-bar"></div>
+        <div class="wave-bar"></div>
+        <div class="wave-bar"></div>
+        <div class="wave-bar"></div>
+      </div>
+
+      <div class="command-hint-box">
+        <span>點播指令：</span>
+        <span class="command-pill">/play_video action:[file/youtube] video_name:&lt;名稱&gt; [episode:&lt;集數&gt;]</span>
+      </div>
+    </div>
+
+    <!-- Video Player View (Supports both YouTube & Local HTML5 Video) -->
+    <div class="player-container" id="player-container">
+      <div id="yt-player-wrapper">
+        <iframe
+          id="yt-player-frame"
+          src=""
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          allowfullscreen>
+        </iframe>
+      </div>
+      <video id="local-video-player" controls autoplay playsinline></video>
+    </div>
+
+    <!-- Now Playing Overlay Banner -->
+    <div class="now-playing-banner" id="now-playing-banner">
+      <img id="requester-avatar" class="requester-avatar" src="" alt="Avatar" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
+      <div class="media-info">
+        <div class="media-title" id="media-title">影片播放中</div>
+        <div class="media-meta">
+          <span>點播者: <span class="highlight" id="requester-name">探員</span></span>
+          <span>•</span>
+          <span id="playback-status-text">播放中</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Connection Status -->
+    <div class="connection-status">
+      <div class="conn-dot" id="conn-dot"></div>
+      <span id="conn-text">即時同步已連線 (Port 8764)</span>
+    </div>
+  </div>
+
+  <script>
+    // State management
+    let currentMediaId = null;
+    let currentMode = null; // 'youtube' | 'local'
+    let currentStatus = "idle";
+    let bannerTimeout = null;
+
+    const localVideo = document.getElementById('local-video-player');
+    const ytWrapper = document.getElementById('yt-player-wrapper');
+    const ytIframe = document.getElementById('yt-player-frame');
+
+    // Global audio unlocker
+    function unlockAudio() {
+      if (localVideo && localVideo.muted) {
+        localVideo.muted = false;
+      }
+      if (ytIframe && ytIframe.contentWindow) {
+        try {
+          ytIframe.contentWindow.postMessage(JSON.stringify({ event: "command", func: "unMute", args: [] }), "*");
+          ytIframe.contentWindow.postMessage(JSON.stringify({ event: "command", func: "setVolume", args: [100] }), "*");
+          ytIframe.contentWindow.postMessage(JSON.stringify({ event: "command", func: "playVideo", args: [] }), "*");
+        } catch (e) {}
+      }
+    }
+    ['click', 'keydown', 'touchstart', 'focus'].forEach(evt => {
+      window.addEventListener(evt, unlockAudio, { passive: true });
+    });
+
+    // Clock update
+    function updateClock() {
+      const now = new Date();
+      const h = String(now.getHours()).padStart(2, '0');
+      const m = String(now.getMinutes()).padStart(2, '0');
+      const s = String(now.getSeconds()).padStart(2, '0');
+      document.getElementById('clock-text').textContent = `${h}:${m}:${s}`;
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // Listen for YouTube IFrame PostMessage API events (e.g. video ended)
+    window.addEventListener('message', (event) => {
+      try {
+        if (!event.data) return;
+        const msg = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        if (msg && msg.event === "infoDelivery" && msg.info && msg.info.playerState === 0) {
+          console.log("[Livestream] YouTube video playback finished.");
+          showIdleView();
+        }
+      } catch (e) {}
+    });
+
+    // Local Video Events & Continuous Autoplay Loop
+    localVideo.addEventListener('ended', () => {
+      console.log("[Livestream] Local video episode ended. Advancing to next episode...");
+      fetch('/api/livestream/next', { method: 'POST' })
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.data) {
+            handleStateUpdate(data.data);
+          }
+        })
+        .catch(err => console.error("[Livestream] Failed to trigger next episode:", err));
+    });
+
+    localVideo.addEventListener('error', (e) => {
+      console.warn("[Livestream] Local video playback error:", e);
+    });
+
+    // View Switching
+    function showIdleView() {
+      currentStatus = "idle";
+      currentMode = null;
+      currentMediaId = null;
+
+      document.getElementById('idle-view').classList.remove('hidden');
+      document.getElementById('player-container').classList.remove('active');
+
+      ytWrapper.style.display = 'none';
+      if (ytIframe) {
+        ytIframe.removeAttribute('data-video-id');
+        ytIframe.src = "about:blank";
+      }
+
+      localVideo.style.display = 'none';
+      localVideo.pause();
+
+      hideBanner();
+    }
+
+    function playYouTube(videoId, startSeconds = 0, meta = {}) {
+      currentStatus = "playing";
+      currentMode = "youtube";
+      currentMediaId = videoId;
+
+      document.getElementById('idle-view').classList.add('hidden');
+      document.getElementById('player-container').classList.add('active');
+
+      localVideo.style.display = 'none';
+      localVideo.pause();
+
+      ytWrapper.style.display = 'block';
+
+      const startParam = startSeconds ? `&start=${startSeconds}` : '';
+      // Crucial: mute=1 guarantees that Chrome/Chromium unconditionally allows autoplay (zero play button)
+      const embedUrl = `https://www.youtube.com/embed/${videoId}?autoplay=1&mute=1&enablejsapi=1&rel=0&iv_load_policy=3&controls=1&playsinline=1${startParam}`;
+
+      ytIframe.onload = function() {
+        console.log("[Livestream] YouTube iframe loaded, forcing instant playback and unmuting...");
+        const sendCommands = () => {
+          try {
+            if (ytIframe && ytIframe.contentWindow) {
+              ytIframe.contentWindow.postMessage(JSON.stringify({ event: "listening" }), "*");
+              ytIframe.contentWindow.postMessage(JSON.stringify({ event: "command", func: "playVideo", args: [] }), "*");
+              ytIframe.contentWindow.postMessage(JSON.stringify({ event: "command", func: "unMute", args: [] }), "*");
+              ytIframe.contentWindow.postMessage(JSON.stringify({ event: "command", func: "setVolume", args: [100] }), "*");
+            }
+          } catch (e) {}
+        };
+        sendCommands();
+        setTimeout(sendCommands, 200);
+        setTimeout(sendCommands, 500);
+        setTimeout(sendCommands, 1000);
+        setTimeout(sendCommands, 2000);
+      };
+
+      if (ytIframe.getAttribute('data-video-id') !== videoId || !ytIframe.src.includes(videoId)) {
+        ytIframe.setAttribute('data-video-id', videoId);
+        ytIframe.src = embedUrl;
+        console.log("[Livestream] Loading YouTube Embed URL:", embedUrl);
+      } else {
+        if (ytIframe.contentWindow) {
+          ytIframe.contentWindow.postMessage(JSON.stringify({ event: "command", func: "playVideo", args: [] }), "*");
+          ytIframe.contentWindow.postMessage(JSON.stringify({ event: "command", func: "unMute", args: [] }), "*");
+        }
+      }
+
+      updateBanner(meta);
+    }
+
+    function playLocalVideo(streamUrl, meta = {}) {
+      currentStatus = "playing";
+      currentMode = "local";
+      currentMediaId = meta.video_id || streamUrl;
+
+      document.getElementById('idle-view').classList.add('hidden');
+      document.getElementById('player-container').classList.add('active');
+
+      ytWrapper.style.display = 'none';
+      if (ytIframe) {
+        ytIframe.removeAttribute('data-video-id');
+        ytIframe.src = "about:blank";
+      }
+
+      localVideo.style.display = 'block';
+      if (localVideo.src !== window.location.origin + streamUrl && localVideo.getAttribute('src') !== streamUrl) {
+        localVideo.src = streamUrl;
+      }
+      localVideo.currentTime = 0;
+      localVideo.muted = false;
+      localVideo.volume = 1.0;
+
+      // Autoplay without blocking prompt
+      localVideo.play().catch(e => {
+        console.warn("[Livestream] Unmuted autoplay restricted by browser policy; starting muted fallback:", e);
+        localVideo.muted = true;
+        localVideo.play().then(() => {
+          setTimeout(() => { localVideo.muted = false; }, 500);
+        }).catch(err2 => console.error("[Livestream] Muted playback also failed:", err2));
+      });
+
+      updateBanner(meta);
+    }
+
+    function updateBanner(meta) {
+      document.getElementById('media-title').textContent = meta.title || "影片播放中";
+      document.getElementById('requester-name').textContent = meta.requester_name || "未知探員";
+      if (meta.requester_avatar) {
+        document.getElementById('requester-avatar').src = meta.requester_avatar;
+      } else {
+        document.getElementById('requester-avatar').src = "https://cdn.discordapp.com/embed/avatars/0.png";
+      }
+
+      const banner = document.getElementById('now-playing-banner');
+      banner.classList.add('show');
+      if (bannerTimeout) clearTimeout(bannerTimeout);
+      bannerTimeout = setTimeout(() => {
+        banner.classList.remove('show');
+      }, 10000);
+    }
+
+    function hideBanner() {
+      const banner = document.getElementById('now-playing-banner');
+      banner.classList.remove('show');
+      if (bannerTimeout) clearTimeout(bannerTimeout);
+    }
+
+    // Handle State Payload
+    function handleStateUpdate(state) {
+      if (!state) return;
+      if (state.status === "playing" && state.current_media) {
+        const media = state.current_media;
+        if (media.action === "youtube") {
+          if (media.video_id !== currentMediaId || currentMode !== "youtube" || currentStatus !== "playing") {
+            playYouTube(media.video_id, media.start_seconds || 0, media);
+          }
+        } else if (media.action === "local" || media.action === "file") {
+          if (media.video_id !== currentMediaId || currentMode !== "local" || currentStatus !== "playing") {
+            playLocalVideo(media.stream_url || media.original_url, media);
+          }
+        }
+      } else if (state.status === "idle" || state.status === "stopped") {
+        if (currentStatus !== "idle") {
+          showIdleView();
+        }
+      } else if (state.status === "paused") {
+        if (currentMode === "local" && localVideo) {
+          localVideo.pause();
+        }
+      }
+    }
+
+    // Fetch initial state via REST
+    function fetchCurrentState() {
+      fetch('/api/livestream/state')
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.data) {
+            handleStateUpdate(data.data);
+          }
+        })
+        .catch(err => console.warn("[Livestream] Failed to fetch state:", err));
+    }
+
+    // Server-Sent Events (SSE) Real-Time Connection
+    let eventSource = null;
+
+    function connectSSE() {
+      if (eventSource) {
+        eventSource.close();
+      }
+
+      const connDot = document.getElementById('conn-dot');
+      const connText = document.getElementById('conn-text');
+
+      eventSource = new EventSource('/api/livestream/events');
+
+      eventSource.onopen = function() {
+        connDot.classList.remove('disconnected');
+        connText.textContent = "即時同步已連線 (Port 8764)";
+        console.log("[Livestream] SSE stream connected.");
+      };
+
+      eventSource.onmessage = function(event) {
+        try {
+          const payload = JSON.parse(event.data);
+          console.log("[Livestream] Received SSE event:", payload);
+          if (payload && payload.state) {
+            handleStateUpdate(payload.state);
+          }
+        } catch (e) {
+          console.error("[Livestream] Error parsing SSE event payload:", e);
+        }
+      };
+
+      eventSource.onerror = function(err) {
+        connDot.classList.add('disconnected');
+        connText.textContent = "即時連線中斷，重試中...";
+        console.warn("[Livestream] SSE connection error. Retrying in 3s...", err);
+        eventSource.close();
+        setTimeout(connectSSE, 3000);
+      };
+    }
+
+    // Initialize connections
+    connectSSE();
+    setInterval(fetchCurrentState, 5000);
+  </script>
+</body>
+</html>

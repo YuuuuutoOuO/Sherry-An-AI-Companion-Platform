@@ -11,16 +11,14 @@ import logging
 import re
 from typing import Optional
 
+from mod.video_clipper import config
 from mod.video_clipper.contracts import AbstractVideoGifClient
 from mod.video_clipper.domain import TimeRange, VideoClipRequest, VideoClipResult
 
 logger = logging.getLogger(__name__)
 
-MAX_CLIP_DURATION_SEC: float = 15.0
-YOUTUBE_URL_REGEX = re.compile(
-    r"^(https?://)?(www\.)?(youtube\.com|youtu\.be)/.+$",
-    re.IGNORECASE,
-)
+MAX_CLIP_DURATION_SEC: float = config.MAX_CLIP_DURATION_SEC
+YOUTUBE_URL_REGEX = config.YOUTUBE_URL_REGEX
 
 
 def parse_timestamp(timestamp_str: str) -> float:

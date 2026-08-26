@@ -1,0 +1,14 @@
+[tool.mypy]
+python_version = "3.11"
+strict = false
+disallow_untyped_defs = false
+warn_return_any = true
+no_implicit_optional = true
+ignore_missing_imports = true
+explicit_package_bases = true
+
+[tool.coverage.report]
+fail_under = 80
+
+[tool.ruff]
+required-version = "0.6.9"

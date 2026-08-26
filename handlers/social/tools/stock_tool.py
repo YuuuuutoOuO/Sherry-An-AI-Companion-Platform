@@ -26,7 +26,7 @@ import asyncio
 import io
 import logging
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import discord
 from discord.ext import commands
@@ -36,8 +36,9 @@ if TYPE_CHECKING:
 
 import settings
 from handlers.bot_brain import BotBrain, InferenceTask
+from handlers.social.contracts import ToolCategory, ToolResult
 from handlers.social.observability import log_event, make_timer
-from handlers.social.tool_base import BaseTool
+from handlers.social.tool_base import BaseTool, ToolResponseMode
 from handlers.social.utils import remove_hourglass_reaction
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,27 @@ _TICKER_REGEX = re.compile(
     r"|加權指數|道瓊|納斯達克)",
     re.IGNORECASE,
 )
+
+
+_TICKER_EXTRACT_SYSTEM_PROMPT = (
+    "你是一個金融標的代號識別專家。請從使用者語句中萃取出所有的股票代號、加密貨幣 Symbol 或指數代碼。\n"
+    "規則：\n"
+    "- 若有多個標的，以逗號分隔（例如：2330, NVDA, BTC）。\n"
+    "- 只能輸出代號，不要有任何多餘的字元、解釋或標點。\n"
+    "- 若完全找不到任何金融標的，輸出 NONE。"
+)
+
+
+def _parse_extracted_tickers(raw: str) -> list[str]:
+    cleaned = re.sub(r"<\/?thought>", "", raw).strip()
+    if not cleaned or cleaned.upper() == "NONE":
+        return []
+    result: list[str] = []
+    for part in cleaned.replace("，", ",").split(","):
+        resolved = _resolve_ticker(part.strip())
+        if resolved and resolved not in result:
+            result.append(resolved)
+    return result
 
 
 def _resolve_ticker(raw: str) -> str:
@@ -287,8 +309,8 @@ def _fetch_and_plot(ticker: str) -> tuple[bytes | None, dict]:
         buf = io.BytesIO()
         fig.savefig(buf, format="png", dpi=100, bbox_inches="tight", facecolor="white")
         buf.seek(0)
-        import matplotlib
-        matplotlib.pyplot.close(fig)
+        import matplotlib.pyplot as plt
+        plt.close(fig)
 
         return buf.read(), indicators
 
@@ -305,6 +327,10 @@ class StockTool(BaseTool):
         return "STOCK"
 
     @property
+    def response_mode(self) -> ToolResponseMode:
+        return ToolResponseMode.DIRECT_UI
+
+    @property
     def llm_description(self) -> str:
         return "查詢股票、加密貨幣、指數的即時價格、K線走勢、EMA/RSI/MACD 等技術指標"
 
@@ -318,14 +344,14 @@ class StockTool(BaseTool):
         user_query: str,
         vibe_snippet: str,
         full_context: str,
-        *,
-        silent: bool = False,
         **kwargs: object,
-    ) -> str | None:
+    ) -> ToolResult:
+        silent = bool(kwargs.get("silent", False))
         elapsed = make_timer()
-        brain: BotBrain | None = bot.get_cog("BotBrain")
-        if not brain:
-            return None
+        brain_cog = bot.get_cog("BotBrain")
+        if not brain_cog:
+            return ToolResult.error("BotBrain 未就緒。", is_direct_rendered=True)
+        brain: Any = brain_cog
 
         # ── Step 1: 提取所有提及的 tickers（支援單次查詢多標的）──────────────
         tickers = _quick_extract_tickers(user_query)
@@ -334,49 +360,37 @@ class StockTool(BaseTool):
             logger.debug("StockTool: Regex 失敗，嘗試 LLM 萃取 ticker...")
             extract_future: asyncio.Future[str] = bot.loop.create_future()
 
-            async def _on_ticker_extract(raw: str) -> None:
+            async def _on_extract_reply(raw: str) -> None:
                 if not extract_future.done():
                     extract_future.set_result(raw.strip())
 
             extract_task = InferenceTask(
-                priority=0,
-                system_prompt=(
-                    "[SYSTEM OPERATION OVERRIDE: PARSER MODE]\n"
-                    "請從使用者輸入中萃取出所有「股票代號或名稱」，"
-                    "以逗號分隔輸出（例如 2330.TW, AAPL, BTC-USD），"
-                    "絕對不要有任何解釋或標點。"
-                ),
+                priority=settings.PRIORITY_TAG_RESPONSE,
+                system_prompt=_TICKER_EXTRACT_SYSTEM_PROMPT,
                 user_prompt=user_query,
-                callback=_on_ticker_extract,
+                callback=_on_extract_reply,
                 model=settings.CLASSIFIER_MODEL,
                 task_id=f"stock-extract-{message.id}",
             )
             await brain.enqueue_task(extract_task)
+
             try:
-                raw_ticker = await asyncio.wait_for(extract_future, timeout=settings.STOCK_EXTRACT_TIMEOUT)
+                raw_extracted = await asyncio.wait_for(extract_future, timeout=settings.STOCK_EXTRACT_TIMEOUT)
+                tickers = _parse_extracted_tickers(raw_extracted)
             except asyncio.TimeoutError:
-                raw_ticker = ""
-            if raw_ticker:
-                for part in raw_ticker.split(","):
-                    t = _resolve_ticker(part)
-                    if t and t not in tickers:
-                        tickers.append(t)
+                logger.warning("StockTool: LLM ticker 萃取超時")
+                tickers = []
 
         if not tickers:
-            if not silent:
-                await message.reply("嗚嗚，我找不到你說的股票代號耶...可以告訴我完整代號嗎？", mention_author=True)
-            return "無法識別股票代號。"
+            await message.reply("唔⋯⋯名偵探沒看懂你想查哪支股票或幣耶！可以提供代號嗎？（例如：`2330`、`AAPL`、`BTC`）", mention_author=True)
+            return ToolResult.no_data("未能識別出股票或加密貨幣代號。", is_direct_rendered=True)
 
-        # 最多處理前 3 個標的，避免超時
-        tickers = tickers[:3]
-        logger.info("StockTool: 最終解析 tickers = %s (silent=%s)", tickers, silent)
-
-        # ── Step 2: 逐一獲取數據與繪圖 ─────────────────────────────────────────
-        loop = asyncio.get_running_loop()
+        # ── Step 2: 平行抓取數據並繪圖 ──────────────────────────────────────
         indicator_summaries: list[str] = []
         files: list[discord.File] = []
+        loop = asyncio.get_event_loop()
 
-        for ticker in tickers:
+        for ticker in tickers[:3]:  # 最多查 3 檔，防濫用
             try:
                 png_bytes, indicators = await asyncio.wait_for(
                     loop.run_in_executor(None, _fetch_and_plot, ticker),
@@ -411,20 +425,10 @@ class StockTool(BaseTool):
                 files.append(discord.File(io.BytesIO(png_bytes), filename=f"{ticker}_chart.png"))
 
         if not indicator_summaries:
-            if not silent:
-                await message.reply(f"哇哇，找不到代號「{', '.join(tickers)}」的行情資料耶⋯⋯", mention_author=True)
-            return f"找不到 {', '.join(tickers)} 的股市數據。"
+            await message.reply(f"哇哇，找不到代號「{', '.join(tickers)}」的行情資料耶⋯⋯", mention_author=True)
+            return ToolResult.no_data(f"找不到 {', '.join(tickers)} 的股市數據。", is_direct_rendered=True)
 
         combined_summary = "\n\n".join(indicator_summaries)
-
-        # 靜默模式（ReAct Agent 調用）：先將 K 線圖檔發送至 Discord 頻道，並將文字數據回傳給 Agent 交由主力模型播報
-        if silent:
-            if files:
-                try:
-                    await message.reply(files=files, mention_author=False)
-                except Exception as exc:
-                    logger.error("StockTool: silent 模式發送 K 線圖失敗: %s", exc)
-            return combined_summary
 
         # ── Step 3: 交給雪莉播報發送至 Discord ─────────────────────────────
         wants_analysis = bool(re.search(r"(分析|建議|怎麼看|能買嗎|該買嗎|看法)", user_query))
@@ -487,4 +491,4 @@ class StockTool(BaseTool):
             extra_ticker=",".join(tickers),
             extra_wants_analysis=wants_analysis,
         )
-        return reply_text
+        return ToolResult.success(reply_text, is_direct_rendered=True)

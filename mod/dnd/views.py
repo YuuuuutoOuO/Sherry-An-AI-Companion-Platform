@@ -17,6 +17,7 @@ from discord import ui
 
 import settings
 from handlers.bot_brain import InferenceTask
+from mod.dnd import config
 from mod.dnd.character import create_character
 from mod.dnd.dice import roll
 from mod.dnd.inventory import equip_item
@@ -106,7 +107,7 @@ class CheckRollButton(ui.Button["DndStoryView"]):
 
         # Trigger BotBrain DM narrative update for this roll result
         bot = interaction.client
-        brain: BotBrain | None = bot.get_cog("BotBrain")
+        brain: Any = getattr(bot, "get_cog", lambda _: None)("BotBrain")
 
         if not brain:
             await interaction.followup.send(action_desc)
@@ -118,7 +119,7 @@ class CheckRollButton(ui.Button["DndStoryView"]):
             loc_name = world.locations[char.location_id].name
 
         # Access cog method to build DM prompt if available
-        dnd_cog = bot.get_cog("DndCog")
+        dnd_cog: Any = getattr(bot, "get_cog", lambda _: None)("DndCog")
         channel_id: int = interaction.channel_id or 0
 
         if dnd_cog and hasattr(dnd_cog, "_build_dm_prompt"):
@@ -147,18 +148,18 @@ class CheckRollButton(ui.Button["DndStoryView"]):
             await interaction.followup.send(embed=embed, view=new_view)
 
         task = InferenceTask(
-            priority=getattr(settings, "PRIORITY_TAG_RESPONSE", 1),
+            priority=config.DEFAULT_PRIORITY,
             system_prompt=sys_prompt,
             user_prompt=user_prompt,
             callback=_on_dm_reply,
-            model=settings.PRIMARY_MODEL,
+            model=config.DEFAULT_MODEL or getattr(settings, "PRIMARY_MODEL", "lms:gemma-4"),
             task_id=f"dnd-roll-btn-{uid}-{int(interaction.created_at.timestamp())}",
         )
         await brain.enqueue_task(task)
 
         # Disable this button once clicked to prevent double-roll
         self.disabled = True
-        if self.view is not None:
+        if self.view is not None and interaction.message is not None:
             try:
                 await interaction.message.edit(view=self.view)
             except Exception:
@@ -168,7 +169,7 @@ class CheckRollButton(ui.Button["DndStoryView"]):
 class CustomActionModal(ui.Modal, title="✍️ 自訂冒險行動"):
     """Modal for typing custom action without slash command."""
 
-    action_text = ui.TextInput(
+    action_text: Any = ui.TextInput(
         label="你想採取什麼行動？",
         style=discord.TextStyle.paragraph,
         placeholder="例如：我嘗試觀察老鐵匠的表情，看看他有沒有隱瞞什麼...",
@@ -193,12 +194,12 @@ class CustomActionModal(ui.Modal, title="✍️ 自訂冒險行動"):
         if char and char.location_id in world.locations:
             loc_name = world.locations[char.location_id].name
 
-        brain: BotBrain | None = self.bot.get_cog("BotBrain")
+        brain: Any = getattr(self.bot, "get_cog", lambda _: None)("BotBrain")
         if not brain:
             await interaction.followup.send("⚠️ BotBrain 大腦未上線。")
             return
 
-        dnd_cog = self.bot.get_cog("DndCog")
+        dnd_cog: Any = getattr(self.bot, "get_cog", lambda _: None)("DndCog")
         channel_id: int = interaction.channel_id or 0
 
         if dnd_cog and hasattr(dnd_cog, "_build_dm_prompt"):
@@ -225,11 +226,11 @@ class CustomActionModal(ui.Modal, title="✍️ 自訂冒險行動"):
             await interaction.followup.send(embed=embed, view=new_view)
 
         task = InferenceTask(
-            priority=getattr(settings, "PRIORITY_TAG_RESPONSE", 1),
+            priority=config.DEFAULT_PRIORITY,
             system_prompt=sys_prompt,
             user_prompt=user_prompt,
             callback=_on_reply,
-            model=settings.PRIMARY_MODEL,
+            model=config.DEFAULT_MODEL or getattr(settings, "PRIMARY_MODEL", "lms:gemma-4"),
             task_id=f"dnd-modal-{uid}-{int(interaction.created_at.timestamp())}",
         )
         await brain.enqueue_task(task)

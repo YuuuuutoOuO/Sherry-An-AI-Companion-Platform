@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import asyncio
+from typing import Any
 from discord.ext import commands
 
 import settings
@@ -21,9 +22,10 @@ async def parse_compound_command(bot: commands.Bot, user_query: str) -> list[str
     if not has_compound_intent and len(user_query) < 15:
         return [user_query]
         
-    brain = bot.get_cog("BotBrain")
-    if not brain:
+    brain_cog = bot.get_cog("BotBrain")
+    if not brain_cog:
         return [user_query]
+    brain: Any = brain_cog
 
     prompt = (
         "[SYSTEM OPERATION OVERRIDE: PARSER MODE]\n"

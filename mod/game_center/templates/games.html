@@ -1,0 +1,179 @@
+<!-- ===== GAMES PLAYGROUND VIEW (DYNAMIC MOD) ===== -->
+<div class="view hidden" id="view-games">
+    <!-- Banner -->
+    <div class="view-banner view-banner--blue">
+        <div>
+            <h2 class="view-banner-title">🎮 雪莉小遊戲遊樂場 (Plug &amp; Play Mod)</h2>
+            <p class="view-banner-sub">與雪莉名偵探透過地端 LLM (Primary Model) 進行猜拳、21點撲克與踩地雷對弈！</p>
+        </div>
+        <div>
+            <span class="service-badge service-online">Primary Model AI 思考中</span>
+        </div>
+    </div>
+
+    <!-- Sherry Persona Dialogue Box -->
+    <div class="sherry-chat-bubble-card">
+        <div class="sherry-chat-avatar">🔵</div>
+        <div class="sherry-chat-body">
+            <div class="sherry-chat-header">
+                <span class="sherry-chat-name">雪莉 Sherry ✦ 名偵探</span>
+                <span class="sherry-chat-tag" id="game-thought-tag">[地端 LLM 對話已同步]</span>
+            </div>
+            <div id="sherry-game-dialogue" class="sherry-chat-text">
+                「哼哼！歡迎來到雪莉的遊戲娛樂室～準備好接受本名偵探的挑戰了嗎？選一個遊戲我們立刻開始吧！✨🔵」
+            </div>
+        </div>
+    </div>
+
+    <!-- Game Tabs Selector -->
+    <div class="game-tabs">
+        <button class="game-tab-btn active" id="tab-game-rps" onclick="switchGameTab('rps')">✌️ 猜拳大對決</button>
+        <button class="game-tab-btn" id="tab-game-blackjack" onclick="switchGameTab('blackjack')">🃏 21 點撲克</button>
+        <button class="game-tab-btn" id="tab-game-minesweeper" onclick="switchGameTab('minesweeper')">💣 踩地雷大冒險</button>
+        <button class="game-tab-btn" id="tab-game-turtle_soup" onclick="switchGameTab('turtle_soup')">🐢 海龜湯解謎</button>
+        <button class="game-tab-btn" id="tab-game-akinator" onclick="switchGameTab('akinator')">🧞 雪莉讀心術 (20Q)</button>
+        <button class="game-tab-btn" id="tab-game-escape_room" onclick="switchGameTab('escape_room')">🗝️ 密室逃脫</button>
+        <button class="game-tab-btn" id="tab-game-ttt" onclick="switchGameTab('ttt')">⭕ 圈圈叉叉</button>
+    </div>
+
+    <!-- GAME CONTAINER 1: RPS -->
+    <div class="game-panel" id="panel-game-rps">
+        <div class="game-card game-card--center">
+            <h3 class="game-card-title">出拳吧！跟雪莉來一局猜拳心理戰 👊✌️🖐️</h3>
+            <div class="game-action-row">
+                <button class="game-action-btn" onclick="playRPS('rock')">✊ 石頭</button>
+                <button class="game-action-btn" onclick="playRPS('scissors')">✌️ 剪刀</button>
+                <button class="game-action-btn" onclick="playRPS('paper')">🖐️ 布</button>
+            </div>
+            <div id="rps-result-box" class="game-result-box hidden">
+                <div class="game-result-title" id="rps-result-title">對局結果</div>
+                <div class="game-result-row">
+                    <div>玩家：<span id="rps-player-choice" class="game-result-val">-</span></div>
+                    <div>雪莉：<span id="rps-sherry-choice" class="game-result-val game-result-val--blue">-</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- GAME CONTAINER 2: BLACKJACK -->
+    <div class="game-panel hidden" id="panel-game-blackjack">
+        <div class="game-card">
+            <div class="game-card-header">
+                <h3 class="game-card-title">🃏 21 點撲克 (Sherry 擔任莊家)</h3>
+                <button class="btn-confirm-login" onclick="startBlackjack()">重新開始新局</button>
+            </div>
+            <div class="blackjack-grid">
+                <div class="blackjack-area">
+                    <div class="blackjack-area-header">
+                        <span class="blackjack-area-label blackjack-area-label--blue">🔵 莊家 (雪莉)</span>
+                        <span id="bj-dealer-score">點數: ?</span>
+                    </div>
+                    <div id="bj-dealer-cards" class="blackjack-cards">
+                        <span class="text-muted">點擊「重新開始新局」發牌</span>
+                    </div>
+                </div>
+                <div class="blackjack-area">
+                    <div class="blackjack-area-header">
+                        <span class="blackjack-area-label">👤 玩家 (你)</span>
+                        <span id="bj-player-score">點數: 0</span>
+                    </div>
+                    <div id="bj-player-cards" class="blackjack-cards">
+                        <span class="text-muted">尚未發牌</span>
+                    </div>
+                </div>
+            </div>
+            <div class="game-action-row">
+                <button class="game-action-btn" id="btn-bj-hit" onclick="hitBlackjack()" disabled>➕ 叫牌 (Hit)</button>
+                <button class="game-action-btn" id="btn-bj-stand" onclick="standBlackjack()" disabled>✋ 停牌 (Stand)</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- GAME CONTAINER 3: MINESWEEPER -->
+    <div class="game-panel hidden" id="panel-game-minesweeper">
+        <div class="game-card game-card--center">
+            <div class="game-card-header">
+                <h3 class="game-card-title">💣 踩地雷大冒險 (8x8, 10地雷)</h3>
+                <div class="game-btn-group">
+                    <button class="btn-hint" onclick="hintMinesweeper()">🔍 求助雪莉 (名偵探推理)</button>
+                    <button class="btn-confirm-login" onclick="startMinesweeper()">重置地雷棋盤</button>
+                </div>
+            </div>
+            <div id="minesweeper-board" class="minesweeper-board">
+                <div class="minesweeper-placeholder">點擊「重置地雷棋盤」開局</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- GAME CONTAINER 4: TURTLE SOUP -->
+    <div class="game-panel hidden" id="panel-game-turtle_soup">
+        <div class="game-card">
+            <div class="game-card-header">
+                <h3 class="game-card-title">🐢 海龜湯情境解謎 (雪莉擔任湯主)</h3>
+                <button class="btn-confirm-login" onclick="startTurtleSoup()">開啟新湯面</button>
+            </div>
+            <div class="turtle-soup-surface">
+                <div class="turtle-soup-title" id="ts-title">湯面：點擊開啟新湯面</div>
+                <div class="turtle-soup-text" id="ts-surface">請點擊上方按鈕隨機抽出海龜湯題目！</div>
+            </div>
+            <div id="ts-dialogue-history" class="ts-dialogue-history">
+                <div class="text-muted-sm">向雪莉提出只回答「是/否/無關」的問題...</div>
+            </div>
+            <div class="game-input-row">
+                <input type="text" id="ts-input" class="select-input" placeholder="輸入你的問題（例如：這個人是單身嗎？...）" onkeydown="if(event.key==='Enter') askTurtleSoup()">
+                <button class="btn-confirm-login" onclick="askTurtleSoup()">提問</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- GAME CONTAINER 5: AKINATOR -->
+    <div class="game-panel hidden" id="panel-game-akinator">
+        <div class="game-card game-card--center">
+            <div class="game-card-header">
+                <h3 class="game-card-title">🧞 雪莉讀心術 (20 個問題猜心)</h3>
+                <button class="btn-confirm-login" onclick="startAkinator()">開始全新讀心遊戲</button>
+            </div>
+            <p class="game-desc">在心中想一個動漫角色或真實物品，雪莉將問你 20 個問題猜出來！</p>
+            <div class="akinator-question-box">
+                <div class="akinator-q-num" id="aki-q-num">第 1 / 20 題</div>
+                <div class="akinator-question" id="aki-question">點擊「開始全新讀心遊戲」</div>
+            </div>
+            <div class="game-action-row">
+                <button class="game-action-btn" onclick="answerAkinator('是')">⭕ 是 / YES</button>
+                <button class="game-action-btn" onclick="answerAkinator('否')">❌ 否 / NO</button>
+                <button class="game-action-btn" onclick="answerAkinator('不確定')">❓ 不確定 / 無關</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- GAME CONTAINER 6: ESCAPE ROOM -->
+    <div class="game-panel hidden" id="panel-game-escape_room">
+        <div class="game-card">
+            <div class="game-card-header">
+                <h3 class="game-card-title">🗝️ 雪莉密室逃脫 (文字冒險)</h3>
+                <button class="btn-confirm-login" onclick="startEscapeRoom()">重置密室</button>
+            </div>
+            <div class="escape-narration" id="er-narration">
+                點擊「重置密室」與雪莉進入困住的名偵探密室！
+            </div>
+            <div class="game-action-row">
+                <button class="game-action-btn" onclick="actionEscapeRoom('調查書桌')">🔍 調查書桌</button>
+                <button class="game-action-btn" onclick="actionEscapeRoom('檢查牆上畫框')">🖼️ 檢查畫框</button>
+                <button class="game-action-btn" onclick="actionEscapeRoom('解開大門密碼')">🚪 嘗試破解大門</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- GAME CONTAINER 7: TIC TAC TOE -->
+    <div class="game-panel hidden" id="panel-game-ttt">
+        <div class="game-card game-card--center">
+            <div class="game-card-header">
+                <h3 class="game-card-title">⭕ 圈圈叉叉 (Tic-Tac-Toe)</h3>
+                <button class="btn-confirm-login" onclick="startTTT()">重新開局</button>
+            </div>
+            <div id="ttt-board" class="ttt-board">
+                <div class="text-muted">點擊「重新開局」</div>
+            </div>
+        </div>
+    </div>
+</div>

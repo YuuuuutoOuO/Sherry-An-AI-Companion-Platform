@@ -1,0 +1,641 @@
+<!-- ===== FEED SENTINEL VIEW (DYNAMIC MOD) ===== -->
+<div class="view hidden" id="view-feed-sentinel">
+    <div class="feed-sentinel-wrapper">
+        <!-- Banner 橫幅 -->
+        <div class="view-banner view-banner--blue-cyan">
+            <div class="view-banner-inner">
+                <div class="view-banner-avatar-wrap">
+                    <img src="/static/sherry_avatar.png" alt="Sherry Feed Sentinel" class="view-banner-avatar">
+                    <span class="view-banner-avatar-tag">📡 情報哨兵模式</span>
+                </div>
+                <div class="view-banner-content">
+                    <h2 class="view-banner-title">📡 AI 社群情報哨兵主控台</h2>
+                    <div class="view-banner-quote">
+                        <p class="view-banner-quote-text">「監聽 HuggingFace / arXiv / GitHub 最新 AI 突破，提煉 3 點繁中精華與雪莉犀利銳評！」</p>
+                        <p class="view-banner-quote-meta">每日 08:00~23:00 每小時背景巡邏 | 多維正則特徵去重防禦 | 自動推播至 Discord 指定頻道</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 4 Stat Metric Cards -->
+        <div class="st-stat-grid fs-stat-grid">
+            <div class="st-stat-card">
+                <div class="st-stat-label">📡 累計分享情報</div>
+                <div id="fs-stat-total" class="st-stat-value st-stat-value--blue">0</div>
+                <div id="fs-stat-total-sub" class="st-stat-sub">篇精選 AI 論文與專案</div>
+            </div>
+            <div class="st-stat-card">
+                <div class="st-stat-label">🏢 情報來源分佈</div>
+                <div id="fs-stat-sources" class="st-stat-value st-stat-value--green" style="font-size: 1.25rem; font-weight: 600;">HF: 0 | arXiv: 0 | GH: 0</div>
+                <div id="fs-stat-sources-sub" class="st-stat-sub">多來源自動並行採集</div>
+            </div>
+            <div class="st-stat-card">
+                <div class="st-stat-label">⏱️ 最近推播時間</div>
+                <div id="fs-stat-last-posted" class="st-stat-value st-stat-value--yellow" style="font-size: 1.15rem;">-</div>
+                <div id="fs-stat-last-sub" class="st-stat-sub">冷卻計算中...</div>
+            </div>
+            <div class="st-stat-card">
+                <div class="st-stat-label">🟢 哨兵巡邏狀態</div>
+                <div id="fs-stat-status" class="st-stat-value st-stat-value--blue" style="font-size: 1.2rem;">運作中</div>
+                <div id="fs-stat-status-sub" class="st-stat-sub">時段 08:00 ~ 23:00</div>
+            </div>
+        </div>
+
+        <!-- Glassmorphic Command Bar (Search + Filter Tabs + Actions) -->
+        <div class="fs-command-bar">
+            <!-- Search Box -->
+            <div class="fs-search-box">
+                <span class="fs-search-icon">🔍</span>
+                <input
+                    type="text"
+                    id="fs-search-input"
+                    class="fs-search-input"
+                    placeholder="搜尋文章標題、摘要、雪莉銳評、作者機構或標籤..."
+                    oninput="handleFsSearch(this.value)"
+                />
+                <button id="fs-search-clear" class="fs-search-clear hidden" onclick="clearFsSearch()" title="清除搜尋">✕</button>
+            </div>
+
+            <!-- Segmented Source Filter Tabs -->
+            <div class="fs-source-tabs">
+                <button class="fs-tab-btn active" data-source="all" onclick="setFsSourceFilter('all')">
+                    <span class="fs-tab-icon">🌐</span> 全部來源
+                </button>
+                <button class="fs-tab-btn" data-source="HuggingFace" onclick="setFsSourceFilter('HuggingFace')">
+                    <span class="fs-tab-icon">🤗</span> HuggingFace
+                </button>
+                <button class="fs-tab-btn" data-source="arXiv" onclick="setFsSourceFilter('arXiv')">
+                    <span class="fs-tab-icon">📄</span> arXiv
+                </button>
+                <button class="fs-tab-btn" data-source="GitHub" onclick="setFsSourceFilter('GitHub')">
+                    <span class="fs-tab-icon">🐙</span> GitHub
+                </button>
+            </div>
+
+            <!-- Action Button Group -->
+            <div class="fs-action-group">
+                <button class="fs-btn-refresh" onclick="loadFsData(true)" title="重新整理列表與狀態">
+                    <span class="fs-btn-icon">🔄</span> 重新整理
+                </button>
+                <button id="fs-btn-trigger" class="fs-btn-trigger" onclick="triggerFsPatrol()" title="手動觸發一次抓取與 Discord 推播">
+                    <span class="fs-btn-icon">🚀</span> 手動立即巡邏
+                </button>
+            </div>
+        </div>
+
+        <!-- Feed List Section -->
+        <div class="fs-feed-section">
+            <div class="fs-feed-header">
+                <div class="fs-feed-title-wrap">
+                    <h3 class="fs-feed-title">📰 已推播情報精選清單</h3>
+                    <span id="fs-feed-count-badge" class="fs-badge fs-badge--info">共 0 篇</span>
+                </div>
+                <div id="fs-loading-indicator" class="fs-loading hidden">
+                    <span class="fs-spinner"></span> 正在載入情報庫...
+                </div>
+            </div>
+
+            <div id="fs-posts-container" class="fs-posts-container">
+                <!-- Dynamic Post Cards injected by feed_sentinel.js -->
+                <div class="fs-empty-state">
+                    <div class="fs-empty-icon">📡</div>
+                    <h3>尚未有推播文章或查無符合結果</h3>
+                    <p>哨兵會在每日 08:00~23:00 巡邏並自動推播最新 AI 突破至 Discord 頻道。</p>
+                </div>
+            </div>
+
+            <!-- Pagination Bar -->
+            <div id="fs-pagination" class="fs-pagination hidden">
+                <button id="fs-page-prev" class="fs-page-btn" onclick="changeFsPage(-1)">◀ 上一頁</button>
+                <span id="fs-page-info" class="fs-page-info">第 1 / 1 頁</span>
+                <button id="fs-page-next" class="fs-page-btn" onclick="changeFsPage(1)">下一頁 ▶</button>
+            </div>
+        </div>
+    </div>
+
+    <style>
+    /* ==========================================================================
+       Feed Sentinel Cyberpunk Glassmorphic Stylesheet
+       ========================================================================== */
+    .feed-sentinel-wrapper {
+        display: flex;
+        flex-direction: column;
+        gap: 22px;
+        padding-bottom: 50px;
+    }
+
+    /* ── Command Bar ── */
+    .fs-command-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        background: linear-gradient(135deg, rgba(15, 23, 42, 0.85) 0%, rgba(26, 36, 56, 0.8) 100%);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(56, 189, 248, 0.25);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        border-radius: 14px;
+        padding: 14px 18px;
+    }
+
+    .fs-search-box {
+        position: relative;
+        flex: 1 1 280px;
+        display: flex;
+        align-items: center;
+    }
+
+    .fs-search-icon {
+        position: absolute;
+        left: 14px;
+        font-size: 1rem;
+        opacity: 0.7;
+        pointer-events: none;
+        color: #38bdf8;
+    }
+
+    .fs-search-input {
+        width: 100%;
+        height: 42px;
+        background: rgba(10, 15, 29, 0.75);
+        border: 1px solid rgba(56, 189, 248, 0.2);
+        border-radius: 10px;
+        padding: 0 38px 0 42px;
+        color: #f8fafc;
+        font-size: 0.92rem;
+        font-family: inherit;
+        outline: none;
+        transition: all 0.25s ease;
+        box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
+    }
+
+    .fs-search-input:focus {
+        border-color: #38bdf8;
+        background: rgba(10, 15, 29, 0.95);
+        box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25), inset 0 2px 4px rgba(0, 0, 0, 0.2);
+    }
+
+    .fs-search-clear {
+        position: absolute;
+        right: 12px;
+        background: rgba(255, 255, 255, 0.1);
+        border: none;
+        color: #94a3b8;
+        cursor: pointer;
+        font-size: 0.85rem;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s;
+    }
+
+    .fs-search-clear:hover {
+        background: rgba(255, 255, 255, 0.2);
+        color: #ffffff;
+    }
+
+    /* ── Source Filter Tabs (Segmented Control) ── */
+    .fs-source-tabs {
+        display: flex;
+        align-items: center;
+        background: rgba(10, 15, 29, 0.85);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 10px;
+        padding: 4px;
+        gap: 4px;
+        box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.25);
+    }
+
+    .fs-tab-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 7px 14px;
+        font-size: 0.84rem;
+        font-weight: 600;
+        color: #94a3b8;
+        background: transparent;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .fs-tab-btn:hover {
+        color: #f8fafc;
+        background: rgba(255, 255, 255, 0.06);
+    }
+
+    .fs-tab-btn.active {
+        background: linear-gradient(135deg, #0284c7 0%, #38bdf8 100%);
+        color: #020617;
+        font-weight: 800;
+        box-shadow: 0 2px 10px rgba(56, 189, 248, 0.4);
+        transform: scale(1.02);
+    }
+
+    /* ── Action Buttons ── */
+    .fs-action-group {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .fs-btn-refresh {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 40px;
+        padding: 0 16px;
+        font-size: 0.86rem;
+        font-weight: 600;
+        color: #cbd5e1;
+        background: rgba(30, 41, 59, 0.7);
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        border-radius: 9px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+    }
+
+    .fs-btn-refresh:hover {
+        background: rgba(51, 65, 85, 0.9);
+        border-color: rgba(56, 189, 248, 0.4);
+        color: #ffffff;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(56, 189, 248, 0.2);
+    }
+
+    .fs-btn-trigger {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 40px;
+        padding: 0 18px;
+        font-size: 0.88rem;
+        font-weight: 800;
+        color: #020617;
+        background: linear-gradient(135deg, #0284c7 0%, #38bdf8 50%, #818cf8 100%);
+        border: none;
+        border-radius: 9px;
+        cursor: pointer;
+        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 0 0 16px rgba(56, 189, 248, 0.4), 0 2px 8px rgba(0, 0, 0, 0.3);
+        letter-spacing: 0.3px;
+    }
+
+    .fs-btn-trigger:hover {
+        filter: brightness(1.15);
+        transform: translateY(-2px);
+        box-shadow: 0 0 24px rgba(56, 189, 248, 0.65), 0 4px 12px rgba(0, 0, 0, 0.4);
+    }
+
+    .fs-btn-trigger:active {
+        transform: translateY(0);
+        filter: brightness(0.95);
+    }
+
+    .fs-btn-trigger:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+    }
+
+    /* ── Feed Section & Cards ── */
+    .fs-feed-section {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+    }
+
+    .fs-feed-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .fs-feed-title-wrap {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .fs-feed-title {
+        font-size: 1.2rem;
+        font-weight: 700;
+        margin: 0;
+        color: #f8fafc;
+        letter-spacing: 0.3px;
+    }
+
+    .fs-badge {
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-size: 0.78rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .fs-badge--info {
+        background: rgba(56, 189, 248, 0.15);
+        color: #38bdf8;
+        border: 1px solid rgba(56, 189, 248, 0.35);
+    }
+
+    .fs-badge--hf {
+        background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(217, 119, 6, 0.25));
+        border: 1px solid rgba(245, 158, 11, 0.45);
+        color: #fbbf24;
+    }
+
+    .fs-badge--arxiv {
+        background: linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(185, 28, 28, 0.25));
+        border: 1px solid rgba(239, 68, 68, 0.45);
+        color: #fca5a5;
+    }
+
+    .fs-badge--github {
+        background: linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(5, 150, 105, 0.25));
+        border: 1px solid rgba(34, 197, 94, 0.45);
+        color: #86efac;
+    }
+
+    .fs-loading {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.88rem;
+        color: #38bdf8;
+    }
+
+    .fs-spinner {
+        width: 16px;
+        height: 16px;
+        border: 2px solid rgba(56, 189, 248, 0.2);
+        border-top-color: #38bdf8;
+        border-radius: 50%;
+        animation: fs-spin 0.8s linear infinite;
+    }
+
+    @keyframes fs-spin {
+        to { transform: rotate(360deg); }
+    }
+
+    .fs-posts-container {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+    }
+
+    /* ── Post Card ── */
+    .fs-card {
+        background: linear-gradient(180deg, rgba(20, 27, 45, 0.9) 0%, rgba(13, 18, 30, 0.95) 100%);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(56, 189, 248, 0.18);
+        border-radius: 14px;
+        padding: 22px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .fs-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: 4px;
+        background: linear-gradient(180deg, #38bdf8, #6366f1);
+        opacity: 0.9;
+    }
+
+    .fs-card:hover {
+        border-color: rgba(56, 189, 248, 0.45);
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45), 0 0 20px rgba(56, 189, 248, 0.15);
+        transform: translateY(-2px);
+    }
+
+    .fs-card-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+    }
+
+    .fs-card-meta {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        font-size: 0.84rem;
+        color: #94a3b8;
+    }
+
+    .fs-card-time {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        color: #cbd5e1;
+    }
+
+    .fs-card-actions {
+        display: flex;
+        gap: 8px;
+    }
+
+    .fs-btn-copy {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 5px 12px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: #38bdf8;
+        background: rgba(56, 189, 248, 0.12);
+        border: 1px solid rgba(56, 189, 248, 0.3);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .fs-btn-copy:hover {
+        background: rgba(56, 189, 248, 0.25);
+        color: #ffffff;
+        box-shadow: 0 0 8px rgba(56, 189, 248, 0.4);
+    }
+
+    .fs-btn-delete {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 5px 10px;
+        font-size: 0.85rem;
+        color: #f87171;
+        background: rgba(239, 68, 68, 0.1);
+        border: 1px solid rgba(239, 68, 68, 0.25);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .fs-btn-delete:hover {
+        background: rgba(239, 68, 68, 0.25);
+        color: #ffffff;
+        border-color: #ef4444;
+    }
+
+    .fs-card-title {
+        font-size: 1.18rem;
+        font-weight: 700;
+        line-height: 1.45;
+        margin: 0;
+    }
+
+    .fs-card-title a {
+        color: #38bdf8;
+        text-decoration: none;
+        transition: color 0.2s;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .fs-card-title a:hover {
+        color: #7dd3fc;
+        text-decoration: underline;
+    }
+
+    .fs-card-tags {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+
+    .fs-tag-pill {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 6px;
+        padding: 3px 8px;
+        font-size: 0.74rem;
+        color: #cbd5e1;
+        font-weight: 500;
+    }
+
+    /* ── Highlights & Critique Boxes ── */
+    .fs-briefing-box {
+        background: rgba(10, 15, 29, 0.85);
+        border: 1px solid rgba(56, 189, 248, 0.2);
+        border-left: 4px solid #38bdf8;
+        border-radius: 10px;
+        padding: 16px 18px;
+        font-size: 0.92rem;
+        line-height: 1.7;
+        color: #e2e8f0;
+        box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.25);
+    }
+
+    .fs-briefing-box strong {
+        color: #7dd3fc;
+    }
+
+    .fs-raw-summary-details {
+        background: rgba(15, 23, 42, 0.5);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 8px;
+        padding: 10px 14px;
+        font-size: 0.85rem;
+        color: #94a3b8;
+        cursor: pointer;
+        transition: background 0.2s;
+    }
+
+    .fs-raw-summary-details:hover {
+        background: rgba(15, 23, 42, 0.8);
+    }
+
+    .fs-raw-summary-details summary {
+        font-weight: 600;
+        outline: none;
+        color: #cbd5e1;
+    }
+
+    .fs-raw-summary-content {
+        margin-top: 10px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        color: #94a3b8;
+        border-top: 1px dashed rgba(255, 255, 255, 0.08);
+        padding-top: 10px;
+    }
+
+    .fs-empty-state {
+        text-align: center;
+        padding: 70px 20px;
+        background: rgba(15, 23, 42, 0.5);
+        border: 1px dashed rgba(56, 189, 248, 0.2);
+        border-radius: 14px;
+        color: #94a3b8;
+    }
+
+    .fs-empty-icon {
+        font-size: 3.5rem;
+        margin-bottom: 14px;
+        opacity: 0.85;
+    }
+
+    /* ── Pagination ── */
+    .fs-pagination {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 16px;
+        margin-top: 16px;
+    }
+
+    .fs-page-btn {
+        display: inline-flex;
+        align-items: center;
+        padding: 6px 16px;
+        font-size: 0.84rem;
+        font-weight: 600;
+        color: #cbd5e1;
+        background: rgba(30, 41, 59, 0.7);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .fs-page-btn:hover:not(:disabled) {
+        background: rgba(51, 65, 85, 0.9);
+        color: #ffffff;
+        border-color: #38bdf8;
+    }
+
+    .fs-page-btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+    }
+
+    .fs-page-info {
+        font-size: 0.88rem;
+        font-weight: 600;
+        color: #94a3b8;
+    }
+    </style>
+</div>

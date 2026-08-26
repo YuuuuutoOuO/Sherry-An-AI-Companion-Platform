@@ -1,0 +1,16 @@
+[importlinter]
+root_package = mod
+
+[importlinter:contract:1]
+name = Service 層不可直接 import I/O 套件
+type = forbidden
+source_modules =
+    mod
+forbidden_modules =
+    sqlite3
+    requests
+    aiohttp
+    discord
+ignore_imports =
+    mod.clients.* -> *
+    mod.repositories.* -> *

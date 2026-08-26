@@ -1,0 +1,62 @@
+<!-- ===== DASHBOARD VIEW (DEFAULT LANDING PAGE) ===== -->
+<div class="view active" id="view-dashboard">
+    <div class="dashboard-wrapper">
+        <!-- Dashboard Banner -->
+        <div class="dashboard-banner">
+            <div>
+                <h2 class="dashboard-banner-title">🔵 雪莉名偵探 控制台總覽</h2>
+                <p class="dashboard-banner-sub">歡迎回來！此處為雪莉即時運轉狀態與 Git 代碼庫版本之中央視窗看板。</p>
+            </div>
+            <div class="dashboard-banner-right">
+                <span class="service-badge service-online" id="dashboard-version-tag">v1.4.1</span>
+            </div>
+        </div>
+
+        <!-- Git Status & Version Card -->
+        <div id="dashboard-git-container" class="dashboard-git-container">
+            <div class="placeholder-msg">正在載入 Git 版本與代碼庫狀態...</div>
+        </div>
+
+        <!-- 4 Core Status Grid -->
+        <div id="dashboard-core-grid" class="dashboard-core-grid">
+            <div class="placeholder-msg">正在載入核心狀態指標...</div>
+        </div>
+
+        <!-- Quick Navigation Jumps -->
+        <div class="dashboard-quicknav">
+            <h3 class="dashboard-quicknav-title">🚀 快捷觀測與功能跳轉</h3>
+            <div class="dashboard-quicknav-grid">
+                <div class="quick-card" onclick="switchView('chat')">
+                    <div class="quick-card-icon">💬</div>
+                    <div class="quick-card-name">雪莉測試室</div>
+                    <div class="quick-card-desc">測試對話與意圖觸發</div>
+                </div>
+                <div class="quick-card" onclick="switchView('bot-status')">
+                    <div class="quick-card-icon">🎵</div>
+                    <div class="quick-card-name">語音與音樂監控</div>
+                    <div class="quick-card-desc">查看語音房間與播放動態</div>
+                </div>
+                <div class="quick-card" onclick="switchView('tasks')">
+                    <div class="quick-card-icon">🧠</div>
+                    <div class="quick-card-name">大腦推理與排程</div>
+                    <div class="quick-card-desc">大腦 LLM 佇列與提醒</div>
+                </div>
+                <div class="quick-card" onclick="switchView('services')">
+                    <div class="quick-card-icon">📡</div>
+                    <div class="quick-card-name">地端 AI 服務診斷</div>
+                    <div class="quick-card-desc">Ollama / LMS / SD 狀態</div>
+                </div>
+                <div class="quick-card" onclick="switchView('logs')">
+                    <div class="quick-card-icon">📋</div>
+                    <div class="quick-card-name">即時日誌明細</div>
+                    <div class="quick-card-desc">檢視 runtime_log 落盤</div>
+                </div>
+                <div class="quick-card" onclick="switchView('settings')">
+                    <div class="quick-card-icon">⚙️</div>
+                    <div class="quick-card-name">系統與靈魂設定</div>
+                    <div class="quick-card-desc">模型選取與人設調整</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

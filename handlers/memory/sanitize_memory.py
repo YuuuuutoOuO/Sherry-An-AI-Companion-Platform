@@ -38,6 +38,7 @@ from handlers.memory.storage import (
     sanitize_and_merge_facts,
     MAX_FACTS_PER_USER,
     UserMemoryStore,
+    UserFact,
 )
 from handlers.memory.chat_logger import read_chat_log
 
@@ -315,7 +316,8 @@ async def _call_llm_direct(system_prompt: str, user_prompt: str, uid: str) -> di
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         if m:
             raw = m.group(0)
-        return json.loads(raw)
+        res = json.loads(raw)
+        return res if isinstance(res, dict) else None
     except Exception as e:
         logger.warning("[重建] uid=%s LLM 呼叫失敗: %s", uid, e)
         return None

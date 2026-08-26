@@ -10,14 +10,16 @@ import asyncio
 import logging
 import random
 import re
+from typing import Any
 import discord
 from discord.ext import commands
 
 import settings
 from handlers.bot_brain import BotBrain, InferenceTask
+from handlers.social.contracts import ToolCategory, ToolResult
 from handlers.social.memory_builder import build_user_memory_block
 from handlers.social.persona import build_dynamic_persona
-from handlers.social.tool_base import BaseTool
+from handlers.social.tool_base import BaseTool, ToolResponseMode
 from handlers.social.tools.search_tools import fetch_web_and_entity_context
 from handlers.social.utils import simulate_typing_and_send
 
@@ -74,10 +76,11 @@ class ChatTool(BaseTool):
         vibe_snippet: str,
         full_context: str,
         **kwargs: object,
-    ) -> None:
-        brain: BotBrain | None = bot.get_cog("BotBrain")
-        if not brain:
-            return
+    ) -> ToolResult | str | None:
+        brain_cog = bot.get_cog("BotBrain")
+        if not brain_cog:
+            return ToolResult.error("BotBrain 未就緒。")
+        brain: Any = brain_cog
 
         # ── 檢查是否需要即時網路/實體檢索 ───────────────────────────────
         web_context = ""
@@ -111,8 +114,15 @@ class ChatTool(BaseTool):
             "⚠️【情報整合分析指令】：請參考上述『即時網路與實體檢索情報』，結合事實數據與妳的名偵探動態性格，為對方給出深入且充滿特色的解答與分析！\n\n"
         ) if web_context else ""
 
+        # ── 提取多模態圖片（若有）─────────────────────────────────────
+        raw_images = kwargs.get("images")
+        images: list[str] | None = [str(x) for x in raw_images] if isinstance(raw_images, list) else None
+
         # ── 第五層：高優先度尾注與回覆規則 ───────────────────────────────
-        author_note = f"\n{tail_lore}\n" if tail_lore else ""
+        vision_self_lore = (
+            "\n【多模態視覺自我感知提示】：若使用者傳入的圖片中出現淺藍/藍色髮色、丸子頭/甜甜圈髮髻、白鳥羽毛帽、福爾摩斯偵探斗篷/披風等特徵的少女，這就是妳自己（橘雪莉）！請以名偵探看到自己自拍或同人圖的視角自然回應。\n"
+        ) if images else ""
+        author_note = f"\n{tail_lore}\n{vision_self_lore}" if (tail_lore or vision_self_lore) else ""
 
         if self.can_handle_by_regex(recent_text):
             length_rule = "2. 【性愛與調戲特權解除】：這是一場延續的色情或曖昧話題！請延續這個氣氛，盡情釋放狂氣與慾望！可以多講幾句，大膽露骨且無下限地用言語反擊、迎合或調戲對方，展現妳的瘋狂，絕對不要只講一兩句話敷衍！"
@@ -137,8 +147,7 @@ class ChatTool(BaseTool):
             "1. 🎯 將 100% 注意力集中在『當下必須回應的目標』，給出最直接的回覆。\n"
             f"{length_rule}\n"
             "3. 不知道的事請直說，不要臆造資訊。\n"
-            "4. 只輸出橘雪莉說的話，不要任何標籤、前綴。\n"
-            "5. 絕對禁止使用 Markdown 格式 (包含反引號、粗體等)。"
+            "4. 除了 <thought>...</thought> 思考標籤外，不要輸出其他多餘的標籤或人名前綴（如『雪莉：』）。"
         )
 
         salts = [
@@ -163,7 +172,7 @@ class ChatTool(BaseTool):
         start_time = time.time()
 
         loop = asyncio.get_running_loop()
-        reply_future: asyncio.Future[None] = loop.create_future()
+        reply_future: asyncio.Future[str] = loop.create_future()
 
         async def _on_reply(reply: str) -> None:
             try:
@@ -181,11 +190,12 @@ class ChatTool(BaseTool):
                     user_prompt=user_instruct,
                     latency_ms=elapsed_ms,
                 )
+                if not reply_future.done():
+                    reply_future.set_result(final_reply)
             except Exception as e:
                 logger.error("ChatTool: _on_reply 處理失敗: %s", e, exc_info=True)
-            finally:
                 if not reply_future.done():
-                    reply_future.set_result(None)
+                    reply_future.set_result("")
 
         task = InferenceTask(
             priority=settings.PRIORITY_TAG_RESPONSE,
@@ -194,10 +204,13 @@ class ChatTool(BaseTool):
             callback=_on_reply,
             model=settings.PRIMARY_MODEL,
             task_id=f"tool-chat-{message.id}",
+            images=images,
         )
         await brain.enqueue_task(task)
 
         try:
-            await asyncio.wait_for(reply_future, timeout=float(settings.OLLAMA_TIMEOUT))
+            res_text = await asyncio.wait_for(reply_future, timeout=float(settings.OLLAMA_TIMEOUT))
+            return ToolResult.success(res_text, is_direct_rendered=True)
         except asyncio.TimeoutError:
             logger.warning("ChatTool: 等待回覆發送逾時 (%ds)", settings.OLLAMA_TIMEOUT)
+            return ToolResult.error("等待回覆發送逾時", is_direct_rendered=False)

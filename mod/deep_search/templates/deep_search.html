@@ -1,0 +1,139 @@
+<!-- ===== DEEP SEARCH VIEW ===== -->
+<div class="view hidden" id="view-deep-search">
+    <div class="deep-search-wrapper">
+        <!-- Banner -->
+        <div class="view-banner view-banner--purple-blue">
+            <div class="view-banner-inner">
+                <div class="view-banner-avatar-wrap">
+                    <img src="/static/sherry_avatar.png" alt="Sherry Deep Research" class="view-banner-avatar">
+                    <span class="view-banner-avatar-tag">🔬 智庫研究模式</span>
+                </div>
+                <div class="view-banner-content">
+                    <h2 class="view-banner-title">🔬 地端 LLM / SLM 深度研究控制台</h2>
+                    <div class="view-banner-quote">
+                        <p class="view-banner-quote-text">「探索地端小模型的研究推演極限：多輪維度拆解、連網文獻精讀、批判性反思與論文級報告產出。」</p>
+                        <p class="view-banner-quote-meta">嚴格無人格提示詞 | 支援 10~30 分鐘深思 | 自動化 DuckDuckGo 檢索與 trafilatura 去噪精讀</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3 Stat Metric Cards -->
+        <div class="st-stat-grid ds-stat-grid">
+            <div class="st-stat-card">
+                <div class="st-stat-label">⏳ 進行中深度研究</div>
+                <div id="ds-stat-active" class="st-stat-value st-stat-value--blue">0</div>
+                <div id="ds-stat-active-sub" class="st-stat-sub">即時多輪背景推演中</div>
+            </div>
+            <div class="st-stat-card">
+                <div class="st-stat-label">📑 累計完成報告</div>
+                <div id="ds-stat-completed" class="st-stat-value st-stat-value--green">0</div>
+                <div id="ds-stat-completed-sub" class="st-stat-sub">可隨時檢閱完整 Markdown</div>
+            </div>
+            <div class="st-stat-card">
+                <div class="st-stat-label">📚 已精讀檢索文獻庫</div>
+                <div id="ds-stat-sources" class="st-stat-value st-stat-value--yellow">0 篇</div>
+                <div id="ds-stat-sources-sub" class="st-stat-sub">全網即時去噪事實數據</div>
+            </div>
+        </div>
+
+        <!-- Main Workspace Grid -->
+        <div class="ds-workspace-grid">
+            <!-- Left Column: Session List -->
+            <div class="ds-sessions-pane">
+                <div class="ds-pane-header">
+                    <h3 class="ds-pane-title">📋 研究專案歷程</h3>
+                    <button class="btn-primary-small" onclick="openDeepSearchModal()">＋ 發起研究</button>
+                </div>
+                <div id="ds-sessions-list" class="ds-sessions-list">
+                    <div class="text-muted ds-empty-hint">載入研究專案中...</div>
+                </div>
+            </div>
+
+            <!-- Right Column: Detail / Thought Stream / Report -->
+            <div class="ds-detail-pane">
+                <!-- Session Header Info -->
+                <div id="ds-detail-header" class="ds-detail-header hidden">
+                    <div class="ds-detail-header-top">
+                        <div class="ds-detail-topic-wrap">
+                            <span id="ds-detail-status-badge" class="ds-status-badge">RUNNING</span>
+                            <h2 id="ds-detail-topic" class="ds-detail-topic-title">研究主題</h2>
+                        </div>
+                        <div class="ds-detail-actions">
+                            <button id="ds-btn-cancel" class="btn-cancel-small hidden" onclick="cancelCurrentDeepSearch()">🛑 終止研究</button>
+                            <button id="ds-btn-delete" class="btn-delete-small" onclick="deleteCurrentDeepSearch()">🗑️ 刪除專案</button>
+                        </div>
+                    </div>
+
+                    <div class="ds-meta-row">
+                        <span class="ds-meta-item">🤖 模型：<strong id="ds-detail-model">-</strong></span>
+                        <span class="ds-meta-item">⏱️ 開始時間：<span id="ds-detail-started">-</span></span>
+                        <span class="ds-meta-item">🆔 識別碼：<code id="ds-detail-id">-</code></span>
+                    </div>
+
+                    <!-- Progress Bar -->
+                    <div class="ds-progress-wrap">
+                        <div class="ds-progress-header">
+                            <span id="ds-detail-step" class="ds-step-text">正在規劃研究綱領...</span>
+                            <span id="ds-detail-pct" class="ds-pct-text">0%</span>
+                        </div>
+                        <div class="ds-progress-bar-bg">
+                            <div id="ds-detail-progress-fill" class="ds-progress-bar-fill" style="width: 0%;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Empty State (when no session selected) -->
+                <div id="ds-detail-empty" class="ds-empty-workspace">
+                    <div class="ds-empty-icon">🔬</div>
+                    <h3>請從左側選擇或發起一項深度研究專案</h3>
+                    <p>雪莉將在地端啟動多輪思考，連網檢索大量文獻並進行深度反思與報告撰寫。</p>
+                    <button class="btn-primary" onclick="openDeepSearchModal()" style="margin-top: 15px;">🚀 發起新研究主題</button>
+                </div>
+
+                <!-- Active Content Container -->
+                <div id="ds-detail-content" class="ds-detail-content hidden">
+                    <!-- Tab Switcher -->
+                    <div class="ds-tabs">
+                        <button class="ds-tab-btn active" id="ds-tab-btn-thoughts" onclick="switchDsTab('thoughts')">
+                            🧠 思考推演軌跡 (<span id="ds-tab-thoughts-count">0</span>)
+                        </button>
+                        <button class="ds-tab-btn" id="ds-tab-btn-report" onclick="switchDsTab('report')">
+                            📑 專案研究報告
+                        </button>
+                        <button class="ds-tab-btn" id="ds-tab-btn-sources" onclick="switchDsTab('sources')">
+                            🌐 引用文獻來源 (<span id="ds-tab-sources-count">0</span>)
+                        </button>
+                    </div>
+
+                    <!-- Tab 1: Live Thought & Reasoning Stream -->
+                    <div class="ds-tab-pane" id="ds-tab-thoughts">
+                        <div id="ds-thought-timeline" class="ds-timeline">
+                            <!-- Injected by JavaScript -->
+                        </div>
+                    </div>
+
+                    <!-- Tab 2: Full Markdown Master Report -->
+                    <div class="ds-tab-pane hidden" id="ds-tab-report">
+                        <div class="ds-report-card">
+                            <div class="ds-report-toolbar">
+                                <span class="ds-report-meta" id="ds-report-meta">未完成報告</span>
+                                <button class="btn-update" onclick="copyDeepSearchReportMarkdown()">📋 複製 Markdown 報告</button>
+                            </div>
+                            <div id="ds-report-body" class="ds-report-body markdown-body">
+                                <div class="text-muted">研究推演進行中，報告將在多輪精讀與反思完成後生成...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 3: Sources & Citations -->
+                    <div class="ds-tab-pane hidden" id="ds-tab-sources">
+                        <div id="ds-sources-container" class="ds-sources-grid">
+                            <!-- Injected by JavaScript -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

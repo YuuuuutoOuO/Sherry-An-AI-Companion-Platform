@@ -8,19 +8,11 @@ import sys
 import importlib.util
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 os.environ.setdefault("DISCORD_BOT_TOKEN", "dummy_token_for_test")
 
 import settings
-
-# 動態載入 handlers/social/persona.py
-spec = importlib.util.spec_from_file_location("persona", str(Path(__file__).resolve().parent.parent / "handlers" / "social" / "persona.py"))
-assert spec is not None and spec.loader is not None
-persona_mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(persona_mod)
-
-build_dynamic_persona = persona_mod.build_dynamic_persona
-_load_soul_persona = persona_mod._load_soul_persona
+from handlers.social.persona import build_dynamic_persona, _load_soul_persona
 
 
 def test_default_soul_load():

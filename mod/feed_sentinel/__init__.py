@@ -14,7 +14,17 @@ MOD_INFO = {
     "name": "📡 AI 社群情報哨兵",
     "icon": "📡",
     "description": "監聽 HuggingFace / arXiv / GitHub 最新 AI 突破，提煉 3 點繁中精華與雪莉銳評推播至 Discord。",
-    "version": "1.0.0",
+    "category": "情報 / Intelligence",
+    "version": "1.1.0",
+    "author": "Sherry Team",
+    "has_web_ui": True,
+    "nav_id": "feed-sentinel",
+    "nav_title": "社群情報哨兵",
+    "nav_icon": "📡",
+    "view_title": "📡 AI 社群情報哨兵主控台",
+    "admin_only": False,
+    "order": 55,
+    "script_file": "feed_sentinel.js",
 }
 
 __all__ = ["MOD_INFO"]

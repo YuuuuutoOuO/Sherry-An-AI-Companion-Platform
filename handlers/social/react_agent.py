@@ -20,18 +20,19 @@ import io
 import json
 import logging
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import discord
 from discord.ext import commands
 
 import settings
 from handlers.bot_brain import BotBrain, InferenceTask
-from handlers.social.persona import build_dynamic_persona
+from handlers.social.contracts import ToolCategory, ToolResult
 from handlers.social.memory_builder import build_user_memory_block
-from handlers.social.utils import simulate_typing_and_send, remove_hourglass_reaction
-from handlers.social.tool_base import BaseTool
 from handlers.social.observability import log_event
+from handlers.social.persona import build_dynamic_persona
+from handlers.social.tool_base import BaseTool, ToolResponseMode
+from handlers.social.utils import remove_hourglass_reaction, simulate_typing_and_send
 
 if TYPE_CHECKING:
     pass
@@ -254,6 +255,7 @@ class ReactAgentTool(BaseTool):
         step: int,
         model: str | None = None,
         temperature: float | None = None,
+        images: list[str] | None = None,
     ) -> str:
         """向 BotBrain 發送推理任務，等待並回傳結果。
 
@@ -265,6 +267,7 @@ class ReactAgentTool(BaseTool):
             step: 當前步驟編號。
             model: 指定使用之 LLM 模型名稱，未指定則使用 settings.REACT_MODEL。
             temperature: 採樣溫度，ReAct 規劃階段預設 0.1。
+            images: 多模態圖片 Base64 列表（若有）。
 
         Returns:
             LLM 生成的文字。
@@ -287,6 +290,7 @@ class ReactAgentTool(BaseTool):
             model=target_model,
             task_id=f"react-step{step}-{message_id}",
             temperature=target_temp,
+            images=images,
         )
         await brain.enqueue_task(task)
 
@@ -308,6 +312,7 @@ class ReactAgentTool(BaseTool):
         vibe_snippet: str = "",
         full_context: str = "",
         draft_answer: str = "",
+        images: list[str] | None = None,
     ) -> tuple[str, str, str, str]:
         """使用 PRIMARY_MODEL（主力模型）合成最終給使用者的對話文本。
 
@@ -325,7 +330,11 @@ class ReactAgentTool(BaseTool):
             f"{vibe_snippet}\n\n"
         ) if vibe_snippet else ""
 
-        author_note = f"\n{tail_lore}\n" if tail_lore else ""
+        vision_self_lore = (
+            "\n【多模態視覺自我感知提示】：若使用者傳入的圖片中出現淺藍/藍色髮色、丸子頭/甜甜圈髮髻、白鳥羽毛帽、福爾摩斯偵探斗篷/披風等特徵的少女，這就是妳自己（橘雪莉）！請以名偵探看到自己自拍或同人圖的視角自然回應。\n"
+        ) if images else ""
+
+        author_note = f"\n{tail_lore}\n{vision_self_lore}" if (tail_lore or vision_self_lore) else ""
 
         length_rule = (
             "2. 【豐富生動的對話】：請像個話多、熱情又愛互動的 15 歲台灣女高中生一樣聊天！"
@@ -369,6 +378,7 @@ class ReactAgentTool(BaseTool):
             step=99,
             model=settings.PRIMARY_MODEL,
             temperature=getattr(settings, "LLM_TEMPERATURE", 0.85),
+            images=images,
         )
 
         persona_thought = _extract_xml_tag(reply, "thought") or ""
@@ -389,6 +399,7 @@ class ReactAgentTool(BaseTool):
         message: discord.Message,
         vibe_snippet: str,
         full_context: str,
+        images: list[str] | None = None,
     ) -> str:
         """呼叫指定工具，以 silent=True 模式執行並收集結果。
 
@@ -399,6 +410,7 @@ class ReactAgentTool(BaseTool):
             message: 觸發訊息。
             vibe_snippet: 氛圍摘要。
             full_context: 完整上下文。
+            images: 多模態圖片列表（若有）。
 
         Returns:
             工具執行的觀察結果字串。
@@ -412,10 +424,15 @@ class ReactAgentTool(BaseTool):
             result = await tool.execute(
                 bot, message, action_input, vibe_snippet, full_context,
                 silent=True,
+                images=images,
             )
-            if result is None:
-                return f"工具 {canonical_name} 執行完畢（無文字回傳）。"
-            return str(result)[:settings.REACT_MAX_OBSERVATION_LENGTH]
+            if isinstance(result, ToolResult):
+                obs = result.summary_text
+            elif result is None:
+                obs = f"工具 {canonical_name} 執行完畢（無文字回傳）。"
+            else:
+                obs = str(result)
+            return obs[:settings.REACT_MAX_OBSERVATION_LENGTH]
         except Exception as exc:
             logger.error("ReactAgent 工具 %s (canonical=%s) 執行失敗: %s", tool_name, canonical_name, exc)
             return f"工具 {canonical_name} 執行時發生錯誤：{exc}"
@@ -428,7 +445,7 @@ class ReactAgentTool(BaseTool):
         vibe_snippet: str,
         full_context: str,
         **kwargs: object,
-    ) -> None:
+    ) -> ToolResult | str | None:
         """ReAct Agent 主迴圈。
 
         Args:
@@ -437,14 +454,18 @@ class ReactAgentTool(BaseTool):
             user_query: 使用者的原始文字。
             vibe_snippet: 頻道近期氛圍摘要。
             full_context: 含上下文的完整提示文本。
+            **kwargs: 包含 images (list[str]) 等擴充參數。
         """
+        raw_images = kwargs.get("images")
+        images: list[str] | None = [str(x) for x in raw_images] if isinstance(raw_images, list) else None
         import time
         start_time = time.time()
 
-        brain: BotBrain | None = bot.get_cog("BotBrain")
-        if not brain:
+        brain_cog = bot.get_cog("BotBrain")
+        if not brain_cog:
             logger.error("ReactAgent: BotBrain 未就緒")
-            return
+            return None
+        brain: Any = brain_cog
 
         channel_id = message.channel.id
         user_id    = message.author.id
@@ -548,7 +569,7 @@ class ReactAgentTool(BaseTool):
                 # 執行真實工具
                 observation = await self._execute_tool(
                     tool_name, action_input, bot, message,
-                    vibe_snippet, full_context,
+                    vibe_snippet, full_context, images=images,
                 )
                 obs_str = _OBSERVATION_TEMPLATE.format(
                     tool=tool_name, result=observation
@@ -590,7 +611,7 @@ class ReactAgentTool(BaseTool):
                     latency_ms=elapsed_ms,
                     tools_invoked=[only_tool],
                 )
-                return
+                return None
 
         final_speech, persona_thought, final_sys_prompt, final_user_prompt = await self._generate_final_response(
             brain=brain,
@@ -603,6 +624,7 @@ class ReactAgentTool(BaseTool):
             vibe_snippet=vibe_snippet,
             full_context=full_context,
             draft_answer=final_answer or "",
+            images=images,
         )
 
         elapsed_ms = int((time.time() - start_time) * 1000)
@@ -630,6 +652,7 @@ class ReactAgentTool(BaseTool):
                     system_prompt=final_sys_prompt,
                     user_prompt=final_user_prompt,
                     latency_ms=elapsed_ms,
+                    thought_log=full_cot_thought,
                 )
                 log_event(
                     "chat_reply",
@@ -645,12 +668,13 @@ class ReactAgentTool(BaseTool):
                     latency_ms=elapsed_ms,
                     tools_invoked=[t[0] for t in executed_observations],
                 )
-                return
+                return None
 
         # ── Fallback：若主力模型無輸出，改用 ChatTool 兜底 ──────────────────
         logger.warning("ReactAgent: 主力模型對話無輸出，改用 ChatTool 兜底")
         chat_tool = self._tools.get("CHAT")
         if chat_tool:
             await chat_tool.execute(
-                bot, message, user_query, vibe_snippet, full_context
+                bot, message, user_query, vibe_snippet, full_context, images=images
             )
+        return None

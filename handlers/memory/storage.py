@@ -40,9 +40,9 @@ UserMemoryStore = dict[str, UserProfile]
 RelationshipMemoryStore = dict[str, list[RelationshipFact]]
 
 # Prompt 注入：每次只取最重要的事實數
-MAX_FACTS_IN_CONTEXT: int = getattr(settings, "MEMORY_MAX_FACTS_IN_CONTEXT", 5)
+MAX_FACTS_IN_CONTEXT: int = getattr(settings, "MEMORY_MAX_FACTS_IN_CONTEXT", 15)
 # 每位使用者最多保留的事實數（即時萃取）
-MAX_FACTS_PER_USER: int = getattr(settings, "MEMORY_MAX_FACTS_PER_USER", 15)
+MAX_FACTS_PER_USER: int = getattr(settings, "MEMORY_MAX_FACTS_PER_USER", 25)
 # importance >= 此值的事實永久保留（不受上限與衰減影響）
 PERMANENT_FACT_THRESHOLD: int = getattr(settings, "MEMORY_PERMANENT_FACT_THRESHOLD", 4)
 
@@ -55,8 +55,17 @@ _ALIAS_BLACKLIST: set[str] = {
     "你", "我", "誰", "某某", "某個", "那個人", "大家說", "有人", "None", "null",
 }
 
+# 舊分類 → 新分類向下相容對映字典
+_CATEGORY_MIGRATION: dict[str, str] = {
+    "interest": "preference",
+    "relationship": "social",
+    "opinion": "rule",
+}
+
 _VALID_CATEGORIES: set[str] = {
-    "identity", "interest", "habit", "relationship", "opinion",
+    "identity", "preference", "habit", "social", "rule",
+    # 向下相容舊分類（遷移期保留）
+    "interest", "relationship", "opinion",
 }
 
 
@@ -87,6 +96,7 @@ def _migrate_fact(raw: Any) -> UserFact | None:
         if not fact_str:
             return None
         cat = str(raw.get("category", "identity")).strip().lower()
+        cat = _CATEGORY_MIGRATION.get(cat, cat)
         if cat not in _VALID_CATEGORIES:
             cat = "identity"
         return UserFact(
@@ -104,12 +114,13 @@ def make_fact(fact_text: str, importance: int = 3, category: str = "identity") -
     Args:
         fact_text: 事實內容文字。
         importance: 重要性數值（1~5）。
-        category: 主題分類（identity/interest/habit/relationship/opinion）。
+        category: 主題分類（identity/preference/habit/social/rule）。
 
     Returns:
         標準化後的 UserFact 物件。
     """
     cat = category.strip().lower() if isinstance(category, str) else "identity"
+    cat = _CATEGORY_MIGRATION.get(cat, cat)
     if cat not in _VALID_CATEGORIES:
         cat = "identity"
     return UserFact(
@@ -345,6 +356,7 @@ def sanitize_and_merge_facts(
             fact_text = str(rf.get("fact", "")).strip()
             importance = int(rf.get("importance", 3))
             category = str(rf.get("category", "identity")).strip().lower()
+            category = _CATEGORY_MIGRATION.get(category, category)
         else:
             continue
 
@@ -396,14 +408,15 @@ def get_diverse_facts_for_context(
 ) -> list[UserFact]:
     """從使用者的 facts 中挑選兼具重要性與類別多樣性的事實注入 Prompt。
 
-    避免相同主題或單一類別的事實佔據所有注入名額。
+    rule 類別（使用者對雪莉的明確要求）全數優先注入，不佔 max_count 名額。
+    其餘名額按 preference → habit → identity → social 輪替取樣。
 
     Args:
         facts: 該使用者的全部事實清單。
-        max_count: 最多選取的事實數量（預設 MAX_FACTS_IN_CONTEXT = 5）。
+        max_count: 非 rule 類最多選取的事實數量。
 
     Returns:
-        精選後的多樣化事實清單，按 importance 降序排列。
+        精選後的事實清單：rule 類在前，其餘按 importance 降序排列。
     """
     if not facts:
         return []
@@ -414,14 +427,23 @@ def get_diverse_facts_for_context(
     # 2. 依 category 分組
     by_category: dict[str, list[UserFact]] = {}
     for f in sorted_by_imp:
-        cat = f.get("category", "identity")
+        raw_cat = f.get("category", "identity")
+        cat = _CATEGORY_MIGRATION.get(raw_cat, raw_cat)
         by_category.setdefault(cat, []).append(f)
 
-    # 3. 輪替取樣（Round-Robin）：每個類別優先取 1 條最高 importance
+    # 3. rule 類全數優先（不計入 max_count）
+    rule_facts: list[UserFact] = by_category.pop("rule", [])
+
+    # 4. 其餘類別輪替取樣（Round-Robin）
     selected: list[UserFact] = []
     selected_texts: set[str] = set()
+    rotation_order = [
+        "preference", "habit", "identity", "social",
+        # 向下相容舊分類名稱（遷移期）
+        "interest", "relationship", "opinion",
+    ]
 
-    for cat in ["interest", "relationship", "identity", "habit", "opinion"]:
+    for cat in rotation_order:
         if len(selected) >= max_count:
             break
         cat_facts = by_category.get(cat, [])
@@ -431,20 +453,23 @@ def get_diverse_facts_for_context(
                 selected.append(best)
                 selected_texts.add(best["fact"])
 
-    # 4. 若名額未滿，從剩餘 facts 中按 importance 依序補足，同時避免高相似度事實
+    # 5. 若名額未滿，從剩餘 facts 中按 importance 依序補足，同時避免高相似度事實
     if len(selected) < max_count:
         for f in sorted_by_imp:
             if len(selected) >= max_count:
                 break
-            if f["fact"] in selected_texts:
+            raw_cat = f.get("category", "identity")
+            cat = _CATEGORY_MIGRATION.get(raw_cat, raw_cat)
+            if f["fact"] in selected_texts or cat == "rule":
                 continue
             # 檢查是否與已選入的事實過度相似
             if not any(calculate_fact_similarity(f["fact"], s["fact"]) >= 0.6 for s in selected):
                 selected.append(f)
                 selected_texts.add(f["fact"])
 
-    # 最後依 importance 降序返回
-    return sorted(selected, key=lambda f: f.get("importance", 3), reverse=True)
+    # rule 置頂，其餘依 importance 降序
+    non_rule_sorted = sorted(selected, key=lambda f: f.get("importance", 3), reverse=True)
+    return rule_facts + non_rule_sorted
 
 
 # ---------------------------------------------------------------------------

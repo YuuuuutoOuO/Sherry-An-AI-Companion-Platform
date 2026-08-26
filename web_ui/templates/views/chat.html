@@ -1,0 +1,30 @@
+<!-- ===== CHAT VIEW (測試專區) ===== -->
+<div class="view hidden" id="view-chat">
+    <div class="chat-test-wrapper">
+        <div class="chat-header-banner">
+            <div class="chat-header-info">
+                <h3>💬 雪莉穩定性測試室 <span class="badge-intent">強制觸發：CHAT</span></h3>
+                <p>此介面會直接調用後端 <strong>BotBrain</strong> 進行推理，完全繞過分類器並保證觸發 <strong>CHAT</strong> 意圖，供您即時測試模型穩定性與回覆速度。</p>
+            </div>
+            <div class="chat-header-actions">
+                <button class="btn-clear-chat admin-only" onclick="clearChatHistory()">🗑️ 清空紀錄</button>
+            </div>
+        </div>
+        <div class="chat-messages-container" id="chat-messages">
+            <div class="chat-msg bot-msg">
+                <div class="chat-avatar">🔵</div>
+                <div class="chat-bubble">
+                    <div class="chat-sender">雪莉 Sherry <span class="chat-tag">System Ready</span></div>
+                    <div class="chat-text">嗨！我是雪莉 🔵！這裡是穩定性與生成測試專區，不管你說什麼都會直接觸發 <b>CHAT</b> 意圖並由我親自回答喔！測試看看吧～✨</div>
+                </div>
+            </div>
+        </div>
+        <div class="chat-input-row admin-only">
+            <input type="text" id="chat-input" class="chat-input" placeholder="輸入測試訊息與雪莉聊聊 (按 Enter 發送)..." onkeydown="if(event.key==='Enter') sendTestChat()">
+            <button class="btn-send-chat" id="chat-send-btn" onclick="sendTestChat()"><span>🚀</span> 發送</button>
+        </div>
+        <div class="chat-guest-notice" id="chat-guest-notice" style="display: none;">
+            🔒 為了系統穩定與資安，測試聊天室僅限「管理員模式」下使用，請於上方點擊「🔐 管理員登入」。
+        </div>
+    </div>
+</div>

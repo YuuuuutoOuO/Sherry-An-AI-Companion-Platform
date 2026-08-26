@@ -10,7 +10,6 @@ AI 社群情報哨兵 Cog。
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from datetime import datetime, timezone, timedelta
@@ -26,7 +25,8 @@ from handlers.social.persona import build_dynamic_persona
 
 from . import config
 from .fetcher import fetch_all_feeds
-from .models import FeedItem
+from .models import FeedItem, SharedPost
+from .repository import SentinelRepository
 
 logger = logging.getLogger(__name__)
 
@@ -34,39 +34,36 @@ TAIWAN_TZ = timezone(timedelta(hours=8))
 
 
 def _load_seen_ids() -> set[str]:
-    """載入已推播過的情報 ID 集合。"""
-    if config.SEEN_PATH.exists():
-        try:
-            raw = config.SEEN_PATH.read_text(encoding="utf-8")
-            data = json.loads(raw)
-            if isinstance(data, list):
-                return set(data)
-        except Exception as exc:
-            logger.warning("[FeedSentinel] 讀取 sentinel_seen.json 異常: %s", exc)
-    return set()
+    """[相容性保留] 載入已推播過的情報 ID 集合。"""
+    repo = SentinelRepository()
+    return set(repo._seen_keys)
 
 
 def _save_seen_ids(seen_ids: set[str]) -> None:
-    """持久化已推播情報 ID 集合（保留最新 500 筆防止無限制膨脹）。"""
-    try:
-        trimmed = list(seen_ids)[-500:]
-        config.SEEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-        config.SEEN_PATH.write_text(
-            json.dumps(trimmed, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except Exception as exc:
-        logger.warning("[FeedSentinel] 寫入 sentinel_seen.json 異常: %s", exc)
+    """[相容性保留] 持久化已推播情報 ID 集合。"""
+    repo = SentinelRepository()
+    repo._seen_keys.update(seen_ids)
+    repo._save_seen_keys()
 
 
 class FeedSentinelCog(commands.Cog):
     """AI 社群情報哨兵 Cog。"""
 
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: commands.Bot, repository: SentinelRepository | None = None) -> None:
         self.bot = bot
-        self._seen_ids: set[str] = _load_seen_ids()
+        self.repository = repository or SentinelRepository()
         self._last_post_time: float = 0.0
         self._is_processing: bool = False
+
+    @property
+    def _seen_ids(self) -> set[str]:
+        """相容性屬性：取得去重指紋集合。"""
+        return self.repository._seen_keys
+
+    @_seen_ids.setter
+    def _seen_ids(self, value: set[str]) -> None:
+        """相容性設定器。"""
+        self.repository._seen_keys = set(value)
 
     async def cog_load(self) -> None:
         self._sentinel_loop.start()
@@ -115,7 +112,7 @@ class FeedSentinelCog(commands.Cog):
         await self._process_feed_and_post()
 
     async def _process_feed_and_post(self, force: bool = False) -> bool:
-        """抓取情報並交由 AI 處理後推播至 Discord。"""
+        """抓取情報並交由 AI 處理後推播至 Discord，並封存至持久化倉儲。"""
         if self._is_processing:
             return False
 
@@ -126,22 +123,33 @@ class FeedSentinelCog(commands.Cog):
                 logger.debug("[FeedSentinel] 未抓取到任何情報項目。")
                 return False
 
-            # 找出尚未推播過的第一個項目
+            # 找出尚未推播過的第一個項目 (多維指紋比對)
             candidate: FeedItem | None = None
             for item in items:
-                if item.item_id not in self._seen_ids or force:
+                if not self.repository.is_duplicate(item) or force:
                     candidate = item
                     break
 
             if not candidate:
-                logger.debug("[FeedSentinel] 所有抓取到的情報均已推播過。")
+                logger.debug("[FeedSentinel] 所有抓取到的情報均已推播過 (多維特徵完全匹配)。")
                 return False
 
-            # 獲取目標頻道
+            # 獲取目標頻道 (優先快取，次之 fetch_channel API)
             target_channel = self.bot.get_channel(config.TARGET_CHANNEL_ID)
-            if not target_channel or not isinstance(target_channel, discord.TextChannel):
+            if target_channel is None:
+                try:
+                    target_channel = await self.bot.fetch_channel(config.TARGET_CHANNEL_ID)
+                except Exception as fetch_err:
+                    logger.warning(
+                        "[FeedSentinel] 無法取得目標推播頻道 ID: %d (%s)。請確認 .env 中 SENTINEL_TARGET_CHANNEL_ID 是否正確設定。",
+                        config.TARGET_CHANNEL_ID,
+                        fetch_err,
+                    )
+                    return False
+
+            if not hasattr(target_channel, "send"):
                 logger.warning(
-                    "[FeedSentinel] 找不到目標推播頻道 ID: %d", config.TARGET_CHANNEL_ID
+                    "[FeedSentinel] 目標頻道 ID: %d 不支援發送訊息", config.TARGET_CHANNEL_ID
                 )
                 return False
 
@@ -151,13 +159,28 @@ class FeedSentinelCog(commands.Cog):
             # 組裝 Discord Embed
             embed = self._build_discord_embed(candidate, ai_analysis)
 
-            await target_channel.send(embed=embed)
+            if hasattr(target_channel, "send"):
+                await target_channel.send(embed=embed)
             self._last_post_time = time.time()
-            self._seen_ids.add(candidate.item_id)
-            _save_seen_ids(self._seen_ids)
+
+            # 封存文章紀錄至 ./data/feed_sentinel/posts.json
+            now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            shared_post = SharedPost(
+                post_id=candidate.item_id,
+                source=candidate.source,
+                title=candidate.title,
+                url=candidate.url,
+                original_summary=candidate.summary,
+                sherry_analysis=ai_analysis,
+                author_or_repo=candidate.author_or_repo,
+                tags=candidate.tags,
+                published_at=candidate.published_at,
+                posted_at=now_iso,
+            )
+            self.repository.save_post(shared_post)
 
             logger.info(
-                "[FeedSentinel] 成功推播情報 [%s]: %s 至頻道 %d",
+                "[FeedSentinel] 成功推播情報 [%s]: %s 至頻道 %d 並已持久化紀錄",
                 candidate.source,
                 candidate.title,
                 config.TARGET_CHANNEL_ID,
@@ -172,7 +195,7 @@ class FeedSentinelCog(commands.Cog):
 
     async def _generate_sherry_briefing(self, item: FeedItem) -> str:
         """呼叫 BotBrain 生成名偵探橘雪莉的 3 點精華與銳評。"""
-        brain: BotBrain | None = self.bot.get_cog("BotBrain")
+        brain: Any = self.bot.get_cog("BotBrain")
         if not brain:
             # Fallback 若無 Brain 則返回原始摘要
             return f"💡 **【情報重點】**\n- {item.summary}\n\n🕵️‍♀️ **【雪莉銳評】**\n名偵探正在觀察這項新技術的發展！"
@@ -220,14 +243,13 @@ class FeedSentinelCog(commands.Cog):
 
         try:
             result = await asyncio.wait_for(future, timeout=90.0)
-            return result
+            return str(result)
         except asyncio.TimeoutError:
             logger.warning("[FeedSentinel] AI 推理超時，使用原始摘要作為 fallback。")
             return f"💡 **【情報摘要】**\n- {item.summary}\n\n🕵️‍♀️ **【雪莉銳評】**\n這篇情報看起來很有意思，大家快點進去看看吧！"
 
     def _build_discord_embed(self, item: FeedItem, analysis_text: str) -> discord.Embed:
         """建構精美 Discord Embed 卡片。"""
-        # 根據來源設定不同代表色
         color_map = {
             "HuggingFace": 0xFFD21E,  # HF 黃
             "arXiv": 0xB31B1B,        # arXiv 紅
@@ -261,6 +283,29 @@ class FeedSentinelCog(commands.Cog):
         )
         return embed
 
+    def get_status_info(self) -> dict[str, Any]:
+        """取得哨兵當前運行狀態 (供 Web UI 查詢)。"""
+        now_tw = datetime.now(TAIWAN_TZ)
+        in_window = config.START_HOUR <= now_tw.hour < config.END_HOUR
+        now_ts = time.time()
+        elapsed = now_ts - self._last_post_time if self._last_post_time > 0 else None
+        cooldown_rem = (
+            max(0.0, config.MIN_GAP_SECONDS - elapsed) if elapsed is not None else 0.0
+        )
+
+        return {
+            "enabled": config.ENABLED,
+            "is_processing": self._is_processing,
+            "in_schedule_window": in_window,
+            "current_hour": now_tw.hour,
+            "start_hour": config.START_HOUR,
+            "end_hour": config.END_HOUR,
+            "target_channel_id": config.TARGET_CHANNEL_ID,
+            "min_gap_seconds": config.MIN_GAP_SECONDS,
+            "last_post_time": self._last_post_time,
+            "cooldown_remaining_seconds": round(cooldown_rem, 1),
+        }
+
     # -----------------------------------------------------------------------
     # 管理員 Slash 指令
     # -----------------------------------------------------------------------
@@ -284,3 +329,4 @@ class FeedSentinelCog(commands.Cog):
 async def setup(bot: commands.Bot) -> None:
     """動態載入 FeedSentinelCog 插件。"""
     await bot.add_cog(FeedSentinelCog(bot))
+

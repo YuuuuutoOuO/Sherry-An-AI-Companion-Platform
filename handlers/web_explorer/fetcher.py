@@ -12,7 +12,7 @@ _YT_RSS_NS = settings.YOUTUBE_RSS_NS
 
 async def fetch_via_api(session: aiohttp.ClientSession) -> list[VideoMeta]:
     """官方API拿貨(需要Youtube Token，可以抓地區當下總合熱門排行榜)"""
-    params = {
+    params: dict[str, str | int] = {
         "part": "snippet",
         "chart": "mostPopular",
         "regionCode": "TW",

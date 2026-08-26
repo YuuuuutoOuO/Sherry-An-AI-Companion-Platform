@@ -1,0 +1,103 @@
+<!-- ===== ROAST / TSUKKOMI VIEW ===== -->
+<div class="view hidden" id="view-roast">
+    <div class="roast-wrapper">
+        <!-- Banner -->
+        <div class="view-banner view-banner--blue-gold">
+            <div class="view-banner-inner">
+                <div class="view-banner-avatar-wrap">
+                    <img src="/static/sherry_avatar.png" alt="Sherry Detective" class="view-banner-avatar">
+                    <span class="view-banner-avatar-tag view-banner-avatar-tag--gold">🎯 名偵探吐槽</span>
+                </div>
+                <div class="view-banner-content">
+                    <div class="roast-banner-title-row">
+                        <h2 class="view-banner-title">🎯 關鍵字吐槽管理中心</h2>
+                        <span class="roast-master-badge" id="roast-master-badge">🟢 運作中</span>
+                    </div>
+                    <p class="view-banner-sub">當群友發送符合關鍵字的訊息時，雪莉會自動結合「傲嬌名偵探毒舌人設」與自訂回覆導引，直接在訊息下方留言吐槽！</p>
+                </div>
+                <div class="roast-banner-controls">
+                    <label class="roast-master-toggle-wrap">
+                        <span class="roast-toggle-label">吐槽總開關</span>
+                        <input type="checkbox" id="roast-master-toggle" checked onchange="toggleRoastMaster(this.checked)">
+                    </label>
+                    <div class="roast-cooldown-wrap">
+                        <span>頻道冷卻:</span>
+                        <input type="number" id="roast-cooldown-input" min="0" max="300" value="8" class="roast-cooldown-input" onchange="updateRoastCooldown(this.value)">
+                        <span>秒</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stats Row -->
+        <div class="roast-stat-grid">
+            <div class="roast-stat-card">
+                <div class="roast-stat-label">📋 吐槽規則總數</div>
+                <div id="roast-stat-total" class="roast-stat-value roast-stat-value--blue">0</div>
+                <div class="roast-stat-sub">支援包含、完全一致、正則表達式</div>
+            </div>
+            <div class="roast-stat-card">
+                <div class="roast-stat-label">⚡ 已啟用規則</div>
+                <div id="roast-stat-enabled" class="roast-stat-value roast-stat-value--green">0</div>
+                <div class="roast-stat-sub">隨時監聽 Discord 群聊發言</div>
+            </div>
+            <div class="roast-stat-card">
+                <div class="roast-stat-label">🎲 平均觸發機率</div>
+                <div id="roast-stat-avg-prob" class="roast-stat-value roast-stat-value--sky">100%</div>
+                <div class="roast-stat-sub">每項規則獨立 0~100% 機率骰</div>
+            </div>
+        </div>
+
+        <!-- Action & Filter Bar -->
+        <div class="roast-filter-bar">
+            <div class="roast-filter-left">
+                <input type="text" id="roast-search-input" placeholder="🔍 搜尋關鍵字或回覆導引..." class="select-input roast-search" oninput="filterRoastRules()">
+                <select id="roast-filter-mode" class="select-input" onchange="filterRoastRules()">
+                    <option value="all">全部狀態</option>
+                    <option value="enabled">僅已啟用</option>
+                    <option value="disabled">僅已停用</option>
+                </select>
+                <select id="roast-page-size" class="select-input" onchange="onRoastPageSizeChange(this.value)">
+                    <option value="10" selected>10 筆 / 頁</option>
+                    <option value="20">20 筆 / 頁</option>
+                    <option value="50">50 筆 / 頁</option>
+                    <option value="all">全部顯示</option>
+                </select>
+            </div>
+            <button class="btn-primary admin-only" onclick="openRoastModal()">
+                <span>＋</span> 新增吐槽規則
+            </button>
+        </div>
+
+        <!-- Rules List Container -->
+        <div id="roast-rules-container" class="roast-rules-container">
+            <div class="placeholder-msg roast-loading-card">正在載入吐槽清單...</div>
+        </div>
+
+        <!-- Pagination Controls -->
+        <div class="pagination" id="roast-pagination">
+            <button class="page-btn" id="roast-prev-btn" onclick="changeRoastPage(-1)" disabled>‹ 上一頁</button>
+            <span class="page-info" id="roast-page-info">第 1 / 1 頁 (共 0 筆)</span>
+            <button class="page-btn" id="roast-next-btn" onclick="changeRoastPage(1)" disabled>下一頁 ›</button>
+        </div>
+
+        <!-- Live Test Playground -->
+        <div class="roast-test-card">
+            <div class="roast-test-card-header">
+                <h3 class="roast-test-title">🧪 吐槽即時模擬測試室</h3>
+                <span class="roast-test-hint">免上 Discord 即可即時預覽雪莉吐槽判定與 AI 生成效果</span>
+            </div>
+            <div class="roast-test-input-row">
+                <input type="text" id="roast-test-msg" class="select-input roast-test-input" placeholder="輸入模擬使用者發言（例如：你是笨蛋==）..." onkeydown="if(event.key==='Enter') testRoastPreview()">
+                <label class="roast-test-force-label">
+                    <input type="checkbox" id="roast-test-force" checked>
+                    <span>強制觸發 (無視機率)</span>
+                </label>
+                <button class="btn-confirm-login" onclick="testRoastPreview()">測試吐槽反應</button>
+            </div>
+            <div id="roast-test-result" class="roast-test-result" style="display: none;">
+                <!-- Test result populated by app.js -->
+            </div>
+        </div>
+    </div>
+</div>

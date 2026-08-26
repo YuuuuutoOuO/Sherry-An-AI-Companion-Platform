@@ -20,13 +20,15 @@ import logging
 import re
 
 import aiohttp
+from typing import Any
 import discord
 from discord.ext import commands
 
 import settings
 from handlers.bot_brain import BotBrain, InferenceTask
-from handlers.social.tool_base import BaseTool
+from handlers.social.contracts import ToolCategory, ToolResult
 from handlers.social.observability import log_event, make_timer
+from handlers.social.tool_base import BaseTool, ToolResponseMode
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,17 @@ def _weather_desc_to_emoji(description: str) -> str:
 class WeatherTool(BaseTool):
     """即時天氣查詢，雪莉用語氣播報。"""
 
+    def __init__(self) -> None:
+        self._session: aiohttp.ClientSession | None = None
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """取得或惰性初始化共用的 aiohttp.ClientSession 連線池。"""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=settings.WEATHER_EXTRACT_TIMEOUT)
+            )
+        return self._session
+
     @property
     def intent_name(self) -> str:
         return "WEATHER"
@@ -84,19 +97,20 @@ class WeatherTool(BaseTool):
         vibe_snippet: str,
         full_context: str,
         **kwargs: object,
-    ) -> None:
+    ) -> ToolResult:
+        silent = bool(kwargs.get("silent", False))
         elapsed = make_timer()
-        brain: BotBrain | None = bot.get_cog("BotBrain")
-        if not brain:
-            return
+        brain_cog = bot.get_cog("BotBrain")
+        if not brain_cog:
+            return ToolResult.error("BotBrain 未就緒。", is_direct_rendered=not silent)
+        brain: Any = brain_cog
 
         api_key = getattr(settings, "OPENWEATHERMAP_API_KEY", "")
         if not api_key:
-            await message.reply(
-                "嗚嗚，我沒有設定天氣 API Key 啦！請在 .env 加入 OPENWEATHERMAP_API_KEY 哦～",
-                mention_author=True,
-            )
-            return
+            err = "嗚嗚，我沒有設定天氣 API Key 啦！請在 .env 加入 OPENWEATHERMAP_API_KEY 哦～"
+            if not silent:
+                await message.reply(err, mention_author=True)
+            return ToolResult.error(err, is_direct_rendered=not silent)
 
         # ── Step 1: LLM 萃取城市名稱 ─────────────────────────────────────
         city_future: asyncio.Future[str] = bot.loop.create_future()
@@ -136,37 +150,51 @@ class WeatherTool(BaseTool):
         logger.info("WeatherTool: 查詢城市 = %s", city)
 
         # ── Step 2: 呼叫 OpenWeatherMap API ─────────────────────────────
-        weather_data: dict | None = None
+        weather_data: dict[str, Any] | None = None
         try:
-            async with aiohttp.ClientSession() as session:
-                params = {
-                    "q": city,
-                    "appid": api_key,
-                    "units": "metric",
-                    "lang": "zh_tw",
-                }
-                async with session.get(_OWM_API_URL, params=params,
-                                       timeout=aiohttp.ClientTimeout(total=settings.WEATHER_EXTRACT_TIMEOUT)) as resp:
-                    if resp.status == 200:
-                        weather_data = await resp.json()
-                    elif resp.status == 404:
-                        await message.reply(f"找不到「{city}」這個城市耶...確認一下有沒有打錯？", mention_author=True)
-                        return
-                    else:
-                        logger.warning("WeatherTool: API 回應 %d", resp.status)
-                        await message.reply("天氣服務暫時無法回應，等等再試試看喔～", mention_author=True)
-                        return
+            session = await self._get_session()
+            params = {
+                "q": city,
+                "appid": api_key,
+                "units": "metric",
+                "lang": "zh_tw",
+            }
+            async with session.get(_OWM_API_URL, params=params) as resp:
+                if resp.status == 200:
+                    weather_data = await resp.json()
+                elif resp.status == 404:
+                    err = f"找不到「{city}」這個城市耶...確認一下有沒有打錯？"
+                    if not silent:
+                        await message.reply(err, mention_author=True)
+                    return ToolResult.no_data(err, is_direct_rendered=not silent)
+                else:
+                    logger.warning("WeatherTool: API 回應 %d", resp.status)
+                    err = "天氣服務暫時無法回應，等等再試試看喔～"
+                    if not silent:
+                        await message.reply(err, mention_author=True)
+                    return ToolResult.error(err, is_direct_rendered=not silent)
         except Exception as exc:
             logger.error("WeatherTool: HTTP 請求失敗: %s", exc)
-            await message.reply("天氣查詢失敗了...網路或 API 出問題了嗎？", mention_author=True)
-            return
+            err = "天氣查詢失敗了...網路或 API 出問題了嗎？"
+            if not silent:
+                await message.reply(err, mention_author=True)
+            return ToolResult.error(err, is_direct_rendered=not silent)
+
+        if not weather_data:
+            err = "未能取得有效的天氣資料。"
+            if not silent:
+                await message.reply(err, mention_author=True)
+            return ToolResult.error(err, is_direct_rendered=not silent)
 
         # ── Step 3: 解析天氣資料 ──────────────────────────────────────────
-        temp = weather_data["main"]["temp"]
-        feels_like = weather_data["main"]["feels_like"]
-        humidity = weather_data["main"]["humidity"]
-        description = weather_data["weather"][0].get("description", "")
-        wind_speed = weather_data["wind"].get("speed", 0)
+        main_dict = weather_data.get("main", {})
+        temp = float(main_dict.get("temp", 0.0))
+        feels_like = float(main_dict.get("feels_like", 0.0))
+        humidity = main_dict.get("humidity", 0)
+        weather_list = weather_data.get("weather", [{}])
+        description = weather_list[0].get("description", "") if weather_list else ""
+        wind_dict = weather_data.get("wind", {})
+        wind_speed = wind_dict.get("speed", 0)
         city_name = weather_data.get("name", city)
         emoji = _weather_desc_to_emoji(description)
 
@@ -178,7 +206,15 @@ class WeatherTool(BaseTool):
             f"風速：{wind_speed} m/s"
         )
 
-        # ── Step 4: 雪莉語氣播報 ────────────────────────────────────────
+        # 若為 Agent 靜默調度模式，直接回傳純資料，交由 Agent 統一發言合成
+        if silent:
+            return ToolResult.success(
+                weather_summary,
+                is_direct_rendered=False,
+                extra_data={"city": city_name, "temp": temp, "humidity": humidity},
+            )
+
+        # ── Step 4: 雪莉語氣播報（獨立執行時） ─────────────────────────────
         reply_future: asyncio.Future[str] = bot.loop.create_future()
 
         async def _on_weather_reply(raw: str) -> None:
@@ -229,3 +265,4 @@ class WeatherTool(BaseTool):
             extra_temp=temp,
             extra_humidity=humidity,
         )
+        return ToolResult.success(reply_text, is_direct_rendered=True)

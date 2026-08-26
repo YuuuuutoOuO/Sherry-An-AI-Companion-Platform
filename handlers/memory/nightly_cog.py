@@ -21,7 +21,7 @@ import logging
 import re
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import discord
 from discord.ext import commands, tasks
@@ -64,18 +64,22 @@ _NIGHTLY_SYSTEM_PROMPT = (
     "4. 發言紀錄中出現的「[某群友]」是發話者在訊息中 TAG 的其他人，絕對不是發話者本人！\n"
     "5. 分類規範（category）：\n"
     "   - identity: 真實身份/職業/居住地/個人自稱\n"
-    "   - interest: 明確熱愛的遊戲/動漫/技術/興趣\n"
-    "   - habit: 穩固生活作息/口頭禪\n"
-    "   - relationship: 與雪莉（橘雪莉）的長期互動模式\n"
-    "   - opinion: 對重要事物的穩定看法\n"
+    "   - preference: 明確熱愛的遊戲/動漫/技術/興趣/食物\n"
+    "   - habit: 穩固生活作息/口頭禪/反覆出現的行為\n"
+    "   - social: 與其他人（群友、家人、朋友）的關係，或他正在進行的長期項目\n"
+    "   - rule: 【最重要】他對雪莉（橘雪莉）的明確要求或溝通規則，如『叫我OO』『不要用模糊詞』『說話要直接』\n"
     "6. 每條 fact 必須附上 importance（1~5整數）：\n"
-    "   1=短暫狀態  2=一般偏好  3=穩固習慣  4=重要特質  5=核心身份\n\n"
+    "   1=短暫狀態  2=一般偏好  3=穩固習慣  4=重要特質  5=核心身份或最高規則\n\n"
     "目前已知長期屬性（請勿重複，但可升級 importance）：\n"
     "{current_facts}\n\n"
     "請只返回 JSON 格式，不可有任何其他文字：\n"
     '```json\n'
     '{{"aliases": ["真實的綽號或自稱(若無則空陣列)"],\n'
-    ' "facts": [{{"fact": "他平時喜歡寫Python", "importance": 3, "category": "interest"}}]}}\n'
+    ' "facts": [\n'
+    '   {{"fact": "他平時喜歡寫Python", "importance": 3, "category": "preference"}},\n'
+    '   {{"fact": "請叫他歐潤吉", "importance": 5, "category": "rule"}},\n'
+    '   {{"fact": "他正在開發雪莉 Discord 機器人", "importance": 4, "category": "social"}}\n'
+    ' ]}}\n'
     '```'
 )
 
@@ -165,10 +169,11 @@ class NightlyDigest(commands.Cog):
                 by_user[uid].append(rec)
                 display_names[uid] = rec.get("display_name", uid)
 
-            brain: BotBrain | None = self.bot.get_cog("BotBrain")
-            if not brain:
+            brain_cog = self.bot.get_cog("BotBrain")
+            if not brain_cog:
                 logger.error("NightlyDigest: BotBrain 不可用，中止整合")
                 return None
+            brain: Any = brain_cog
 
             store = load_user_memory(settings.USER_MEMORY_PATH)
             users_processed = 0
@@ -282,7 +287,7 @@ class NightlyDigest(commands.Cog):
 
             # ✅ [修復] 深夜整合寫回磁碟後，立即通知 MemoryManager 重載 RAM，
             # 防止白天的即時萃取使用開機時的舊副本，將深夜整合的成果全部沖掉。
-            mem_mgr_early: MemoryManager | None = self.bot.get_cog("MemoryManager")
+            mem_mgr_early: Any = self.bot.get_cog("MemoryManager")
             if mem_mgr_early:
                 mem_mgr_early.reload_store()
                 logger.info("NightlyDigest: MemoryManager RAM 已同步最新磁碟記憶。")
@@ -300,7 +305,7 @@ class NightlyDigest(commands.Cog):
             )
 
             # ── 好感度每日衰減 ──────────────────────────────────
-            mem_mgr: MemoryManager | None = self.bot.get_cog("MemoryManager")
+            mem_mgr: Any = self.bot.get_cog("MemoryManager")
             if mem_mgr:
                 mem_mgr.relations.decay_all()
 

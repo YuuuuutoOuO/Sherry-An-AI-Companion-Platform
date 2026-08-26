@@ -18,14 +18,17 @@ Sensitive keys (TOKEN, PASSWORD, KEY, SECRET) are never exposed.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import httpx
-from quart import Quart, Response, jsonify, render_template, request
+from quart import Quart, Response, jsonify, render_template, request, send_file
 
 import settings
 
@@ -34,6 +37,8 @@ logger = logging.getLogger(__name__)
 app = Quart(__name__)
 app.secret_key = os.urandom(24)
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0  # 開發模式：停用靜態檔案快取
+
+# Dynamic plugins are mounted automatically during server initialization
 
 # ---------------------------------------------------------------------------
 # Session & Auth Helpers (Token-based with 10-min Inactivity Expiration)
@@ -51,8 +56,8 @@ def _get_client_ip(req: Any) -> str:
     if hasattr(req, "headers"):
         forwarded = req.headers.get("X-Forwarded-For")
         if forwarded:
-            return forwarded.split(",")[0].strip()
-    return getattr(req, "remote_addr", "127.0.0.1") or "127.0.0.1"
+            return str(forwarded.split(",")[0].strip())
+    return str(getattr(req, "remote_addr", "127.0.0.1") or "127.0.0.1")
 
 
 def _is_ip_locked(ip: str) -> tuple[bool, int]:
@@ -159,13 +164,13 @@ def _get_request_token(req: Any) -> str:
     if hasattr(req, "cookies") and "admin_session" in req.cookies:
         token = req.cookies.get("admin_session", "").strip()
         if token:
-            return token
+            return str(token)
     if hasattr(req, "headers"):
         auth_header = req.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
-            return auth_header[7:].strip()
+            return str(auth_header[7:].strip())
         if "X-Admin-Token" in req.headers:
-            return req.headers.get("X-Admin-Token", "").strip()
+            return str(req.headers.get("X-Admin-Token", "").strip())
     return ""
 
 
@@ -192,15 +197,109 @@ def _is_admin_request(req: Any) -> bool:
     return True
 
 
+_EXCLUDED_MOD_DIRS: set[str] = {"clients", "repositories", "__pycache__"}
+_MOD_CONFIG_PATH: Path = settings.DATA_DIR / "mod_config.json"
+_mounted_mod_blueprints: dict[str, Any] = {}
+_public_mod_routes: set[str] = set()
+
+
+def _load_mod_config() -> dict[str, bool]:
+    """Load mod enabled/disabled state from data/mod_config.json.
+
+    Returns:
+        dict[str, bool]: Mapping of mod_key -> enabled (True = enabled).
+    """
+    if _MOD_CONFIG_PATH.exists():
+        try:
+            raw = _MOD_CONFIG_PATH.read_text(encoding="utf-8")
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return {str(k): bool(v) for k, v in data.items()}
+        except Exception as exc:
+            logger.warning("Failed to read mod_config.json: %s", exc)
+    return {}
+
+
+def _save_mod_config(config: dict[str, bool]) -> None:
+    """Persist mod enabled/disabled state to data/mod_config.json.
+
+    Args:
+        config: Mapping of mod_key -> enabled.
+    """
+    _MOD_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _MOD_CONFIG_PATH.write_text(
+        json.dumps(config, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _is_mod_enabled(mod_key: str, config: dict[str, bool]) -> bool:
+    """Check if a mod is enabled in the config (defaults to True if not set).
+
+    Args:
+        mod_key: The mod identifier string.
+        config: The loaded mod config dict.
+
+    Returns:
+        bool: True if enabled (default), False if explicitly disabled.
+    """
+    return config.get(mod_key, True)
+
+
+def _scan_and_update_public_mod_routes() -> set[str]:
+    """Dynamically discover public route prefixes declared in mod MOD_INFO dicts.
+
+    Returns:
+        set[str]: Set of public route path prefixes.
+    """
+    import importlib
+    global _public_mod_routes
+    routes: set[str] = set()
+    mod_config = _load_mod_config()
+    mod_base = Path("mod")
+    if mod_base.is_dir():
+        for child in mod_base.iterdir():
+            if (
+                child.is_dir()
+                and not child.name.startswith("_")
+                and child.name not in _EXCLUDED_MOD_DIRS
+                and (child / "__init__.py").exists()
+            ):
+                mod_key = child.name
+                if not _is_mod_enabled(mod_key, mod_config):
+                    continue
+                try:
+                    pkg = importlib.import_module(f"mod.{mod_key}")
+                    info = getattr(pkg, "MOD_INFO", {}) or {}
+                    declared_routes = info.get("public_routes", [])
+                    if isinstance(declared_routes, (list, tuple, set)):
+                        for r in declared_routes:
+                            if isinstance(r, str) and r.strip():
+                                routes.add(r.strip())
+                except Exception as exc:
+                    logger.debug("Could not inspect public_routes for mod [%s]: %s", mod_key, exc)
+    _public_mod_routes = routes
+    return routes
+
+
+# Initialize public mod routes upon server startup
+_scan_and_update_public_mod_routes()
+
+
 @app.before_request
-async def require_auth() -> Response | None:
-    """Protect write/modify routes while keeping read routes public for Guest Mode."""
+async def check_admin_session_before_request() -> Response | tuple[Response, int] | None:
+    """Global Request Interceptor: enforces Admin Session TTL and method guards."""
     if request.path.startswith("/static") or request.method == "GET":
         return None
 
-    # Public POST routes (Login & Game Center)
-    if request.path in ("/api/auth/login", "/api/auth/logout") or request.path.startswith("/api/games/"):
+    # Public POST routes (Core Auth Login/Logout)
+    if request.path in ("/api/auth/login", "/api/auth/logout"):
         return None
+
+    # Dynamic public routes declared by modules (MOD_INFO.public_routes)
+    for pub_route in _public_mod_routes:
+        if request.path.startswith(pub_route) or request.path == pub_route:
+            return None
 
     # All other POST/DELETE/PUT write routes require Admin Auth
     if not _is_admin_request(request):
@@ -261,7 +360,7 @@ def _list_log_files() -> list[dict]:
 
 
 @app.route("/api/logs/files", methods=["GET"])
-async def get_log_files() -> Response:
+async def get_log_files() -> Response | tuple[Response, int] | Any:
     """Return a list of available log files in DATA_DIR (Filtered for Guest mode)."""
     all_files = _list_log_files()
     if _is_admin_request(request):
@@ -273,7 +372,7 @@ async def get_log_files() -> Response:
 
 
 @app.route("/api/logs", methods=["GET"])
-async def get_logs() -> Response:
+async def get_logs() -> Response | tuple[Response, int] | Any:
     """
     Return log entries from a specified file.
 
@@ -360,7 +459,7 @@ async def get_logs() -> Response:
 # ---------------------------------------------------------------------------
 
 @app.route("/api/models/ollama", methods=["GET"])
-async def get_ollama_models() -> Response:
+async def get_ollama_models() -> Response | tuple[Response, int] | Any:
     """Proxy Ollama /api/tags to retrieve locally available model names."""
     base_url: str = settings.OLLAMA_BASE_URL.rstrip("/")
     try:
@@ -373,8 +472,23 @@ async def get_ollama_models() -> Response:
         return jsonify({"models": [], "source": "ollama", "error": str(exc)})
 
 
+@app.route("/api/models/freetoken", methods=["GET"])
+@app.route("/api/models/llm", methods=["GET"])
+async def get_freetoken_models() -> Response | tuple[Response, int] | Any:
+    """Proxy FreeToken /v1/models to retrieve locally loaded Hugging Face MoE models."""
+    base_url: str = getattr(settings, "LLM_BASE_URL", getattr(settings, "FREETOKEN_BASE_URL", "http://localhost:1919/v1")).rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=settings.WEB_UI_HTTP_TIMEOUT) as client:
+            resp = await client.get(f"{base_url}/models")
+            data = resp.json()
+            models = [m["id"] for m in data.get("data", [])] if isinstance(data, dict) else []
+            return jsonify({"models": models, "source": "freetoken", "base_url": base_url})
+    except Exception as exc:
+        return jsonify({"models": [], "source": "freetoken", "error": str(exc)})
+
+
 @app.route("/api/models/lms", methods=["GET"])
-async def get_lms_models() -> Response:
+async def get_lms_models() -> Response | tuple[Response, int] | Any:
     """Proxy LM Studio /v1/models to retrieve locally loaded model names."""
     base_url: str = settings.LMS_BASE_URL.rstrip("/")
     try:
@@ -388,7 +502,7 @@ async def get_lms_models() -> Response:
 
 
 @app.route("/api/models/vllm", methods=["GET"])
-async def get_vllm_models() -> Response:
+async def get_vllm_models() -> Response | tuple[Response, int] | Any:
     """Proxy vLLM /v1/models to retrieve locally loaded model names."""
     base_url: str = getattr(settings, "VLLM_BASE_URL", "http://localhost:8000/v1").rstrip("/")
     try:
@@ -499,7 +613,7 @@ async def auth_login() -> tuple[Response, int] | Response:
 
 
 @app.route("/api/auth/logout", methods=["POST"])
-async def auth_logout() -> Response:
+async def auth_logout() -> Response | tuple[Response, int] | Any:
     """Logout, revoke session token, and purge HttpOnly cookie."""
     data: dict = await request.get_json() or {}
     token = data.get("token", "")
@@ -520,7 +634,7 @@ async def auth_logout() -> Response:
 
 
 @app.route("/api/auth/check", methods=["GET"])
-async def auth_check() -> Response:
+async def auth_check() -> Response | tuple[Response, int] | Any:
     """Check if the current session token is valid and active."""
     is_admin = _is_admin_request(request)
     return jsonify({
@@ -530,7 +644,7 @@ async def auth_check() -> Response:
 
 
 @app.route("/api/services/status", methods=["GET"])
-async def get_services_status() -> Response:
+async def get_services_status() -> Response | tuple[Response, int] | Any:
     """即時檢測 Ollama, LM Studio, Stable Diffusion / ComfyUI 等地端 AI 服務連線狀態與延遲。"""
     import time
     services: list[dict[str, Any]] = []
@@ -560,7 +674,32 @@ async def get_services_status() -> Response:
     except Exception:
         services.append({"id": "ollama", "name": "Ollama LLM 服務", "icon": "🦙", "url": ollama_url, "status": "offline", "ping_ms": 0, "details": "未啟動或連線超時", "models": []})
 
-    # 2. LM Studio
+    # 2. FreeToken MoE 推理引擎
+    freetoken_url = getattr(settings, "LLM_BASE_URL", getattr(settings, "FREETOKEN_BASE_URL", "http://localhost:1919/v1")).rstrip("/")
+    try:
+        t0 = time.time()
+        async with httpx.AsyncClient(timeout=settings.WEB_UI_HTTP_TIMEOUT) as client:
+            resp = await client.get(f"{freetoken_url}/models")
+            ping_ms = int((time.time() - t0) * 1000)
+            if resp.status_code == 200:
+                data = resp.json()
+                models = [m.get("id") for m in data.get("data", [])] if isinstance(data, dict) else []
+                services.append({
+                    "id": "freetoken",
+                    "name": "FreeToken MoE 引擎",
+                    "icon": "🧠",
+                    "url": freetoken_url,
+                    "status": "online",
+                    "ping_ms": ping_ms,
+                    "details": f"服務線上，已加載 {len(models)} 個 MoE 專家模型",
+                    "models": models[:6],
+                })
+            else:
+                services.append({"id": "freetoken", "name": "FreeToken MoE 引擎", "icon": "🧠", "url": freetoken_url, "status": "offline", "ping_ms": ping_ms, "details": f"HTTP {resp.status_code}", "models": []})
+    except Exception:
+        services.append({"id": "freetoken", "name": "FreeToken MoE 引擎", "icon": "🧠", "url": freetoken_url, "status": "offline", "ping_ms": 0, "details": "未啟動或連線超時 (Port 1919)", "models": []})
+
+    # 3. LM Studio (向下相容)
     lms_url = getattr(settings, "LMS_BASE_URL", "http://localhost:1234/v1").rstrip("/")
     try:
         t0 = time.time()
@@ -665,9 +804,9 @@ async def handle_settings() -> tuple[Response, int] | Response:
         return jsonify(filtered_data)
 
     # POST — batch update with Strict Anti-Injection & Type Sanitization
-    data: dict = await request.get_json() or {}
+    post_data: dict = await request.get_json() or {}
     failures: list[str] = []
-    for k, raw_v in data.items():
+    for k, raw_v in post_data.items():
         # 1. 防注入與路徑安全：設定 Key 必須轉為純文字 string 且符合合法的大寫變數命名規則
         k_str = str(k).strip()
         if not k_str.isupper() or not k_str.isidentifier():
@@ -681,9 +820,13 @@ async def handle_settings() -> tuple[Response, int] | Response:
 
         # 3. 防注入過濾：若非基本型別（如試圖傳遞 dict/list 等複雜結構），一律強制轉為純文字 string
         #    若是正常字串也確保以單純 str 型態處理，阻斷任何命令/語法注入
-        safe_v: any = raw_v
+        safe_v: Any = raw_v
         if isinstance(raw_v, str):
-            safe_v = str(raw_v)
+            safe_v = str(raw_v).strip()
+            if safe_v.endswith(":") and any(
+                safe_v == f"{p}:" for p in ("freetoken", "ollama", "lms", "vllm", "openai", "deepseek", "gemini", "openrouter", "claude")
+            ):
+                safe_v = ""
         elif isinstance(raw_v, (int, float, bool)):
             safe_v = raw_v
         else:
@@ -696,9 +839,9 @@ async def handle_settings() -> tuple[Response, int] | Response:
         try:
             from mod.audit_manager import audit_manager
             token = _get_request_token(request)
-            saved_keys = ", ".join(list(data.keys())[:5])
-            if len(data) > 5:
-                saved_keys += f" (共{len(data)}項)"
+            saved_keys = ", ".join(list(post_data.keys())[:5])
+            if len(post_data) > 5:
+                saved_keys += f" (共{len(post_data)}項)"
             audit_manager.record_action(token, "修改系統設定", f"成功保存設定: {saved_keys}")
         except Exception:
             pass
@@ -795,7 +938,7 @@ async def stop_bot() -> Response | tuple[Response, int]:
 
 
 @app.route("/api/update", methods=["POST"])
-async def update_and_restart() -> Response:
+async def update_and_restart() -> Response | tuple[Response, int] | Any:
     """Git pull origin dev and restart via bat launcher."""
     import asyncio
     import logging
@@ -1056,13 +1199,13 @@ def _get_system_metrics() -> dict[str, Any]:
 
 
 @app.route("/api/system/metrics", methods=["GET"])
-async def get_system_metrics() -> Response:
+async def get_system_metrics() -> Response | tuple[Response, int] | Any:
     """Return real-time system resource metrics."""
     return jsonify(_get_system_metrics())
 
 
 @app.route("/api/system/tasks", methods=["GET"])
-async def get_scheduled_tasks() -> Response:
+async def get_scheduled_tasks() -> Response | tuple[Response, int] | Any:
     """Return all active scheduled tasks."""
     try:
         from handlers import schedule_storage
@@ -1087,7 +1230,7 @@ async def get_scheduled_tasks() -> Response:
 
 
 @app.route("/api/system/tasks/<task_id>", methods=["DELETE"])
-async def delete_scheduled_task(task_id: str) -> Response:
+async def delete_scheduled_task(task_id: str) -> Response | tuple[Response, int] | Any:
     """Cancel / Delete a specific scheduled task by ID."""
     try:
         from handlers import schedule_storage
@@ -1100,7 +1243,7 @@ async def delete_scheduled_task(task_id: str) -> Response:
 
 
 @app.route("/api/system/dashboard", methods=["GET"])
-async def get_dashboard_data() -> Response:
+async def get_dashboard_data() -> Response | tuple[Response, int] | Any:
     """Return unified dashboard summary payload (git info, bot summary, system summary, queues)."""
     try:
         disk_git = _get_git_info()
@@ -1184,7 +1327,7 @@ async def get_dashboard_data() -> Response:
 
 
 @app.route("/api/brain/queue", methods=["GET"])
-async def get_brain_inference_queue() -> Response:
+async def get_brain_inference_queue() -> Response | tuple[Response, int] | Any:
     """Return real-time pending LLM inference tasks in BotBrain's PriorityQueue."""
     try:
         bot = _bot_instance
@@ -1201,7 +1344,7 @@ async def get_brain_inference_queue() -> Response:
 
 
 @app.route("/api/bot/status", methods=["GET"])
-async def get_bot_live_status() -> Response:
+async def get_bot_live_status() -> Response | tuple[Response, int] | Any:
     """Return real-time Discord Bot connection, voice channels, and music status."""
     try:
         bot = _bot_instance
@@ -1286,140 +1429,208 @@ async def get_bot_live_status() -> Response:
 
 
 # ---------------------------------------------------------------------------
-# Dynamic Plugin / Mod Endpoints
+# Dynamic Plugin / Mod Auto-Discovery & Blueprint Mounting
 # ---------------------------------------------------------------------------
 
-# Known mod registry — each entry maps mod key to display metadata.
-# Mods not in this registry but found on disk will still be listed as "unknown" type.
-_MOD_REGISTRY: dict[str, dict[str, Any]] = {
-    "game_center": {
-        "display_name": "🎮 小遊戲遊樂場",
-        "description": "與雪莉名偵探使用地端 LLM 進行 21 點、猜拳、踩地雷等對弈互動！",
-        "category": "娛樂 / Entertainment",
-        "nav_id": "nav-games",  # front-end nav button id to hide/show
-        "python_pkg": "mod.game_center",
-        "info_attr": "MOD_INFO",
-    },
-    "dnd": {
-        "display_name": "🐉 D&D 跑團引擎",
-        "description": "Discord 桌上角色扮演遊戲引擎，支援骰子、NPC 生成、世界模擬與戰鬥系統。",
-        "category": "娛樂 / Entertainment",
-        "nav_id": None,
-        "python_pkg": "mod.dnd",
-        "info_attr": None,
-    },
-    "market_plugin": {
-        "display_name": "📈 市場資料分析外掛",
-        "description": "股市、PTCG 卡牌市場即時行情追蹤與 AI 分析報告生成器。",
-        "category": "資料 / Data",
-        "nav_id": None,
-        "python_pkg": "mod.market_plugin",
-        "info_attr": None,
-    },
-    "stock_trader": {
-        "display_name": "📈 雪莉美股虛擬量化交易",
-        "description": "23:00~04:00 自動看盤、03:50 AM 強看盤、$10,000 美金虛擬量化下單與 Web UI 1個月盈餘率走勢圖。",
-        "category": "金融 / Quant Trading",
-        "nav_id": "nav-stock-trader",
-        "python_pkg": "mod.stock_trader",
-        "info_attr": None,
-    },
-}
 
-_MOD_CONFIG_PATH: Path = settings.DATA_DIR / "mod_config.json"
+def _discover_and_mount_mod_plugins(app_instance: Quart, bot_inst: Any = None) -> None:
+    """Auto-discover all modules in ./mod/ and dynamically mount Blueprints for enabled mods.
 
-
-def _load_mod_config() -> dict[str, bool]:
-    """Load mod enabled/disabled state from data/mod_config.json.
-
-    Returns:
-        dict[str, bool]: Mapping of mod_key -> enabled (True = enabled).
+    Args:
+        app_instance: Quart web application instance.
+        bot_inst: Optional Discord Bot instance for Cog/service linking.
     """
-    if _MOD_CONFIG_PATH.exists():
+    import importlib
+    from quart import Blueprint
+
+    _scan_and_update_public_mod_routes()
+    mod_config = _load_mod_config()
+    mod_base = Path("mod")
+    if not mod_base.is_dir():
+        return
+
+    for child in sorted(mod_base.iterdir()):
+        if (
+            not child.is_dir()
+            or child.name.startswith("_")
+            or child.name in _EXCLUDED_MOD_DIRS
+            or not (child / "__init__.py").exists()
+        ):
+            continue
+
+        mod_key = child.name
+        is_enabled = _is_mod_enabled(mod_key, mod_config)
+        if not is_enabled:
+            logger.info("Mod [%s] is disabled in config, skipping Web UI mount.", mod_key)
+            continue
+
+        # Check if the mod explicitly declares has_web_ui: True in MOD_INFO
         try:
-            raw = _MOD_CONFIG_PATH.read_text(encoding="utf-8")
-            data = json.loads(raw)
-            if isinstance(data, dict):
-                return {str(k): bool(v) for k, v in data.items()}
+            mod_pkg = importlib.import_module(f"mod.{mod_key}")
+            mod_info = getattr(mod_pkg, "MOD_INFO", {}) or {}
+            if not mod_info.get("has_web_ui", False):
+                continue
+        except Exception:
+            continue
+
+        web_py = child / "web.py"
+        if not web_py.exists():
+            continue
+
+        pkg_name = f"mod.{mod_key}.web"
+        try:
+            mod_web = importlib.import_module(pkg_name)
+            if hasattr(mod_web, "set_bot_instance") and bot_inst is not None:
+                mod_web.set_bot_instance(bot_inst)
+
+            blueprint_obj: Blueprint | None = None
+            for attr_name in dir(mod_web):
+                attr = getattr(mod_web, attr_name)
+                if isinstance(attr, Blueprint) and not attr_name.startswith("_"):
+                    blueprint_obj = attr
+                    break
+
+            if blueprint_obj is not None and mod_key not in _mounted_mod_blueprints:
+                app_instance.register_blueprint(blueprint_obj)
+                _mounted_mod_blueprints[mod_key] = blueprint_obj
+                logger.info("✅ Dynamically mounted Web UI Blueprint for mod: [%s]", mod_key)
         except Exception as exc:
-            logger.warning("Failed to read mod_config.json: %s", exc)
-    return {}
+            logger.warning("Failed to auto-mount Web UI Blueprint for mod [%s]: %s", mod_key, exc)
 
 
-def _save_mod_config(config: dict[str, bool]) -> None:
-    """Persist mod enabled/disabled state to data/mod_config.json.
-
-    Args:
-        config: Mapping of mod_key -> enabled.
-    """
-    _MOD_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _MOD_CONFIG_PATH.write_text(
-        json.dumps(config, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+# Initial mount of available mod blueprints
+_discover_and_mount_mod_plugins(app)
 
 
-def _is_mod_enabled(mod_key: str, config: dict[str, bool]) -> bool:
-    """Check if a mod is enabled in the config (defaults to True if not set).
+# ── Static Asset & Dynamic View Routes for Mods ────────────
 
-    Args:
-        mod_key: The mod identifier string.
-        config: The loaded mod config dict.
+@app.route("/mod/<mod_key>/static/<path:filename>")
+async def serve_mod_static(mod_key: str, filename: str) -> Response | tuple[Response, int] | Any:
+    """Serve static files (JS, CSS, images) from mod/<mod_key>/static/ directory."""
+    from quart import send_file
 
-    Returns:
-        bool: True if enabled (default), False if explicitly disabled.
-    """
-    return config.get(mod_key, True)
+    if ".." in mod_key or ".." in filename or mod_key.startswith("_"):
+        return Response("Forbidden", status=403)
+
+    static_file = Path("mod") / mod_key / "static" / filename
+    if static_file.is_file():
+        return await send_file(static_file)
+    return Response("Not Found", status=404)
+
+
+@app.route("/api/mod/<mod_key>/view", methods=["GET"])
+async def get_mod_view_snippet(mod_key: str) -> Response | tuple[Response, int] | Any:
+    """Fetch and return rendered HTML view snippet for a specific mod."""
+    if ".." in mod_key or mod_key.startswith("_"):
+        return Response("Invalid mod key", status=400)
+
+    import importlib
+    mod_info: dict[str, Any] = {}
+    try:
+        mod_pkg = importlib.import_module(f"mod.{mod_key}")
+        mod_info = getattr(mod_pkg, "MOD_INFO", {}) or {}
+    except Exception:
+        pass
+
+    template_paths: list[Path] = []
+    if mod_info.get("template_file"):
+        template_paths.append(Path("mod") / mod_key / "templates" / str(mod_info["template_file"]))
+    template_paths.append(Path("mod") / mod_key / "templates" / f"{mod_key}.html")
+    if mod_info.get("nav_id"):
+        template_paths.append(Path("mod") / mod_key / "templates" / f"{mod_info['nav_id']}.html")
+    template_paths.append(Path("mod") / mod_key / "templates" / "view.html")
+    template_paths.append(Path("mod") / mod_key / "templates" / "index.html")
+
+    for p in template_paths:
+        if p and p.is_file():
+            content = p.read_text(encoding="utf-8")
+            return Response(content, mimetype="text/html")
+
+    return Response(f"<div class='view hidden' id='view-{mod_key}'><h3>模組 {mod_key} 視圖未提供</h3></div>", mimetype="text/html")
 
 
 @app.route("/api/modules", methods=["GET"])
-async def get_dynamic_modules() -> Response:
+async def get_dynamic_modules() -> Response | tuple[Response, int] | Any:
     """Return available optional modules detected under ./mod/.
 
-    Combines on-disk discovery with persisted enabled/disabled state.
-    Includes rich metadata from the module registry.
+    Dynamically inspects each mod package for MOD_INFO without hardcoded metadata.
     """
     import importlib
-    import importlib.util
 
     mod_config = _load_mod_config()
     modules: dict[str, Any] = {}
-
-    # Scan ./mod/ directory for sub-packages
     mod_base = Path("mod")
+
     discovered_keys: list[str] = []
     if mod_base.is_dir():
         for child in sorted(mod_base.iterdir()):
             if (
                 child.is_dir()
                 and not child.name.startswith("_")
+                and child.name not in _EXCLUDED_MOD_DIRS
                 and (child / "__init__.py").exists()
             ):
                 discovered_keys.append(child.name)
 
     for mod_key in discovered_keys:
-        registry_meta = _MOD_REGISTRY.get(mod_key, {})
         enabled = _is_mod_enabled(mod_key, mod_config)
-        python_pkg = registry_meta.get("python_pkg", f"mod.{mod_key}")
-        info_attr = registry_meta.get("info_attr")
+        python_pkg = f"mod.{mod_key}"
 
-        # Try to load MOD_INFO from the package
-        extra_info: dict[str, Any] = {}
+        mod_info: dict[str, Any] = {}
         try:
-            spec = importlib.util.find_spec(python_pkg)
-            if spec is not None and info_attr:
-                mod = importlib.import_module(python_pkg)
-                extra_info = getattr(mod, info_attr, {}) or {}
+            mod = importlib.import_module(python_pkg)
+            if hasattr(mod, "MOD_INFO"):
+                mod_info = getattr(mod, "MOD_INFO", {}) or {}
         except Exception as exc:
             logger.debug("Could not load info for mod '%s': %s", mod_key, exc)
 
+        mod_dir = Path("mod") / mod_key
+        has_web = bool(mod_info.get("has_web_ui", False))
+        has_view = has_web and (
+            (mod_dir / "templates" / f"{mod_key}.html").exists()
+            or (mod_dir / "templates" / "view.html").exists()
+            or (mod_dir / "templates" / "games.html").exists()
+        )
+        has_script = has_web and (
+            (mod_dir / "static" / f"{mod_key}.js").exists()
+            or (mod_dir / "static" / "games.js").exists()
+            or bool(mod_info.get("script_file") and (mod_dir / "static" / str(mod_info.get("script_file"))).exists())
+        )
+        script_file = mod_info.get("script_file") or (f"{mod_key}.js" if (mod_dir / "static" / f"{mod_key}.js").exists() else None)
+        script_url = f"/mod/{mod_key}/static/{script_file}" if (has_script and script_file) else None
+
+        display_name = mod_info.get("name") or mod_info.get("display_name") or f"📦 {mod_key}"
+        if mod_info.get("icon") and not display_name.startswith(mod_info.get("icon", "")):
+            display_name = f"{mod_info.get('icon')} {display_name}"
+
+        description = mod_info.get("description") or "未提供描述的自訂模組。"
+        category = mod_info.get("category") or "自訂 / Custom"
+        nav_id = mod_info.get("nav_id") or (mod_key if has_web else None)
+        nav_title = mod_info.get("nav_title") or mod_info.get("name") or display_name
+        nav_icon = mod_info.get("nav_icon") or mod_info.get("icon") or "🧩"
+        view_title = mod_info.get("view_title") or f"{nav_icon} {nav_title}"
+        admin_only = bool(mod_info.get("admin_only", False))
+        order = int(mod_info.get("order", 100))
+
         modules[mod_key] = {
+            "id": mod_key,
             "enabled": enabled,
-            "display_name": registry_meta.get("display_name", f"📦 {mod_key}"),
-            "description": registry_meta.get("description", "未登記的自訂模組。"),
-            "category": registry_meta.get("category", "自訂 / Custom"),
-            "nav_id": registry_meta.get("nav_id"),
-            "info": extra_info,
+            "display_name": display_name,
+            "description": description,
+            "category": category,
+            "version": mod_info.get("version", "1.0.0"),
+            "author": mod_info.get("author", "Sherry Community"),
+            "has_web_ui": has_web,
+            "has_view": has_view,
+            "view_url": f"/api/mod/{mod_key}/view" if has_view else None,
+            "script_url": script_url,
+            "nav_id": nav_id,
+            "nav_title": nav_title,
+            "nav_icon": nav_icon,
+            "view_title": view_title,
+            "admin_only": admin_only,
+            "order": order,
+            "info": mod_info,
         }
 
     return jsonify({"modules": modules})
@@ -1478,424 +1689,204 @@ async def toggle_module() -> tuple[Response, int] | Response:
 
 
 # ---------------------------------------------------------------------------
-# Game Center API Endpoints (Hot-pluggable)
+# API: Roast / Tsukkomi Management (Core Cog Extension)
 # ---------------------------------------------------------------------------
 
-_blackjack_engine: Any = None
-_minesweeper_engine: Any = None
+@app.route("/api/roast/config", methods=["GET", "POST"])
+async def handle_roast_config() -> tuple[Response, int] | Response:
+    """Get or update roast system global settings."""
+    from handlers.roast.manager import roast_manager
+    if request.method == "GET":
+        return jsonify(roast_manager.get_config().to_dict())
+
+    if not _is_admin_request(request):
+        return jsonify({"status": "error", "message": "此操作需要管理員身份，請先登入！"}), 403
+
+    data: dict[str, Any] = await request.get_json() or {}
+    if "enabled" in data:
+        roast_manager.set_enabled(bool(data["enabled"]))
+    if "global_cooldown_seconds" in data:
+        try:
+            roast_manager.set_cooldown(int(data["global_cooldown_seconds"]))
+        except (ValueError, TypeError):
+            pass
+
+    return jsonify({"status": "success", "config": roast_manager.get_config().to_dict()})
 
 
-def _get_blackjack_engine() -> Any:
-    global _blackjack_engine
-    if _blackjack_engine is None:
-        from mod.game_center.blackjack import BlackjackEngine
-        _blackjack_engine = BlackjackEngine()
-    return _blackjack_engine
+@app.route("/api/roast/rules", methods=["POST"])
+async def add_roast_rule() -> tuple[Response, int] | Response:
+    """Add a new roast keyword rule."""
+    if not _is_admin_request(request):
+        return jsonify({"status": "error", "message": "此操作需要管理員身份，請先登入！"}), 403
 
+    from handlers.roast.manager import roast_manager
+    data: dict[str, Any] = await request.get_json() or {}
+    keyword = str(data.get("keyword", "")).strip()
+    reply_guide = str(data.get("reply_guide", "")).strip()
+    probability = data.get("probability", 100)
+    match_mode = str(data.get("match_mode", "contains")).lower()
+    enabled = bool(data.get("enabled", True))
 
-def _get_minesweeper_engine() -> Any:
-    global _minesweeper_engine
-    if _minesweeper_engine is None:
-        from mod.game_center.minesweeper import MinesweeperEngine
-        _minesweeper_engine = MinesweeperEngine()
-    return _minesweeper_engine
+    if not keyword:
+        return jsonify({"status": "error", "message": "請輸入觸發關鍵字！"}), 400
+    if not reply_guide:
+        return jsonify({"status": "error", "message": "請輸入吐槽回覆導引！"}), 400
 
-
-@app.route("/api/games/rps/play", methods=["POST"])
-async def play_rock_paper_scissors() -> Response:
-    """Play Rock Paper Scissors against Sherry with LLM persona commentary."""
     try:
-        data = await request.get_json() or {}
-        player_choice = data.get("choice", "rock")
+        prob_int = max(0, min(100, int(float(probability))))
+    except (ValueError, TypeError):
+        prob_int = 100
 
-        from mod.game_center.rock_paper_scissors import RockPaperScissorsEngine
-        from mod.game_center.sherry_ai import SherryGameAIService
+    if match_mode not in ("contains", "exact", "regex"):
+        match_mode = "contains"
 
-        res = RockPaperScissorsEngine.play_round(player_choice)
-        ai_service = SherryGameAIService()
-
-        dialogue = await ai_service.generate_rps_dialogue(
-            player_choice=res["player_choice"],
-            sherry_choice=res["sherry_choice"],
-            outcome=res["outcome"],
+    try:
+        new_rule = roast_manager.add_rule(
+            keyword=keyword,
+            reply_guide=reply_guide,
+            probability=prob_int,
+            match_mode=match_mode,  # type: ignore[arg-type]
+            enabled=enabled,
         )
-        res["sherry_dialogue"] = dialogue
-        return jsonify(res)
+        return jsonify({"status": "success", "rule": new_rule.to_dict()})
     except Exception as exc:
-        logger.error("RPS play error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
-@app.route("/api/games/blackjack/start", methods=["POST"])
-async def start_blackjack() -> Response:
-    """Start a new Blackjack game against Sherry."""
-    try:
-        engine = _get_blackjack_engine()
-        state = engine.start_game()
-
-        from mod.game_center.sherry_ai import SherryGameAIService
-        ai_service = SherryGameAIService()
-
-        thought, dialogue = await ai_service.generate_blackjack_thought_and_dialogue(
-            player_score=state.player_score,
-            dealer_cards_str=", ".join(f"{c.suit}{c.rank}" for c in state.dealer_cards),
-            dealer_score=state.dealer_score,
-            action="start",
-            status=state.status.value,
-        )
-        state.sherry_thought = thought
-        state.sherry_dialogue = dialogue
-        return jsonify(state.to_dict())
-    except Exception as exc:
-        logger.error("Blackjack start error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
-@app.route("/api/games/blackjack/hit", methods=["POST"])
-async def hit_blackjack() -> Response:
-    """Hit a card in Blackjack."""
-    try:
-        data = await request.get_json() or {}
-        game_id = data.get("game_id", "")
-        engine = _get_blackjack_engine()
-        state = engine.hit(game_id)
-        if not state:
-            return jsonify({"error": "Game not found or finished"}), 404
-
-        from mod.game_center.sherry_ai import SherryGameAIService
-        ai_service = SherryGameAIService()
-
-        thought, dialogue = await ai_service.generate_blackjack_thought_and_dialogue(
-            player_score=state.player_score,
-            dealer_cards_str=", ".join(f"{c.suit}{c.rank}" for c in state.dealer_cards),
-            dealer_score=state.dealer_score,
-            action="hit",
-            status=state.status.value,
-        )
-        state.sherry_thought = thought
-        state.sherry_dialogue = dialogue
-        return jsonify(state.to_dict())
-    except Exception as exc:
-        logger.error("Blackjack hit error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
-@app.route("/api/games/blackjack/stand", methods=["POST"])
-async def stand_blackjack() -> Response:
-    """Stand turn in Blackjack."""
-    try:
-        data = await request.get_json() or {}
-        game_id = data.get("game_id", "")
-        engine = _get_blackjack_engine()
-        state = engine.stand(game_id)
-        if not state:
-            return jsonify({"error": "Game not found or finished"}), 404
-
-        from mod.game_center.sherry_ai import SherryGameAIService
-        ai_service = SherryGameAIService()
-
-        thought, dialogue = await ai_service.generate_blackjack_thought_and_dialogue(
-            player_score=state.player_score,
-            dealer_cards_str=", ".join(f"{c.suit}{c.rank}" for c in state.dealer_cards),
-            dealer_score=state.dealer_score,
-            action="stand",
-            status=state.status.value,
-        )
-        state.sherry_thought = thought
-        state.sherry_dialogue = dialogue
-        return jsonify(state.to_dict())
-    except Exception as exc:
-        logger.error("Blackjack stand error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
-@app.route("/api/games/minesweeper/start", methods=["POST"])
-async def start_minesweeper() -> Response:
-    """Start a Minesweeper game."""
-    try:
-        data = await request.get_json() or {}
-        rows = int(data.get("rows", 8))
-        cols = int(data.get("cols", 8))
-        mines = int(data.get("mines", 10))
-
-        engine = _get_minesweeper_engine()
-        state = engine.start_game(rows=rows, cols=cols, mine_count=mines)
-        return jsonify(state.to_dict())
-    except Exception as exc:
-        logger.error("Minesweeper start error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
-@app.route("/api/games/minesweeper/reveal", methods=["POST"])
-async def reveal_minesweeper() -> Response:
-    """Reveal a Minesweeper cell."""
-    try:
-        data = await request.get_json() or {}
-        game_id = data.get("game_id", "")
-        row = int(data.get("row", 0))
-        col = int(data.get("col", 0))
-
-        engine = _get_minesweeper_engine()
-        state = engine.reveal_cell(game_id, row, col)
-        if not state:
-            return jsonify({"error": "Game not found"}), 404
-
-        return jsonify(state.to_dict())
-    except Exception as exc:
-        logger.error("Minesweeper reveal error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
-@app.route("/api/games/minesweeper/flag", methods=["POST"])
-async def flag_minesweeper() -> Response:
-    """Toggle flag on Minesweeper cell."""
-    try:
-        data = await request.get_json() or {}
-        game_id = data.get("game_id", "")
-        row = int(data.get("row", 0))
-        col = int(data.get("col", 0))
-
-        engine = _get_minesweeper_engine()
-        state = engine.toggle_flag(game_id, row, col)
-        if not state:
-            return jsonify({"error": "Game not found"}), 404
-
-        return jsonify(state.to_dict())
-    except Exception as exc:
-        logger.error("Minesweeper flag error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
-@app.route("/api/games/minesweeper/hint", methods=["POST"])
-async def hint_minesweeper() -> Response:
-    """Get Sherry LLM detective hint for Minesweeper."""
-    try:
-        data = await request.get_json() or {}
-        game_id = data.get("game_id", "")
-        engine = _get_minesweeper_engine()
-        state = engine.get_game(game_id)
-        if not state:
-            return jsonify({"error": "Game not found"}), 404
-
-        from mod.game_center.sherry_ai import SherryGameAIService
-        ai_service = SherryGameAIService()
-
-        summary_lines = []
-        for r in range(min(5, state.rows)):
-            row_str = " ".join("F" if c.is_flagged else (str(c.neighbor_mines) if c.is_revealed else "?") for c in state.board[r][:5])
-            summary_lines.append(row_str)
-        summary = "\n".join(summary_lines)
-
-        hint = await ai_service.generate_minesweeper_hint(
-            board_summary=summary,
-            revealed_count=state.revealed_count,
-            mine_count=state.mine_count,
-        )
-        state.sherry_hint = hint
-        return jsonify(state.to_dict())
-    except Exception as exc:
-        logger.error("Minesweeper hint error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
-# ── New Games: Turtle Soup, 20Q Akinator, Escape Room, Tic-Tac-Toe ──
-
-_turtle_soup_engine: Any = None
-_akinator_engine: Any = None
-_escape_room_engine: Any = None
-_ttt_engine: Any = None
-
-
-@app.route("/api/games/turtle_soup/start", methods=["POST"])
-async def start_turtle_soup() -> Response:
-    """Start Turtle Soup game."""
-    try:
-        from mod.game_center.turtle_soup import TurtleSoupEngine
-        global _turtle_soup_engine
-        if _turtle_soup_engine is None:
-            _turtle_soup_engine = TurtleSoupEngine()
-
-        state = _turtle_soup_engine.start_game()
-        return jsonify(state.to_dict())
-    except Exception as exc:
-        logger.error("Turtle soup start error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
-@app.route("/api/games/turtle_soup/ask", methods=["POST"])
-async def ask_turtle_soup() -> Response:
-    """Ask question to Sherry Turtle Soup host."""
-    try:
-        data = await request.get_json() or {}
-        game_id = data.get("game_id", "")
-        question = data.get("question", "")
-
-        global _turtle_soup_engine
-        if not _turtle_soup_engine:
-            return jsonify({"error": "Game engine not initialized"}), 404
-
-        state = _turtle_soup_engine.get_game(game_id)
-        if not state:
-            return jsonify({"error": "Game not found"}), 404
-
-        from mod.game_center.sherry_ai import SherryGameAIService
-        ai_service = SherryGameAIService()
-
-        reply = await ai_service.generate_turtle_soup_reply(
-            surface_story=state.surface_story,
-            truth=state.truth,
-            player_question=question,
-        )
-        state.dialogue_history.append({"q": question, "a": reply})
-        state.sherry_reply = reply
-        return jsonify(state.to_dict())
-    except Exception as exc:
-        logger.error("Turtle soup ask error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
-@app.route("/api/games/akinator/start", methods=["POST"])
-async def start_akinator() -> Response:
-    """Start Akinator 20 Questions."""
-    try:
-        from mod.game_center.akinator_20q import AkinatorEngine
-        global _akinator_engine
-        if _akinator_engine is None:
-            _akinator_engine = AkinatorEngine()
-
-        state = _akinator_engine.start_game()
-        return jsonify(state.to_dict())
-    except Exception as exc:
-        logger.error("Akinator start error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
-@app.route("/api/games/akinator/answer", methods=["POST"])
-async def answer_akinator() -> Response:
-    """Submit answer to 20 Questions."""
-    try:
-        data = await request.get_json() or {}
-        game_id = data.get("game_id", "")
-        answer = data.get("answer", "是")
-
-        global _akinator_engine
-        if not _akinator_engine:
-            return jsonify({"error": "Game not initialized"}), 404
-
-        state = _akinator_engine.record_answer(game_id, answer)
-        if not state:
-            return jsonify({"error": "Game not found"}), 404
-
-        from mod.game_center.sherry_ai import SherryGameAIService
-        ai_service = SherryGameAIService()
-
-        next_q = await ai_service.generate_20q_next_question(
-            history=state.history,
-            q_count=state.question_count,
-        )
-        state.current_question = next_q
-        return jsonify(state.to_dict())
-    except Exception as exc:
-        logger.error("Akinator answer error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
-@app.route("/api/games/escape_room/start", methods=["POST"])
-async def start_escape_room() -> Response:
-    """Start Detective Escape Room."""
-    try:
-        from mod.game_center.escape_room import EscapeRoomEngine
-        global _escape_room_engine
-        if _escape_room_engine is None:
-            _escape_room_engine = EscapeRoomEngine()
-
-        state = _escape_room_engine.start_game()
-        return jsonify(state.to_dict())
-    except Exception as exc:
-        logger.error("Escape room start error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
-@app.route("/api/games/escape_room/action", methods=["POST"])
-async def action_escape_room() -> Response:
-    """Investigate target in escape room."""
-    try:
-        data = await request.get_json() or {}
-        game_id = data.get("game_id", "")
-        target = data.get("target", "書桌")
-
-        global _escape_room_engine
-        if not _escape_room_engine:
-            return jsonify({"error": "Game not initialized"}), 404
-
-        state = _escape_room_engine.get_game(game_id)
-        if not state:
-            return jsonify({"error": "Game not found"}), 404
-
-        from mod.game_center.sherry_ai import SherryGameAIService
-        ai_service = SherryGameAIService()
-
-        if target not in state.inventory:
-            state.inventory.append(f"從{target}獲得的線索")
-
-        narration = await ai_service.generate_escape_room_narration(
-            action=target,
-            inventory=state.inventory,
-        )
-        state.sherry_narration = narration
-        return jsonify(state.to_dict())
-    except Exception as exc:
-        logger.error("Escape room action error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
-@app.route("/api/games/ttt/start", methods=["POST"])
-async def start_ttt() -> Response:
-    """Start Tic-Tac-Toe."""
-    try:
-        from mod.game_center.tic_tac_toe import TicTacToeEngine
-        global _ttt_engine
-        if _ttt_engine is None:
-            _ttt_engine = TicTacToeEngine()
-
-        state = _ttt_engine.start_game()
-        return jsonify(state.to_dict())
-    except Exception as exc:
-        logger.error("TTT start error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
-@app.route("/api/games/ttt/move", methods=["POST"])
-async def move_ttt() -> Response:
-    """Make move in Tic-Tac-Toe."""
-    try:
-        data = await request.get_json() or {}
-        game_id = data.get("game_id", "")
-        index = int(data.get("index", 0))
-
-        global _ttt_engine
-        if not _ttt_engine:
-            return jsonify({"error": "Game not initialized"}), 404
-
-        state = _ttt_engine.player_move(game_id, index)
-        if not state:
-            return jsonify({"error": "Game not found"}), 404
-
-        from mod.game_center.sherry_ai import SherryGameAIService
-        ai_service = SherryGameAIService()
-
-        dialogue = await ai_service.generate_ttt_dialogue(state.status.value)
-        state.sherry_dialogue = dialogue
-        return jsonify(state.to_dict())
-    except Exception as exc:
-        logger.error("TTT move error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
-
-# ---------------------------------------------------------------------------
-# Entry point (used by main.py via asyncio)
-# ---------------------------------------------------------------------------
+        return jsonify({"status": "error", "message": str(exc)}), 500
+
+
+@app.route("/api/roast/rules/<rule_id>", methods=["PUT", "DELETE"])
+async def modify_roast_rule(rule_id: str) -> tuple[Response, int] | Response:
+    """Update or delete an existing roast rule."""
+    if not _is_admin_request(request):
+        return jsonify({"status": "error", "message": "此操作需要管理員身份，請先登入！"}), 403
+
+    from handlers.roast.manager import roast_manager
+
+    if request.method == "DELETE":
+        deleted = roast_manager.delete_rule(rule_id)
+        if deleted:
+            return jsonify({"status": "success", "message": "規則已刪除"})
+        return jsonify({"status": "error", "message": "找不到該吐槽規則！"}), 404
+
+    # PUT
+    data: dict[str, Any] = await request.get_json() or {}
+    keyword = str(data["keyword"]).strip() if "keyword" in data else None
+    reply_guide = str(data["reply_guide"]).strip() if "reply_guide" in data else None
+    probability = None
+    if "probability" in data:
+        try:
+            probability = max(0, min(100, int(float(data["probability"]))))
+        except (ValueError, TypeError):
+            pass
+    match_mode = str(data["match_mode"]).lower() if "match_mode" in data else None
+    if match_mode and match_mode not in ("contains", "exact", "regex"):
+        match_mode = "contains"
+    enabled = bool(data["enabled"]) if "enabled" in data else None
+
+    updated = roast_manager.update_rule(
+        rule_id=rule_id,
+        keyword=keyword,
+        reply_guide=reply_guide,
+        probability=probability,
+        match_mode=match_mode,  # type: ignore[arg-type]
+        enabled=enabled,
+    )
+    if updated:
+        return jsonify({"status": "success", "rule": updated.to_dict()})
+    return jsonify({"status": "error", "message": "找不到該吐槽規則！"}), 404
+
+
+@app.route("/api/roast/test", methods=["POST"])
+async def test_roast_preview() -> tuple[Response, int] | Response:
+    """Simulate a chat message and test Sherry's roast response."""
+    import time
+    from handlers.roast.manager import roast_manager
+    data: dict[str, Any] = await request.get_json() or {}
+    message_text = str(data.get("message", "")).strip()
+    force = bool(data.get("force", False))
+
+    if not message_text:
+        return jsonify({"status": "error", "message": "請輸入測試訊息內容！"}), 400
+
+    matching_rules = roast_manager.find_matching_rules(message_text)
+    if not matching_rules:
+        return jsonify({
+            "status": "success",
+            "matched": False,
+            "message": "未命中任何已啟用的吐槽關鍵字",
+            "roast_reply": None,
+        })
+
+    selected_rule = None
+    for rule in matching_rules:
+        if force or roast_manager.roll_probability(rule):
+            selected_rule = rule
+            break
+
+    if not selected_rule:
+        return jsonify({
+            "status": "success",
+            "matched": True,
+            "triggered": False,
+            "message": f"命中關鍵字 '{matching_rules[0].keyword}' 但因機率判定（{matching_rules[0].probability}%）未觸發",
+            "rule": matching_rules[0].to_dict(),
+            "roast_reply": None,
+        })
+
+    # Try LLM generation if bot brain available
+    roast_reply = selected_rule.reply_guide
+    if _bot_instance:
+        brain = _bot_instance.get_cog("BotBrain")
+        if brain:
+            import asyncio
+            from handlers.bot_brain import InferenceTask
+            from handlers.social.persona import build_dynamic_persona
+            from handlers.social.utils import SAFETY_FOOTER
+
+            head_persona, _tail = build_dynamic_persona(message_text, "CHAT")
+            prompt = (
+                f"{head_persona}\n\n"
+                "🚨 【即時吐槽測試任務 (Tsukkomi Directive)】\n"
+                f"使用者發言：「{message_text}」\n"
+                f"觸發關鍵字「{selected_rule.keyword}」\n"
+                f"【核心吐槽指引】：「{selected_rule.reply_guide}」\n\n"
+                "🎯 【吐槽生成三大核心法則】（極為重要！）：\n"
+                "1. 🔗 深度結合對方發言情境：妳必須敏銳抓住對方句子裡的具體人事物、動作或場景，將「核心吐槽指引」自然融合進去進行精準反駁！絕對禁止忽視對方說的內容只講生硬的罐頭台詞。\n"
+                "2. 🍊 傲嬌毒舌名偵探人設：語氣自信、傲嬌且犀利，一針見血地戳破對方的幻想或吐槽對方的行為！\n"
+                "3. ⚡ 俐落生動短句：長度約 15 ~ 55 字，必須是妳直接說出口的生動對白，絕對禁止在最外層包裹「」或 \"\" 引號，禁止任何機器人客套話！\n"
+            ) + SAFETY_FOOTER
+
+            future = _bot_instance.loop.create_future()
+
+            async def _cb(res: str) -> None:
+                if not future.done():
+                    future.set_result(res)
+
+            task = InferenceTask(
+                priority=settings.PRIORITY_TAG_RESPONSE,
+                system_prompt=prompt,
+                user_prompt=f"【使用者發言內容】: {message_text}",
+                callback=_cb,
+                model=settings.PRIMARY_MODEL,
+                task_id=f"roast-test-{int(time.time())}",
+            )
+            await brain.enqueue_task(task)
+            try:
+                raw = await asyncio.wait_for(future, timeout=6.0)
+                cleaned = raw.strip().strip('"').strip("「").strip("」").strip()
+                if cleaned:
+                    roast_reply = cleaned
+            except Exception:
+                pass
+
+    return jsonify({
+        "status": "success",
+        "matched": True,
+        "triggered": True,
+        "rule": selected_rule.to_dict(),
+        "roast_reply": roast_reply,
+    })
+
 
 
 def _ensure_self_signed_cert() -> tuple[str, str]:
@@ -1924,6 +1915,20 @@ def _ensure_self_signed_cert() -> tuple[str, str]:
         x509.NameAttribute(NameOID.COMMON_NAME, "Sherry Web UI"),
     ])
     now = datetime.datetime.now(datetime.timezone.utc)
+
+    san_list: list[x509.GeneralName] = [
+        x509.DNSName("localhost"),
+        x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
+        x509.IPAddress(ipaddress.IPv4Address("0.0.0.0")),
+    ]
+
+    host_str = str(settings.WEB_UI_HOST).strip()
+    if host_str not in ("127.0.0.1", "0.0.0.0", "localhost"):
+        try:
+            san_list.append(x509.IPAddress(ipaddress.ip_address(host_str)))
+        except ValueError:
+            san_list.append(x509.DNSName(host_str))
+
     cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
@@ -1933,12 +1938,7 @@ def _ensure_self_signed_cert() -> tuple[str, str]:
         .not_valid_before(now)
         .not_valid_after(now + datetime.timedelta(days=3650))
         .add_extension(
-            x509.SubjectAlternativeName([
-                x509.DNSName("localhost"),
-                x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
-                x509.IPAddress(ipaddress.IPv4Address("0.0.0.0")),
-                x509.IPAddress(ipaddress.IPv4Address(settings.WEB_UI_RADMIN_IP)) if settings.WEB_UI_RADMIN_IP else x509.DNSName("sherry.local"),
-            ]),
+            x509.SubjectAlternativeName(san_list),
             critical=False,
         )
         .sign(key, hashes.SHA256())
@@ -1959,239 +1959,12 @@ def _ensure_self_signed_cert() -> tuple[str, str]:
     return str(cert_path), str(key_path)
 
 
-# ---------------------------------------------------------------------------
-# Stock Trader Web UI API Endpoints
-# ---------------------------------------------------------------------------
-
-@app.route("/api/stock_trader/overview", methods=["GET"])
-async def get_stock_trader_overview() -> Response:
-    """Return Stock Trader account balance and summary metrics."""
-    from mod.stock_trader.repository import StockRepository
-    repo = StockRepository()
-    account = repo.load_portfolio()
-
-    # Get day PnL from latest snapshot if available
-    history = repo.load_daily_history()
-    day_pnl = history[-1].day_pnl if history else 0.0
-
-    return jsonify({
-        "status": "success",
-        "data": {
-            "initial_capital": account.initial_capital,
-            "cash": account.cash,
-            "total_asset_value": account.get_total_asset_value(),
-            "total_pnl": account.get_total_pnl(),
-            "total_pnl_pct": account.get_total_pnl_pct(),
-            "day_pnl": day_pnl,
-            "realized_pnl": account.realized_pnl,
-            "win_rate_pct": account.get_win_rate_pct(),
-            "total_trades_count": account.total_trades_count,
-            "winning_trades_count": account.winning_trades_count,
-            "positions_count": len(account.positions),
-            "updated_at": account.updated_at,
-        }
-    })
-
-
-@app.route("/api/stock_trader/chart", methods=["GET"])
-async def get_stock_trader_chart() -> Response:
-    """Return last 30 days daily asset snapshots for return rate line chart."""
-    from mod.stock_trader.repository import StockRepository
-    repo = StockRepository()
-    history = repo.load_daily_history()
-
-    # Limit to last 30 snapshots
-    history_30d = history[-30:] if len(history) > 30 else history
-
-    chart_data = [
-        {
-            "date": s.date,
-            "total_asset_value": s.total_asset_value,
-            "cash": s.cash,
-            "total_pnl": s.total_pnl,
-            "return_rate_pct": s.return_rate_pct,
-            "day_pnl": s.day_pnl,
-        }
-        for s in history_30d
-    ]
-
-    return jsonify({
-        "status": "success",
-        "count": len(chart_data),
-        "data": chart_data,
-    })
-
-
-@app.route("/api/stock_trader/holdings", methods=["GET"])
-async def get_stock_trader_holdings() -> Response:
-    """Return current portfolio stock positions."""
-    from mod.stock_trader.repository import StockRepository
-    repo = StockRepository()
-    account = repo.load_portfolio()
-
-    holdings_list = []
-    for ticker, pos in account.positions.items():
-        holdings_list.append({
-            "ticker": pos.ticker,
-            "shares": pos.shares,
-            "avg_cost": pos.avg_cost,
-            "current_price": pos.current_price,
-            "total_cost": pos.total_cost,
-            "market_value": pos.market_value,
-            "unrealized_pnl": pos.unrealized_pnl,
-            "unrealized_pnl_pct": pos.unrealized_pnl_pct,
-        })
-
-    return jsonify({
-        "status": "success",
-        "data": holdings_list,
-    })
-
-
-@app.route("/api/stock_trader/trades", methods=["GET"])
-async def get_stock_trader_trades() -> Response:
-    """Return trade history records."""
-    from mod.stock_trader.repository import StockRepository
-    repo = StockRepository()
-    trades = repo.load_trades(limit=100)
-
-    trade_list = [
-        {
-            "trade_id": t.trade_id,
-            "timestamp": t.timestamp,
-            "ticker": t.ticker,
-            "action": t.action,
-            "shares": t.shares,
-            "execution_price": t.execution_price,
-            "fee": t.fee,
-            "total_amount": t.total_amount,
-            "realized_pnl": t.realized_pnl,
-            "reason": t.reason,
-        }
-        for t in trades
-    ]
-
-    return jsonify({
-        "status": "success",
-        "data": trade_list,
-    })
-
-
-@app.route("/api/stock_trader/thoughts", methods=["GET"])
-async def get_stock_trader_thoughts() -> Response:
-    """Return Sherry CoT thinking process logs."""
-    from mod.stock_trader.repository import StockRepository
-    repo = StockRepository()
-    thoughts = repo.load_thoughts(limit=30)
-
-    thought_list = [
-        {
-            "timestamp": th.timestamp,
-            "trigger_type": th.trigger_type,
-            "thought_process": th.thought_process,
-            "decision_summary": th.decision_summary,
-            "recommended_actions": th.recommended_actions,
-        }
-        for th in thoughts
-    ]
-
-    return jsonify({
-        "status": "success",
-        "data": thought_list,
-    })
-
-
-@app.route("/api/stock_trader/targets", methods=["GET"])
-async def get_stock_trader_targets() -> Response:
-    """Return target stocks with latest technical indicators."""
-    from mod.market_plugin.data_fetcher import DataFetcher
-    fetcher = DataFetcher()
-    tickers = ["NVDA", "AAPL", "MSFT", "GOOG", "AMZN", "META", "TSLA", "TSM", "AVGO", "AMD"]
-
-    if _bot_instance and hasattr(_bot_instance, "_stock_trader_cog"):
-        cog = _bot_instance._stock_trader_cog
-        if hasattr(cog, "get_watch_tickers"):
-            tickers = cog.get_watch_tickers()
-
-    import asyncio
-    loop = asyncio.get_running_loop()
-    indicators = await loop.run_in_executor(None, fetcher.get_stock_info_raw, tickers)
-
-    return jsonify({
-        "status": "success",
-        "data": indicators,
-    })
-
-
-@app.route("/api/stock_trader/trigger", methods=["POST"])
-async def trigger_stock_trader_eval() -> Response:
-    """Manually trigger a Stock Trader evaluation & decision cycle (Admin only)."""
-    if not _is_admin_request(request):
-        return jsonify({"status": "error", "message": "手動看盤評估僅限登入管理員使用，請先登入！"}), 403
-
-    cog = getattr(_bot_instance, "_stock_trader_cog", None) if _bot_instance else None
-
-    try:
-        if cog and hasattr(cog, "run_evaluation_cycle"):
-            res = await cog.run_evaluation_cycle(trigger_type="MANUAL")
-        else:
-            from mod.stock_trader.cog import StockTraderCog
-            temp_cog = StockTraderCog(bot=_bot_instance)
-            res = await temp_cog.run_evaluation_cycle(trigger_type="MANUAL")
-        return jsonify({"status": "success", "result": res})
-    except Exception as exc:
-        logger.exception("[stock_trader] 手動觸發看盤發生異常: %s", exc)
-        return jsonify({"status": "error", "message": f"觸發異常: {exc}"}), 500
-
-
-@app.route("/api/stock_trader/refresh_prices", methods=["POST"])
-async def refresh_stock_trader_prices() -> Response:
-    """Manually refresh real-time stock prices & portfolio unrealized PnL via yfinance without AI trading (Admin only)."""
-    if not _is_admin_request(request):
-        return jsonify({"status": "error", "message": "刷新最新行情僅限登入管理員使用，請先登入！"}), 403
-
-    cog = getattr(_bot_instance, "_stock_trader_cog", None) if _bot_instance else None
-
-    try:
-        if cog and hasattr(cog, "fetcher"):
-            tickers = cog.get_watch_tickers()
-            loop = asyncio.get_running_loop()
-            indicators = await loop.run_in_executor(None, cog.fetcher.get_stock_info_raw, tickers)
-            price_map = {item["ticker"]: item["close"] for item in indicators} if indicators else {}
-            account = cog.algo.update_prices(price_map)
-            return jsonify({
-                "status": "success",
-                "message": f"已成功連線 yfinance 刷新 {len(indicators)} 檔標的之最新行情與持倉損益！",
-                "total_asset_value": account.get_total_asset_value(),
-                "total_pnl": account.get_total_pnl(),
-            })
-        else:
-            from mod.market_plugin.data_fetcher import DataFetcher
-            from mod.stock_trader.engine.algo_trader import AlgoTrader
-            from mod.stock_trader.repository import StockRepository
-            repo = StockRepository()
-            algo = AlgoTrader(repo=repo)
-            fetcher = DataFetcher()
-            tickers = ["NVDA", "AAPL", "MSFT", "GOOG", "AMZN", "META", "TSLA", "TSM", "AVGO", "AMD"]
-            loop = asyncio.get_running_loop()
-            indicators = await loop.run_in_executor(None, fetcher.get_stock_info_raw, tickers)
-            price_map = {item["ticker"]: item["close"] for item in indicators} if indicators else {}
-            account = algo.update_prices(price_map)
-            return jsonify({
-                "status": "success",
-                "message": f"已成功連線 yfinance 刷新 {len(indicators)} 檔標的之最新行情與持倉損益！",
-                "total_asset_value": account.get_total_asset_value(),
-                "total_pnl": account.get_total_pnl(),
-            })
-    except Exception as exc:
-        logger.exception("[stock_trader] 手動刷新美股行情發生異常: %s", exc)
-        return jsonify({"status": "error", "message": f"刷新異常: {exc}"}), 500
-
-
 async def start_server_async(bot: Any = None) -> None:
     """Start the Quart server as an asyncio coroutine."""
     global _bot_instance
     _bot_instance = bot
+    if bot is not None:
+        _discover_and_mount_mod_plugins(app, bot)
     import uvicorn
 
     ssl_certfile = settings.WEB_UI_SSL_CERT

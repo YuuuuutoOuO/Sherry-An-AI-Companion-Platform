@@ -11,7 +11,7 @@ import asyncio
 import aiohttp
 
 # 將專案根目錄加入 PYTHONPATH
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # 引入核心模組 (避免載入 Discord Client，只測試純邏輯)

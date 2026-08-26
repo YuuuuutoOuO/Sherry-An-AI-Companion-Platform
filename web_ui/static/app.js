@@ -1,10 +1,10 @@
 /* ======================================================
    Sherry Console v2 — app.js
    完整重寫：Log 動態載入、Settings 分組渲染、
-   Model Picker（下拉+手動）、分頁、自動刷新、Toast
+   Model Picker（下拉+手動）、分頁、自動刷新、Toast、
+   外掛生態 (SherryUI Plugin Ecosystem) 被動動態加載
    ====================================================== */
 
-// ── State ────────────────────────────────────────────────
 // ── State ────────────────────────────────────────────────
 const state = {
   currentView: 'dashboard',
@@ -30,6 +30,24 @@ const state = {
   inactivityCheckTimer: null,
 };
 
+// ── SherryUI Ecosystem for Dynamic Mod Plugins ───────────
+window.SherryUI = {
+  plugins: {},
+  activePluginId: null,
+  registerPlugin(id, config) {
+    this.plugins[id] = config;
+    console.log(`[SherryUI] Registered plugin: ${id}`, config);
+    // If user is currently looking at this mod view, trigger onActivate immediately
+    if (state.currentView === (config.viewId || id) && typeof config.onActivate === 'function') {
+      try { config.onActivate(); } catch (e) { console.error(e); }
+    }
+  },
+  getAuthHeaders,
+  showToast,
+  switchView,
+  escapeHtml,
+};
+
 // ── Init ─────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   await checkAdminAuth();
@@ -40,31 +58,87 @@ document.addEventListener('DOMContentLoaded', async () => {
   startAutoRefresh();
 });
 
+/**
+ * Dynamically discover and mount mods from /api/modules.
+ * Builds sidebar navigation buttons, injects view HTML, and executes mod scripts.
+ */
 async function checkDynamicModules() {
   try {
     const res = await fetch('/api/modules');
     const data = await res.json();
     const mods = data.modules || {};
+    const dynamicNavGroup = document.getElementById('sidebar-dynamic-mods');
+    const dynamicNavWrap = document.getElementById('sidebar-dynamic-mods-wrap');
+    const dynamicViewsContainer = document.getElementById('dynamic-mod-views');
 
-    // game_center: inject/remove nav button based on enabled flag
-    if (mods.game_center && mods.game_center.enabled) {
-      const nav = document.querySelector('.sidebar-nav');
-      if (nav && !document.getElementById('nav-games')) {
-        const btn = document.createElement('button');
-        btn.className = 'nav-btn';
-        btn.id = 'nav-games';
-        btn.onclick = () => switchView('games');
-        btn.innerHTML = `<span class="nav-icon">🎮</span><span>小遊戲遊樂場</span>`;
-        const settingsBtn = document.getElementById('nav-settings');
-        if (settingsBtn) {
-          nav.insertBefore(btn, settingsBtn);
-        } else {
-          nav.appendChild(btn);
+    if (dynamicNavGroup) dynamicNavGroup.innerHTML = '';
+
+    const modEntries = Object.values(mods).sort((a, b) => (a.order || 100) - (b.order || 100));
+    let mountedModsCount = 0;
+
+    for (const mod of modEntries) {
+      if (!mod.enabled || !mod.has_web_ui) continue;
+      mountedModsCount++;
+
+      const navId = `nav-${mod.nav_id || mod.id}`;
+      const viewId = `view-${mod.nav_id || mod.id}`;
+
+      // 1. Sidebar navigation button
+      if (dynamicNavGroup) {
+        let btn = document.getElementById(navId);
+        if (!btn) {
+          btn = document.createElement('button');
+          btn.className = 'nav-btn' + (mod.admin_only ? ' admin-only' : '');
+          btn.id = navId;
+          btn.onclick = () => switchView(mod.nav_id || mod.id);
+          btn.innerHTML = `<span class="nav-icon">${mod.nav_icon || '🧩'}</span><span>${mod.nav_title || mod.display_name}</span>`;
+          dynamicNavGroup.appendChild(btn);
+        }
+      }
+
+      // 2. Fetch and mount dynamic view snippet if has view
+      if (dynamicViewsContainer && mod.has_view && mod.view_url) {
+        let existingView = document.getElementById(viewId);
+        if (!existingView) {
+          try {
+            const viewRes = await fetch(mod.view_url);
+            if (viewRes.ok) {
+              const html = await viewRes.text();
+              const tempWrapper = document.createElement('div');
+              tempWrapper.innerHTML = html.trim();
+              while (tempWrapper.firstChild) {
+                const node = tempWrapper.firstChild;
+                if (node.nodeType === Node.ELEMENT_NODE && node.classList && node.classList.contains('view')) {
+                  if (!node.id) node.id = viewId;
+                  node.classList.add('hidden');
+                }
+                dynamicViewsContainer.appendChild(node);
+              }
+            }
+          } catch (err) {
+            console.error(`Failed to load view for mod [${mod.id}]:`, err);
+          }
+        }
+      }
+
+      // 3. Dynamically inject script tag if has script
+      if (mod.script_url) {
+        const scriptId = `script-mod-${mod.id}`;
+        if (!document.getElementById(scriptId)) {
+          const script = document.createElement('script');
+          script.id = scriptId;
+          script.src = `${mod.script_url}?v=${Date.now()}`;
+          script.async = true;
+          document.body.appendChild(script);
         }
       }
     }
+
+    if (dynamicNavWrap) {
+      dynamicNavWrap.style.display = mountedModsCount > 0 ? 'flex' : 'none';
+    }
   } catch (e) {
-    console.warn('Failed to check dynamic modules:', e);
+    console.warn('Failed to discover & mount dynamic modules:', e);
   }
 }
 
@@ -73,26 +147,20 @@ async function checkDynamicModules() {
 // VIEW SWITCHING
 // =========================================================
 function switchView(view) {
+  // Notify previous plugin of deactivation
+  if (window.SherryUI && window.SherryUI.activePluginId) {
+    const prevPlugin = window.SherryUI.plugins[window.SherryUI.activePluginId];
+    if (prevPlugin && typeof prevPlugin.onDeactivate === 'function') {
+      try { prevPlugin.onDeactivate(); } catch (e) { console.error(e); }
+    }
+    window.SherryUI.activePluginId = null;
+  }
+
   state.currentView = view;
 
   document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
   document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
-  document.getElementById('logs-toolbar').classList.add('hidden');
-  document.getElementById('metrics-toolbar').classList.add('hidden');
-  document.getElementById('tasks-toolbar').classList.add('hidden');
-  document.getElementById('settings-toolbar').classList.add('hidden');
-  const dTb = document.getElementById('dashboard-toolbar');
-  if (dTb) dTb.classList.add('hidden');
-  const sTb = document.getElementById('services-toolbar');
-  if (sTb) sTb.classList.add('hidden');
-  const bTb = document.getElementById('bot-status-toolbar');
-  if (bTb) bTb.classList.add('hidden');
-  const aTb = document.getElementById('audit-toolbar');
-  if (aTb) aTb.classList.add('hidden');
-  const mmTb = document.getElementById('mod-manager-toolbar');
-  if (mmTb) mmTb.classList.add('hidden');
-  const stTb = document.getElementById('stock-trader-toolbar');
-  if (stTb) stTb.classList.add('hidden');
+  document.querySelectorAll('[id$="-toolbar"]').forEach(tb => tb.classList.add('hidden'));
 
   if (state.metricsTimer) {
     clearInterval(state.metricsTimer);
@@ -115,6 +183,7 @@ function switchView(view) {
     const navDb = document.getElementById('nav-dashboard');
     if (navDb) navDb.classList.add('active');
     document.getElementById('view-dashboard').classList.remove('hidden');
+    const dTb = document.getElementById('dashboard-toolbar');
     if (dTb) dTb.classList.remove('hidden');
     document.getElementById('view-title').textContent = '📊 總覽主控台';
     loadDashboard();
@@ -149,6 +218,7 @@ function switchView(view) {
   } else if (view === 'services') {
     document.getElementById('nav-services').classList.add('active');
     document.getElementById('view-services').classList.remove('hidden');
+    const sTb = document.getElementById('services-toolbar');
     if (sTb) sTb.classList.remove('hidden');
     document.getElementById('view-title').textContent = '📡 地端 AI 服務即時監測';
     loadServiceStatus();
@@ -157,6 +227,7 @@ function switchView(view) {
     const navBs = document.getElementById('nav-bot-status');
     if (navBs) navBs.classList.add('active');
     document.getElementById('view-bot-status').classList.remove('hidden');
+    const bTb = document.getElementById('bot-status-toolbar');
     if (bTb) bTb.classList.remove('hidden');
     document.getElementById('view-title').textContent = '🎵 雪莉語音與音樂動態監控';
     loadBotStatus();
@@ -165,37 +236,55 @@ function switchView(view) {
     const navAudit = document.getElementById('nav-audit');
     if (navAudit) navAudit.classList.add('active');
     document.getElementById('view-audit').classList.remove('hidden');
+    const aTb = document.getElementById('audit-toolbar');
     if (aTb) aTb.classList.remove('hidden');
     document.getElementById('view-title').textContent = '🛡️ 管理員審計紀錄';
     loadAuditLogs();
-  } else if (view === 'games') {
-    const navGames = document.getElementById('nav-games');
-    if (navGames) navGames.classList.add('active');
-    const viewGames = document.getElementById('view-games');
-    if (viewGames) viewGames.classList.remove('hidden');
-    document.getElementById('view-title').textContent = '🎮 雪莉小遊戲遊樂場 (Mod)';
   } else if (view === 'mod-manager') {
     const navMM = document.getElementById('nav-mod-manager');
     if (navMM) navMM.classList.add('active');
     const viewMM = document.getElementById('view-mod-manager');
     if (viewMM) viewMM.classList.remove('hidden');
+    const mmTb = document.getElementById('mod-manager-toolbar');
     if (mmTb) mmTb.classList.remove('hidden');
     document.getElementById('view-title').textContent = '🧩 功能模組管理中心';
     loadModManager();
-  } else if (view === 'stock-trader') {
-    const navSt = document.getElementById('nav-stock-trader');
-    if (navSt) navSt.classList.add('active');
-    const viewSt = document.getElementById('view-stock-trader');
-    if (viewSt) viewSt.classList.remove('hidden');
-    if (stTb) stTb.classList.remove('hidden');
-    document.getElementById('view-title').textContent = '📈 橘雪莉 美股虛擬量化交易控制台';
-    loadStockTraderData();
+  } else if (view === 'roast') {
+    const navRoast = document.getElementById('nav-roast');
+    if (navRoast) navRoast.classList.add('active');
+    const viewRoast = document.getElementById('view-roast');
+    if (viewRoast) viewRoast.classList.remove('hidden');
+    const rTb = document.getElementById('roast-toolbar');
+    if (rTb) rTb.classList.remove('hidden');
+    document.getElementById('view-title').textContent = '🎯 關鍵字吐槽管理中心';
+    loadRoastConfig();
   } else if (view === 'settings') {
     document.getElementById('nav-settings').classList.add('active');
     document.getElementById('view-settings').classList.remove('hidden');
     document.getElementById('settings-toolbar').classList.remove('hidden');
     document.getElementById('view-title').textContent = '系統設定';
     if (Object.keys(state.settingsData).length === 0) loadSettings();
+  } else {
+    // Dynamic Mod Plugin View activation
+    const navBtn = document.getElementById(`nav-${view}`) || document.getElementById(`nav-mod-${view}`);
+    if (navBtn) navBtn.classList.add('active');
+    const viewEl = document.getElementById(`view-${view}`);
+    if (viewEl) viewEl.classList.remove('hidden');
+    const tbEl = document.getElementById(`${view}-toolbar`);
+    if (tbEl) tbEl.classList.remove('hidden');
+
+    if (window.SherryUI && window.SherryUI.plugins) {
+      for (const [pluginId, pConfig] of Object.entries(window.SherryUI.plugins)) {
+        if (pConfig.viewId === view || pluginId === view) {
+          window.SherryUI.activePluginId = pluginId;
+          if (pConfig.title) document.getElementById('view-title').textContent = pConfig.title;
+          if (typeof pConfig.onActivate === 'function') {
+            try { pConfig.onActivate(); } catch (e) { console.error(e); }
+          }
+          break;
+        }
+      }
+    }
   }
 }
 
@@ -411,6 +500,7 @@ async function loadSettings() {
     if (resp.status === 401) return;
     state.settingsData = await resp.json();
     state.dirtyKeys.clear();
+    state.dirtyValues = {};
     updateChangedHint();
     renderSettings();
   } catch (e) {
@@ -454,7 +544,8 @@ function renderSettings() {
     if (!isAllowed) continue;
 
     if (!categories[cat]) categories[cat] = [];
-    categories[cat].push({ key, ...meta });
+    const currentValue = (state.dirtyValues && key in state.dirtyValues) ? state.dirtyValues[key] : meta.value;
+    categories[cat].push({ key, ...meta, value: currentValue });
   }
 
   // Category display order preference
@@ -577,15 +668,19 @@ function buildSettingItem({ key, value, label, description, type, min, max, step
 }
 
 function buildModelPicker(key, value) {
-  const PREFIXES = ['ollama', 'lms', 'vllm', 'openai', 'deepseek', 'gemini', 'claude'];
+  const PREFIXES = ['freetoken', 'ollama', 'lms', 'vllm', 'openai', 'deepseek', 'gemini', 'openrouter', 'claude'];
   // Parse current value
   const colonIdx = (value || '').indexOf(':');
-  const currentPrefix = colonIdx > -1 ? (value || '').slice(0, colonIdx) : 'ollama';
+  const currentPrefix = colonIdx > -1 ? (value || '').slice(0, colonIdx) : 'freetoken';
   const currentModel  = colonIdx > -1 ? (value || '').slice(colonIdx + 1) : (value || '');
 
   const prefixOptions = PREFIXES.map(p =>
     `<option value="${p}" ${p === currentPrefix ? 'selected' : ''}>${p}:</option>`
   ).join('');
+
+  const placeholderText = key === 'VISION_MODEL'
+    ? '手動輸入模型名稱（留空：使用主力模型原生看圖）'
+    : '手動輸入模型名稱';
 
   return `
     <div class="model-picker" id="picker-${escAttr(key)}" data-key="${escAttr(key)}">
@@ -596,10 +691,10 @@ function buildModelPicker(key, value) {
       <div class="model-name-wrap">
         <select class="model-name-select hidden" id="sel-${escAttr(key)}"
           onchange="onModelSelectChange('${escAttr(key)}')">
-          <option value="${escAttr(currentModel)}">${escHtml(currentModel) || '載入中...'}</option>
+          <option value="${escAttr(currentModel)}">${escHtml(currentModel) || (key === 'VISION_MODEL' ? '（留空：使用主力模型原生看圖）' : '載入中...')}</option>
         </select>
         <input type="text" class="model-name-input" id="inp-${escAttr(key)}"
-          placeholder="手動輸入模型名稱" value="${escAttr(currentModel)}"
+          placeholder="${escAttr(placeholderText)}" value="${escAttr(currentModel)}"
           oninput="markDirty('${escAttr(key)}', getModelValue('${escAttr(key)}'))">
       </div>
       <button class="model-fetch-btn" title="從伺服器取得模型列表"
@@ -644,7 +739,11 @@ function getModelValue(key) {
   } else {
     modelName = inp?.value || '';
   }
-  return `${prefix}:${modelName.trim()}`;
+  modelName = modelName.trim();
+  if (!modelName) {
+    return '';
+  }
+  return `${prefix}:${modelName}`;
 }
 
 async function fetchModelsForPicker(key) {
@@ -653,7 +752,7 @@ async function fetchModelsForPicker(key) {
   const inp    = document.getElementById(`inp-${key}`);
   if (!sel) return;
 
-  const isLocal = prefix === 'ollama' || prefix === 'lms' || prefix === 'vllm';
+  const isLocal = prefix === 'freetoken' || prefix === 'ollama' || prefix === 'lms' || prefix === 'vllm';
   if (!isLocal) {
     // Cloud providers: hide select, show text input only
     sel.classList.add('hidden');
@@ -665,8 +764,9 @@ async function fetchModelsForPicker(key) {
   sel.classList.remove('hidden');
 
   try {
-    let endpoint = '/api/models/lms';
+    let endpoint = '/api/models/freetoken';
     if (prefix === 'ollama') endpoint = '/api/models/ollama';
+    else if (prefix === 'lms') endpoint = '/api/models/lms';
     else if (prefix === 'vllm') endpoint = '/api/models/vllm';
     const resp = await fetch(endpoint);
     const data = await resp.json();
@@ -681,14 +781,19 @@ async function fetchModelsForPicker(key) {
     }
 
     const currentVal = inp?.value || '';
-    sel.innerHTML = models.map(m =>
+    let optionsHtml = '';
+    if (key === 'VISION_MODEL') {
+      optionsHtml += `<option value="" ${currentVal === '' ? 'selected' : ''}>⚡ 留空（啟用主力模型端到端原生多模態）</option>`;
+    }
+    optionsHtml += models.map(m =>
       `<option value="${escAttr(m)}" ${m === currentVal ? 'selected' : ''}>${escHtml(m)}</option>`
     ).join('');
     // Also add manual option at end
-    sel.innerHTML += `<option value="__manual__">✏️ 手動輸入...</option>`;
+    optionsHtml += `<option value="__manual__">✏️ 手動輸入...</option>`;
+    sel.innerHTML = optionsHtml;
 
     // Sync input with selected
-    if (sel.value && sel.value !== '__manual__' && inp) {
+    if (sel.value !== undefined && sel.value !== '__manual__' && inp) {
       inp.value = sel.value;
     }
 
@@ -719,6 +824,9 @@ function syncSliderFromNumber(key) {
 
 // ── Dirty Tracking ──────────────────────────────────────
 function markDirty(key, newValue) {
+  if (!state.dirtyValues) state.dirtyValues = {};
+  state.dirtyValues[key] = newValue;
+
   const original = state.settingsData[key]?.value;
   const el = document.getElementById(`inp-${key}`);
 
@@ -736,6 +844,7 @@ function markDirty(key, newValue) {
     if (slider) slider.classList.add('dirty');
   } else {
     state.dirtyKeys.delete(key);
+    delete state.dirtyValues[key];
     if (el) el.classList.remove('dirty');
     const slider = document.getElementById(`slider-${key}`);
     if (slider) slider.classList.remove('dirty');
@@ -753,24 +862,41 @@ function updateChangedHint() {
 async function saveSettings() {
   const payload = {};
   const allSettings = state.settingsData;
+  if (!state.dirtyValues) state.dirtyValues = {};
 
+  // First sync any currently visible DOM inputs into dirtyValues
   for (const [key, meta] of Object.entries(allSettings)) {
     const type = meta.type;
+    let currentVal = undefined;
 
     if (type === 'bool') {
       const el = document.getElementById(`inp-${key}`);
-      if (el) payload[key] = el.checked;
+      if (el) currentVal = el.checked;
     } else if (type === 'model') {
-      payload[key] = getModelValue(key);
+      const picker = document.getElementById(`picker-${key}`);
+      if (picker) {
+        currentVal = getModelValue(key);
+      }
     } else if (type === 'float') {
       const el = document.getElementById(`inp-${key}`);
-      if (el) payload[key] = parseFloat(el.value) || 0;
+      if (el) currentVal = parseFloat(el.value) || 0;
     } else if (type === 'int') {
       const el = document.getElementById(`inp-${key}`);
-      if (el) payload[key] = parseInt(el.value) || 0;
+      if (el) currentVal = parseInt(el.value) || 0;
     } else {
       const el = document.getElementById(`inp-${key}`);
-      if (el) payload[key] = el.value;
+      if (el) currentVal = el.value;
+    }
+
+    if (currentVal !== undefined) {
+      state.dirtyValues[key] = currentVal;
+    }
+
+    // Use dirtyValues if set / edited, otherwise keep original value from settingsData
+    if (key in state.dirtyValues) {
+      payload[key] = state.dirtyValues[key];
+    } else if (meta.value !== undefined) {
+      payload[key] = meta.value;
     }
   }
 
@@ -1855,458 +1981,7 @@ async function loadDashboard() {
   }
 }
 
-// =========================================================
-// GAME CENTER MOD LOGIC (PLUG & PLAY)
-// =========================================================
-let currentBlackjackId = null;
-let currentMinesweeperId = null;
 
-function switchGameTab(gameId) {
-  document.querySelectorAll('.game-tab-btn').forEach(btn => btn.classList.remove('active'));
-  document.querySelectorAll('.game-panel').forEach(p => p.classList.add('hidden'));
-
-  const activeTab = document.getElementById(`tab-game-${gameId}`);
-  if (activeTab) activeTab.classList.add('active');
-
-  const activePanel = document.getElementById(`panel-game-${gameId}`);
-  if (activePanel) activePanel.classList.remove('hidden');
-}
-
-// ── Rock Paper Scissors ──────────────────────────────────
-async function playRPS(choice) {
-  const dialogueEl = document.getElementById('sherry-game-dialogue');
-  if (dialogueEl) dialogueEl.textContent = '「雪莉正在出拳並思考對話中……✨🍊」';
-
-  try {
-    const res = await fetch('/api/games/rps/play', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ choice }),
-    });
-    const data = await res.json();
-    if (data.error) {
-      showToast(`猜拳錯誤: ${data.error}`, 'error');
-      return;
-    }
-
-    document.getElementById('rps-result-box').classList.remove('hidden');
-    document.getElementById('rps-player-choice').textContent = data.player_choice;
-    document.getElementById('rps-sherry-choice').textContent = data.sherry_choice;
-
-    const titleEl = document.getElementById('rps-result-title');
-    if (data.outcome === 'win') {
-      titleEl.textContent = '🎉 你贏了！';
-      titleEl.style.color = '#00ffaa';
-    } else if (data.outcome === 'lose') {
-      titleEl.textContent = '😈 雪莉贏了！';
-      titleEl.style.color = '#ff007f';
-    } else {
-      titleEl.textContent = '🤝 平手！';
-      titleEl.style.color = '#ffaa00';
-    }
-
-    if (dialogueEl && data.sherry_dialogue) {
-      dialogueEl.textContent = `「${data.sherry_dialogue}」`;
-    }
-  } catch (e) {
-    showToast(`猜拳連線失敗: ${e}`, 'error');
-  }
-}
-
-// ── Blackjack ─────────────────────────────────────────────
-async function startBlackjack() {
-  const dialogueEl = document.getElementById('sherry-game-dialogue');
-  if (dialogueEl) dialogueEl.textContent = '「洗牌中……名偵探要發牌囉！🃏✨」';
-
-  try {
-    const res = await fetch('/api/games/blackjack/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    const data = await res.json();
-    if (data.error) {
-      showToast(`21點開局失敗: ${data.error}`, 'error');
-      return;
-    }
-
-    currentBlackjackId = data.game_id;
-    renderBlackjackState(data);
-  } catch (e) {
-    showToast(`21點連線失敗: ${e}`, 'error');
-  }
-}
-
-async function hitBlackjack() {
-  if (!currentBlackjackId) return;
-  try {
-    const res = await fetch('/api/games/blackjack/hit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ game_id: currentBlackjackId }),
-    });
-    const data = await res.json();
-    renderBlackjackState(data);
-  } catch (e) {
-    showToast(`叫牌失敗: ${e}`, 'error');
-  }
-}
-
-async function standBlackjack() {
-  if (!currentBlackjackId) return;
-  try {
-    const res = await fetch('/api/games/blackjack/stand', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ game_id: currentBlackjackId }),
-    });
-    const data = await res.json();
-    renderBlackjackState(data);
-  } catch (e) {
-    showToast(`停牌失敗: ${e}`, 'error');
-  }
-}
-
-function renderBlackjackState(data) {
-  const dCardsEl = document.getElementById('bj-dealer-cards');
-  const pCardsEl = document.getElementById('bj-player-cards');
-  const dScoreEl = document.getElementById('bj-dealer-score');
-  const pScoreEl = document.getElementById('bj-player-score');
-  const dialogueEl = document.getElementById('sherry-game-dialogue');
-
-  if (pScoreEl) pScoreEl.textContent = `點數: ${data.player_score}`;
-  if (dScoreEl) {
-    dScoreEl.textContent = data.is_player_turn ? `點數: ?` : `點數: ${data.dealer_score}`;
-  }
-
-  if (pCardsEl) {
-    pCardsEl.innerHTML = data.player_cards.map(c => `
-      <div style="background: #2a2d3d; border: 1px solid var(--accent-color); border-radius: 6px; padding: 10px 14px; text-align: center; font-weight: 700; font-size: 1.1rem; color: ${c.suit === '♥' || c.suit === '♦' ? '#ff4444' : '#ffffff'};">
-        ${c.suit} ${c.rank}
-      </div>
-    `).join('');
-  }
-
-  if (dCardsEl) {
-    if (data.is_player_turn) {
-      const visible = data.dealer_cards[0];
-      dCardsEl.innerHTML = `
-        <div style="background: #2a2d3d; border: 1px solid var(--accent-color); border-radius: 6px; padding: 10px 14px; text-align: center; font-weight: 700; font-size: 1.1rem; color: ${visible.suit === '♥' || visible.suit === '♦' ? '#ff4444' : '#ffffff'};">
-          ${visible.suit} ${visible.rank}
-        </div>
-        <div style="background: rgba(255,255,255,0.1); border: 1px dashed var(--border-color); border-radius: 6px; padding: 10px 14px; text-align: center; font-weight: 700; font-size: 1.1rem; color: var(--text-muted);">
-          🎴 隱藏
-        </div>
-      `;
-    } else {
-      dCardsEl.innerHTML = data.dealer_cards.map(c => `
-        <div style="background: #2a2d3d; border: 1px solid var(--accent-color); border-radius: 6px; padding: 10px 14px; text-align: center; font-weight: 700; font-size: 1.1rem; color: ${c.suit === '♥' || c.suit === '♦' ? '#ff4444' : '#ffffff'};">
-          ${c.suit} ${c.rank}
-        </div>
-      `).join('');
-    }
-  }
-
-  const hitBtn = document.getElementById('btn-bj-hit');
-  const standBtn = document.getElementById('btn-bj-stand');
-  if (hitBtn) hitBtn.disabled = !data.is_player_turn;
-  if (standBtn) standBtn.disabled = !data.is_player_turn;
-
-  if (dialogueEl && data.sherry_dialogue) {
-    dialogueEl.textContent = `「${data.sherry_dialogue}」`;
-  }
-}
-
-// ── Minesweeper ───────────────────────────────────────────
-async function startMinesweeper() {
-  try {
-    const res = await fetch('/api/games/minesweeper/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rows: 8, cols: 8, mines: 10 }),
-    });
-    const data = await res.json();
-    currentMinesweeperId = data.game_id;
-    renderMinesweeperBoard(data);
-  } catch (e) {
-    showToast(`踩地雷開局失敗: ${e}`, 'error');
-  }
-}
-
-async function revealMinesweeperCell(r, c) {
-  if (!currentMinesweeperId) return;
-  try {
-    const res = await fetch('/api/games/minesweeper/reveal', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ game_id: currentMinesweeperId, row: r, col: c }),
-    });
-    const data = await res.json();
-    renderMinesweeperBoard(data);
-  } catch (e) {
-    showToast(`踩地雷翻開失敗: ${e}`, 'error');
-  }
-}
-
-async function flagMinesweeperCell(e, r, c) {
-  e.preventDefault();
-  if (!currentMinesweeperId) return;
-  try {
-    const res = await fetch('/api/games/minesweeper/flag', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ game_id: currentMinesweeperId, row: r, col: c }),
-    });
-    const data = await res.json();
-    renderMinesweeperBoard(data);
-  } catch (err) {
-    showToast(`踩地雷標記失敗: ${err}`, 'error');
-  }
-}
-
-// ── Turtle Soup ───────────────────────────────────────────
-let currentTurtleSoupId = null;
-
-async function startTurtleSoup() {
-  try {
-    const res = await fetch('/api/games/turtle_soup/start', { method: 'POST' });
-    const data = await res.json();
-    currentTurtleSoupId = data.game_id;
-
-    document.getElementById('ts-title').textContent = `湯面：${data.title}`;
-    document.getElementById('ts-surface').textContent = data.surface_story;
-    document.getElementById('ts-dialogue-history').innerHTML = '';
-
-    const dialogueEl = document.getElementById('sherry-game-dialogue');
-    if (dialogueEl && data.sherry_reply) dialogueEl.textContent = `「${data.sherry_reply}」`;
-  } catch (e) {
-    showToast(`開啟海龜湯失敗: ${e}`, 'error');
-  }
-}
-
-async function askTurtleSoup() {
-  const inputEl = document.getElementById('ts-input');
-  if (!inputEl || !inputEl.value.trim() || !currentTurtleSoupId) return;
-  const question = inputEl.value.trim();
-  inputEl.value = '';
-
-  const dialogueEl = document.getElementById('sherry-game-dialogue');
-  if (dialogueEl) dialogueEl.textContent = '「名偵探湯主推理審查中……🔍✨」';
-
-  try {
-    const res = await fetch('/api/games/turtle_soup/ask', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ game_id: currentTurtleSoupId, question }),
-    });
-    const data = await res.json();
-
-    const historyEl = document.getElementById('ts-dialogue-history');
-    if (historyEl) {
-      historyEl.innerHTML += `
-        <div style="background: rgba(255,255,255,0.05); padding: 8px 12px; border-radius: 6px; font-size: 0.9rem;">
-          <div style="color: var(--text-main); font-weight: 600;">❓ 問：${escHtml(question)}</div>
-          <div style="color: #00e5ff; margin-top: 4px;">🍊 雪莉：${escHtml(data.sherry_reply)}</div>
-        </div>
-      `;
-      historyEl.scrollTop = historyEl.scrollHeight;
-    }
-
-    if (dialogueEl && data.sherry_reply) dialogueEl.textContent = `「${data.sherry_reply}」`;
-  } catch (e) {
-    showToast(`提問失敗: ${e}`, 'error');
-  }
-}
-
-// ── Akinator 20 Questions ──────────────────────────────────
-let currentAkinatorId = null;
-
-async function startAkinator() {
-  try {
-    const res = await fetch('/api/games/akinator/start', { method: 'POST' });
-    const data = await res.json();
-    currentAkinatorId = data.game_id;
-
-    document.getElementById('aki-q-num').textContent = `第 ${data.question_count} / ${data.max_questions} 題`;
-    document.getElementById('aki-question').textContent = data.current_question;
-  } catch (e) {
-    showToast(`開始讀心術失敗: ${e}`, 'error');
-  }
-}
-
-async function answerAkinator(ans) {
-  if (!currentAkinatorId) return;
-  const dialogueEl = document.getElementById('sherry-game-dialogue');
-  if (dialogueEl) dialogueEl.textContent = '「搜集情報中……名偵探鎖定範圍中！🧠✨」';
-
-  try {
-    const res = await fetch('/api/games/akinator/answer', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ game_id: currentAkinatorId, answer: ans }),
-    });
-    const data = await res.json();
-
-    document.getElementById('aki-q-num').textContent = `第 ${data.question_count} / ${data.max_questions} 題`;
-    document.getElementById('aki-question').textContent = data.current_question;
-
-    if (dialogueEl && data.current_question) {
-      dialogueEl.textContent = `「名偵探推導出下一題：${data.current_question}」`;
-    }
-  } catch (e) {
-    showToast(`回答失敗: ${e}`, 'error');
-  }
-}
-
-// ── Escape Room ───────────────────────────────────────────
-let currentEscapeRoomId = null;
-
-async function startEscapeRoom() {
-  try {
-    const res = await fetch('/api/games/escape_room/start', { method: 'POST' });
-    const data = await res.json();
-    currentEscapeRoomId = data.game_id;
-
-    document.getElementById('er-narration').textContent = data.sherry_narration;
-    const dialogueEl = document.getElementById('sherry-game-dialogue');
-    if (dialogueEl && data.sherry_narration) dialogueEl.textContent = `「${data.sherry_narration}」`;
-  } catch (e) {
-    showToast(`開啟密室失敗: ${e}`, 'error');
-  }
-}
-
-async function actionEscapeRoom(target) {
-  if (!currentEscapeRoomId) return;
-  const dialogueEl = document.getElementById('sherry-game-dialogue');
-  if (dialogueEl) dialogueEl.textContent = `「名偵探與你一同搜索『${target}』中……🔍✨」`;
-
-  try {
-    const res = await fetch('/api/games/escape_room/action', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ game_id: currentEscapeRoomId, target }),
-    });
-    const data = await res.json();
-
-    document.getElementById('er-narration').textContent = data.sherry_narration;
-    if (dialogueEl && data.sherry_narration) dialogueEl.textContent = `「${data.sherry_narration}」`;
-  } catch (e) {
-    showToast(`調查失敗: ${e}`, 'error');
-  }
-}
-
-// ── Tic Tac Toe ────────────────────────────────────────────
-let currentTTTId = null;
-
-async function startTTT() {
-  try {
-    const res = await fetch('/api/games/ttt/start', { method: 'POST' });
-    const data = await res.json();
-    currentTTTId = data.game_id;
-    renderTTTBoard(data);
-  } catch (e) {
-    showToast(`圈圈叉叉開局失敗: ${e}`, 'error');
-  }
-}
-
-async function moveTTT(index) {
-  if (!currentTTTId) return;
-  try {
-    const res = await fetch('/api/games/ttt/move', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ game_id: currentTTTId, index }),
-    });
-    const data = await res.json();
-    renderTTTBoard(data);
-  } catch (e) {
-    showToast(`下棋失敗: ${e}`, 'error');
-  }
-}
-
-function renderTTTBoard(data) {
-  const boardEl = document.getElementById('ttt-board');
-  if (!boardEl) return;
-
-  boardEl.innerHTML = data.board.map((val, idx) => `
-    <button onclick="moveTTT(${idx})" style="width:70px; height:70px; font-size:1.8rem; font-weight:800; border-radius:10px; border:1px solid var(--accent-color); background:#2a2d3d; color:${val === 'X' ? '#ff007f' : '#00e5ff'}; cursor:pointer;" ${val !== '' || data.status !== 'ongoing' ? 'disabled' : ''}>
-      ${val}
-    </button>
-  `).join('');
-
-  const dialogueEl = document.getElementById('sherry-game-dialogue');
-  if (dialogueEl && data.sherry_dialogue) {
-    dialogueEl.textContent = `「${data.sherry_dialogue}」`;
-  }
-}
-
-
-async function hintMinesweeper() {
-  if (!currentMinesweeperId) {
-    showToast('請先開局踩地雷！', 'info');
-    return;
-  }
-  const dialogueEl = document.getElementById('sherry-game-dialogue');
-  if (dialogueEl) dialogueEl.textContent = '「名偵探放大鏡觀察中……分析周圍線索中！🔍✨」';
-
-  try {
-    const res = await fetch('/api/games/minesweeper/hint', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ game_id: currentMinesweeperId }),
-    });
-    const data = await res.json();
-    if (dialogueEl && data.sherry_hint) {
-      dialogueEl.textContent = `「${data.sherry_hint}」`;
-    }
-  } catch (e) {
-    showToast(`名偵探推理提示失敗: ${e}`, 'error');
-  }
-}
-
-function renderMinesweeperBoard(data) {
-  const boardEl = document.getElementById('minesweeper-board');
-  if (!boardEl) return;
-
-  boardEl.style.gridTemplateColumns = `repeat(${data.cols}, 42px)`;
-  let html = '';
-
-  for (let r = 0; r < data.rows; r++) {
-    for (let c = 0; c < data.cols; c++) {
-      const cell = data.board[r][c];
-      let content = '';
-      let style = 'width:42px; height:42px; display:flex; align-items:center; justify-content:center; border-radius:6px; font-weight:700; cursor:pointer; user-select:none; transition:all 0.15s; font-size:1.1rem;';
-
-      if (cell.is_revealed) {
-        style += ' background: rgba(255,255,255,0.08); border: 1px solid var(--border-color);';
-        if (cell.is_mine) {
-          content = '💣';
-          style += ' background: rgba(255,0,0,0.3);';
-        } else if (cell.neighbor_mines > 0) {
-          content = cell.neighbor_mines;
-          const colors = ['', '#00e5ff', '#00ffaa', '#ffaa00', '#ff007f', '#7c4dff'];
-          style += ` color: ${colors[cell.neighbor_mines] || '#ffffff'};`;
-        }
-      } else {
-        style += ' background: rgba(0,229,255,0.15); border: 1px solid rgba(0,229,255,0.3);';
-        if (cell.is_flagged) {
-          content = '🚩';
-        }
-      }
-
-      html += `<div style="${style}" onclick="revealMinesweeperCell(${r}, ${c})" oncontextmenu="flagMinesweeperCell(event, ${r}, ${c})">${content}</div>`;
-    }
-  }
-  boardEl.innerHTML = html;
-
-  const dialogueEl = document.getElementById('sherry-game-dialogue');
-  if (dialogueEl) {
-    if (data.status === 'win') {
-      dialogueEl.textContent = '「太厲害啦！地雷全部成功掃除了！名偵探為你鼓掌！🎉🍊✨」';
-    } else if (data.status === 'lose') {
-      dialogueEl.textContent = '「踩到地雷了？！沒關係，失敗乃成功之母，名偵探陪你重新再來一把！💥🔍」';
-    }
-  }
-}
 
 
 
@@ -2342,9 +2017,20 @@ function renderModManager(modules) {
   if (!grid) return;
 
   const keys = Object.keys(modules);
+  const statsContainer = document.getElementById('mod-manager-stats');
+
   if (keys.length === 0) {
     grid.innerHTML = '<div class="mod-empty">尚未發現任何可用模組。</div>';
+    if (statsContainer) statsContainer.innerHTML = '';
     return;
+  }
+
+  const totalCount = keys.length;
+  const enabledCount = keys.filter(k => modules[k].enabled !== false).length;
+  if (statsContainer) {
+    statsContainer.innerHTML = `
+      <span class="mod-stats-chip mod-stats-chip-highlight">⚡ 啟用中：${enabledCount} / ${totalCount} 個模組</span>
+    `;
   }
 
   grid.innerHTML = '';
@@ -2358,28 +2044,32 @@ function renderModManager(modules) {
     const badgeClass = enabled ? 'mod-badge mod-badge-enabled' : 'mod-badge mod-badge-disabled';
     const badgeText = enabled ? '🟢 啟用中' : '🔴 已停用';
 
-    const gamesCount = (mod.info && mod.info.games)
-      ? `<div class="mod-meta">內包 ${mod.info.games.length} 個小遊戲</div>` : '';
+    const gamesCount = (mod.info && Array.isArray(mod.info.games) && mod.info.games.length > 0)
+      ? `<div class="mod-meta-badge">🎮 內包 ${mod.info.games.length} 款小遊戲</div>` : '';
 
     card.innerHTML = `
-      <div class="mod-card-header">
-        <div class="mod-card-name">${mod.display_name || key}</div>
-        <span class="${badgeClass}">${badgeText}</span>
+      <div>
+        <div class="mod-card-header">
+          <div class="mod-card-name">${mod.display_name || key}</div>
+          <span class="${badgeClass}">${badgeText}</span>
+        </div>
+        <div class="mod-card-desc">${mod.description || '未登記的自訂模組。'}</div>
+        ${gamesCount ? `<div style="margin-bottom: 0.6rem;">${gamesCount}</div>` : ''}
       </div>
-      <div class="mod-card-desc">${mod.description || ''}</div>
-      ${gamesCount}
-      <div class="mod-card-meta">
-        <span class="mod-category-tag">${mod.category || '自訂'}</span>
-        <span class="mod-key-tag"><code>${key}</code></span>
-      </div>
-      <div class="mod-card-actions">
-        <button
-          class="mod-toggle-btn ${enabled ? 'mod-toggle-disable' : 'mod-toggle-enable'}"
-          onclick="toggleModuleStatus('${key}', ${!enabled})"
-          id="toggle-btn-${key}"
-        >
-          ${enabled ? '🔴 停用此模組' : '🟢 啟用此模組'}
-        </button>
+      <div>
+        <div class="mod-card-meta">
+          <span class="mod-category-tag">${mod.category || '自訂'}</span>
+          <span class="mod-key-tag"><code>${key}</code></span>
+        </div>
+        <div class="mod-card-actions">
+          <button
+            class="mod-toggle-btn ${enabled ? 'mod-toggle-disable' : 'mod-toggle-enable'}"
+            onclick="toggleModuleStatus('${key}', ${!enabled})"
+            id="toggle-btn-${key}"
+          >
+            ${enabled ? '🔴 停用此模組' : '🟢 啟用此模組'}
+          </button>
+        </div>
       </div>
     `;
     grid.appendChild(card);
@@ -2421,31 +2111,8 @@ async function toggleModuleStatus(modKey, enable) {
       const noticeBar = document.getElementById('mod-notice-bar');
       if (noticeBar) noticeBar.style.display = 'flex';
 
-      // Sync nav button for game_center immediately
-      if (modKey === 'game_center') {
-        const nav = document.querySelector('.sidebar-nav');
-        if (nav) {
-          if (enable) {
-            if (!document.getElementById('nav-games')) {
-              const gameBtn = document.createElement('button');
-              gameBtn.className = 'nav-btn';
-              gameBtn.id = 'nav-games';
-              gameBtn.onclick = () => switchView('games');
-              gameBtn.innerHTML = `<span class="nav-icon">🎮</span><span>小遊戲遊樂場</span>`;
-              const modManagerBtn = document.getElementById('nav-mod-manager');
-              const settingsBtn = document.getElementById('nav-settings');
-              const anchor = modManagerBtn || settingsBtn;
-              if (anchor) nav.insertBefore(gameBtn, anchor);
-              else nav.appendChild(gameBtn);
-            }
-          } else {
-            const existingGamesBtn = document.getElementById('nav-games');
-            if (existingGamesBtn) existingGamesBtn.remove();
-          }
-        }
-      }
-
-      // Refresh the mod cards
+      // Dynamically update sidebar navigation & views for all mods
+      await checkDynamicModules();
       await loadModManager();
     } else {
       showToast(`❌ ${data.message || '操作失敗'}`, 'error');
@@ -2498,322 +2165,610 @@ async function executeStop() {
   showToast('🛑 雪莉已傳送關閉指令並停止運行。', 'info');
 }
 
-// =========================================================
-// SHERRY STOCK TRADER (美股虛擬量化交易 & 1個月盈餘率折線圖)
-// =========================================================
-let stReturnChart = null;
 
-async function loadStockTraderData() {
+
+
+// =========================================================
+// 🎯 ROAST / TSUKKOMI SYSTEM MANAGEMENT
+// =========================================================
+
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+state.roastConfig = null;
+state.roastDebounceTimers = {};
+state.roastCurrentPage = 1;
+state.roastPageSize = 10;
+
+function setModalProb(val) {
+  const probEl = document.getElementById('roast-modal-prob');
+  const probDisplay = document.getElementById('roast-modal-prob-display');
+  if (probEl) probEl.value = val;
+  if (probDisplay) probDisplay.textContent = `${val}%`;
+}
+
+async function loadRoastConfig() {
+  const container = document.getElementById('roast-rules-container');
+  if (!container) return;
+
   try {
-    // 1. Overview
-    const resOver = await fetch('/api/stock_trader/overview', { headers: getAuthHeaders() });
-    if (resOver.ok) {
-      const json = await resOver.json();
-      if (json.status === 'success') {
-        const d = json.data;
-        document.getElementById('st-total-asset').textContent = `$${d.total_asset_value.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-        
-        const pnlColor = d.total_pnl >= 0 ? '#ff4444' : '#00ff88';
-        const pnlSign = d.total_pnl >= 0 ? '+' : '';
-        document.getElementById('st-total-pnl-sub').innerHTML = `<span style="color:${pnlColor}; font-weight:700;">${pnlSign}$${d.total_pnl.toFixed(2)} (${pnlSign}${d.total_pnl_pct.toFixed(2)}%)</span>`;
-        
-        document.getElementById('st-cash').textContent = `$${d.cash.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-        document.getElementById('st-positions-count-sub').textContent = `${d.positions_count} 筆持倉標的`;
-        
-        document.getElementById('st-pnl-pct').textContent = `${pnlSign}${d.total_pnl_pct.toFixed(2)}%`;
-        document.getElementById('st-pnl-pct').style.color = pnlColor;
-        
-        const dayPnlColor = d.day_pnl >= 0 ? '#ff4444' : '#00ff88';
-        const daySign = d.day_pnl >= 0 ? '+' : '';
-        document.getElementById('st-day-pnl-sub').innerHTML = `當日損益: <span style="color:${dayPnlColor}; font-weight:600;">${daySign}$${d.day_pnl.toFixed(2)}</span>`;
-        
-        document.getElementById('st-win-rate').textContent = `${d.win_rate_pct.toFixed(1)}%`;
-        document.getElementById('st-trades-count-sub').textContent = `${d.winning_trades_count} / ${d.total_trades_count} 筆交易勝場`;
-      }
+    const res = await fetch('/api/roast/config');
+    if (!res.ok) {
+      showToast('❌ 載入吐槽設定失敗', 'error');
+      return;
     }
+    const data = await res.json();
+    state.roastConfig = data;
 
-    // 2. 1-Month Return Rate Line Chart
-    const resChart = await fetch('/api/stock_trader/chart', { headers: getAuthHeaders() });
-    if (resChart.ok) {
-      const json = await resChart.json();
-      if (json.status === 'success') {
-        renderStockReturnChart(json.data);
-      }
-    }
+    // Update Master Switch & Cooldown UI
+    const toggleEl = document.getElementById('roast-master-toggle');
+    const badgeEl = document.getElementById('roast-master-badge');
+    const cooldownEl = document.getElementById('roast-cooldown-input');
 
-    // 3. Holdings
-    const resHold = await fetch('/api/stock_trader/holdings', { headers: getAuthHeaders() });
-    if (resHold.ok) {
-      const json = await resHold.json();
-      const tbody = document.getElementById('st-holdings-tbody');
-      if (json.status === 'success' && json.data.length > 0) {
-        let html = '';
-        json.data.forEach(h => {
-          const color = h.unrealized_pnl >= 0 ? '#ff4444' : '#00ff88';
-          const sign = h.unrealized_pnl >= 0 ? '+' : '';
-          html += `
-            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
-              <td style="padding: 10px; font-weight:700; color:#00e5ff;">${h.ticker}</td>
-              <td style="padding: 10px;">${h.shares.toFixed(4)}</td>
-              <td style="padding: 10px;">$${h.avg_cost.toFixed(2)}</td>
-              <td style="padding: 10px;">$${h.current_price.toFixed(2)}</td>
-              <td style="padding: 10px; color:${color}; font-weight:600;">${sign}$${h.unrealized_pnl.toFixed(2)} (${sign}${h.unrealized_pnl_pct.toFixed(2)}%)</td>
-            </tr>
-          `;
-        });
-        tbody.innerHTML = html;
+    if (toggleEl) toggleEl.checked = !!data.enabled;
+    if (badgeEl) {
+      if (data.enabled) {
+        badgeEl.textContent = '🟢 運作中';
+        badgeEl.style.background = 'rgba(0,255,136,0.15)';
+        badgeEl.style.color = '#00ff88';
+        badgeEl.style.border = '1px solid #00ff88';
       } else {
-        tbody.innerHTML = '<tr><td colspan="5" style="padding: 16px; text-align: center; color: var(--text-muted);">無持倉標的 (全額現金)</td></tr>';
+        badgeEl.textContent = '🔴 已停用';
+        badgeEl.style.background = 'rgba(255,68,68,0.15)';
+        badgeEl.style.color = '#ff4444';
+        badgeEl.style.border = '1px solid #ff4444';
       }
     }
+    if (cooldownEl) cooldownEl.value = data.global_cooldown_seconds || 8;
 
-    // 4. Trade History
-    const resTrades = await fetch('/api/stock_trader/trades', { headers: getAuthHeaders() });
-    if (resTrades.ok) {
-      const json = await resTrades.json();
-      const tbody = document.getElementById('st-trades-tbody');
-      if (json.status === 'success' && json.data.length > 0) {
-        let html = '';
-        json.data.forEach(t => {
-          const actColor = t.action === 'BUY' ? '#00e5ff' : '#ffab00';
-          const pnlColor = t.realized_pnl > 0 ? '#ff4444' : (t.realized_pnl < 0 ? '#00ff88' : 'var(--text-muted)');
-          const pnlStr = t.action === 'SELL' ? `${t.realized_pnl >= 0 ? '+' : ''}$${t.realized_pnl.toFixed(2)}` : '-';
-          html += `
-            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
-              <td style="padding: 8px; color:var(--text-muted); font-size:0.8rem;">${t.timestamp}</td>
-              <td style="padding: 8px; font-weight:700;">${t.ticker}</td>
-              <td style="padding: 8px;"><span style="background:rgba(255,255,255,0.08); color:${actColor}; padding:2px 8px; border-radius:4px; font-weight:700; font-size:0.78rem;">${t.action}</span></td>
-              <td style="padding: 8px;">${t.shares.toFixed(4)}</td>
-              <td style="padding: 8px;">$${t.execution_price.toFixed(2)}</td>
-              <td style="padding: 8px; color:var(--text-muted);">$${t.fee.toFixed(2)}</td>
-              <td style="padding: 8px;">$${t.total_amount.toFixed(2)}</td>
-              <td style="padding: 8px; color:${pnlColor}; font-weight:600;">${pnlStr}</td>
-              <td style="padding: 8px; color:var(--text-muted); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${t.reason}">${t.reason}</td>
-            </tr>
-          `;
-        });
-        tbody.innerHTML = html;
-      } else {
-        tbody.innerHTML = '<tr><td colspan="9" style="padding: 20px; text-align: center; color: var(--text-muted);">尚無交易紀錄</td></tr>';
-      }
-    }
+    // Update Stats
+    const rules = data.rules || [];
+    const totalCount = rules.length;
+    const enabledCount = rules.filter(r => r.enabled).length;
+    const avgProb = totalCount > 0
+      ? Math.round(rules.reduce((acc, r) => acc + (r.probability || 0), 0) / totalCount)
+      : 100;
 
-    // 5. Sherry CoT Thoughts
-    const resThoughts = await fetch('/api/stock_trader/thoughts', { headers: getAuthHeaders() });
-    if (resThoughts.ok) {
-      const json = await resThoughts.json();
-      const container = document.getElementById('st-thought-container');
-      if (json.status === 'success' && json.data.length > 0) {
-        let html = '';
-        json.data.forEach(th => {
-          html += `
-            <div style="margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px dashed rgba(255,255,255,0.1);">
-              <div style="font-weight: 700; color: #00e5ff; margin-bottom: 4px; display: flex; justify-content: space-between;">
-                <span>⏱️ [${th.timestamp}] (${th.trigger_type})</span>
-              </div>
-              <div style="color: #bbb; margin-bottom: 6px; white-space: pre-wrap;">${th.thought_process}</div>
-              <div style="color: #00e5ff; font-weight: 600;">🎯 決策結論: ${th.decision_summary}</div>
-            </div>
-          `;
-        });
-        container.innerHTML = html;
-      } else {
-        container.innerHTML = '<div style="color: var(--text-muted);">尚無思考日誌。美股盤中時間 (23:00~04:00) 即可看到雪莉即時 CoT 推理！</div>';
-      }
-    }
+    const totalEl = document.getElementById('roast-stat-total');
+    const enabledEl = document.getElementById('roast-stat-enabled');
+    const avgEl = document.getElementById('roast-stat-avg-prob');
 
-    // 6. Target Stock Indicators
-    const resTargets = await fetch('/api/stock_trader/targets', { headers: getAuthHeaders() });
-    if (resTargets.ok) {
-      const json = await resTargets.json();
-      const tbody = document.getElementById('st-targets-tbody');
-      if (json.status === 'success' && json.data.length > 0) {
-        let html = '';
-        json.data.forEach(t => {
-          const dayColor = t.day_pct >= 0 ? '#ff4444' : '#00ff88';
-          const monColor = t.mon_pct >= 0 ? '#ff4444' : '#00ff88';
-          const daySign = t.day_pct >= 0 ? '+' : '';
-          const monSign = t.mon_pct >= 0 ? '+' : '';
-            const macdColor = (t.macd_hist || 0) >= 0 ? '#ff4444' : '#00ff88';
-            const macdSign = (t.macd_hist || 0) >= 0 ? '+' : '';
-            html += `
-              <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
-                <td style="padding: 8px; font-weight:700; color:#00e5ff;">${t.ticker}</td>
-                <td style="padding: 8px; font-weight:600;">$${t.close.toFixed(2)}</td>
-                <td style="padding: 8px; color:${dayColor}; font-weight:600;">${daySign}${t.day_pct.toFixed(2)}%</td>
-                <td style="padding: 8px; color:${monColor}; font-weight:600;">${monSign}${t.mon_pct.toFixed(2)}%</td>
-                <td style="padding: 8px; font-weight:600;">${t.rsi}</td>
-                <td style="padding: 8px;">$${t.ma20 || 'N/A'}</td>
-                <td style="padding: 8px;">$${t.ma60 || 'N/A'}</td>
-                <td style="padding: 8px;">$${t.ema20 || 'N/A'}</td>
-                <td style="padding: 8px; font-size:0.8rem; color:var(--text-muted);">$${t.bb_upper || 'N/A'} / $${t.bb_lower || 'N/A'}</td>
-                <td style="padding: 8px; color:${macdColor}; font-weight:600;">${macdSign}${t.macd_hist || 0.0}</td>
-                <td style="padding: 8px; font-weight:600;">${t.volume_ratio || 1.0}x</td>
-              </tr>
-            `;
-          });
-          tbody.innerHTML = html;
-        } else {
-          tbody.innerHTML = '<tr><td colspan="11" style="padding: 20px; text-align: center; color: var(--text-muted);">指標抓取中或暫無數據</td></tr>';
-        }
-    }
+    if (totalEl) totalEl.textContent = totalCount;
+    if (enabledEl) enabledEl.textContent = enabledCount;
+    if (avgEl) avgEl.textContent = `${avgProb}%`;
 
+    renderRoastList();
   } catch (e) {
-    console.error('Failed to load stock trader data:', e);
+    console.error('Failed to load roast config:', e);
+    showToast(`❌ 載入吐槽設定失敗: ${e.message}`, 'error');
   }
 }
 
-function renderStockReturnChart(chartData) {
-  const canvas = document.getElementById('st-return-chart');
-  if (!canvas) return;
+function renderRoastList() {
+  const container = document.getElementById('roast-rules-container');
+  const pageInfoEl = document.getElementById('roast-page-info');
+  const prevBtn = document.getElementById('roast-prev-btn');
+  const nextBtn = document.getElementById('roast-next-btn');
 
-  if (stReturnChart) {
-    stReturnChart.destroy();
-    stReturnChart = null;
-  }
+  if (!container || !state.roastConfig) return;
 
-  if (!chartData || chartData.length === 0) {
-    chartData = [
-      { date: '起初', return_rate_pct: 0.0, total_asset_value: 10000.0, day_pnl: 0.0 }
-    ];
-  }
+  const rawRules = state.roastConfig.rules || [];
+  const searchInput = document.getElementById('roast-search-input');
+  const query = (searchInput ? searchInput.value : '').trim().toLowerCase();
+  const filterMode = document.getElementById('roast-filter-mode')?.value || 'all';
 
-  const labels = chartData.map(d => d.date);
-  const values = chartData.map(d => d.return_rate_pct);
-
-  const ctx = canvas.getContext('2d');
-  const lastVal = values[values.length - 1] || 0;
-  const mainColor = lastVal >= 0 ? '#ff4444' : '#00ff88';
-
-  // 漸層背景 (紅/綠 台灣色彩習慣)
-  const gradient = ctx.createLinearGradient(0, 0, 0, 300);
-  gradient.addColorStop(0, lastVal >= 0 ? 'rgba(255, 68, 68, 0.35)' : 'rgba(0, 255, 136, 0.35)');
-  gradient.addColorStop(1, 'rgba(0, 0, 0, 0.0)');
-
-  stReturnChart = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: labels,
-      datasets: [{
-        label: '近 1 個月盈餘率 (%)',
-        data: values,
-        borderColor: mainColor,
-        borderWidth: 3,
-        pointBackgroundColor: mainColor,
-        pointBorderColor: '#000',
-        pointRadius: 4,
-        pointHoverRadius: 7,
-        fill: true,
-        backgroundColor: gradient,
-        tension: 0.3
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          display: true,
-          labels: { color: '#e0e0e0', font: { family: 'Inter', size: 12 } }
-        },
-        tooltip: {
-          backgroundColor: 'rgba(15, 20, 30, 0.9)',
-          titleColor: '#00e5ff',
-          bodyColor: '#ffffff',
-          borderColor: 'rgba(0, 229, 255, 0.3)',
-          borderWidth: 1,
-          padding: 12,
-          callbacks: {
-            label: function(context) {
-              const index = context.dataIndex;
-              const item = chartData[index];
-              return [
-                `盈餘率: ${item.return_rate_pct >= 0 ? '+' : ''}${item.return_rate_pct.toFixed(2)}%`,
-                `總資產: $${item.total_asset_value.toLocaleString('en-US', {minimumFractionDigits: 2})}`,
-                `當日損益: ${item.day_pnl >= 0 ? '+' : ''}$${item.day_pnl.toFixed(2)}`
-              ];
-            }
-          }
-        }
-      },
-      scales: {
-        x: {
-          grid: { color: 'rgba(255, 255, 255, 0.05)' },
-          ticks: { color: '#888888', font: { family: 'Inter', size: 11 } }
-        },
-        y: {
-          grid: { color: 'rgba(255, 255, 255, 0.05)' },
-          ticks: {
-            color: '#888888',
-            font: { family: 'Inter', size: 11 },
-            callback: function(val) { return val + '%'; }
-          }
-        }
-      }
+  const filtered = rawRules.filter(r => {
+    if (filterMode === 'enabled' && !r.enabled) return false;
+    if (filterMode === 'disabled' && r.enabled) return false;
+    if (query) {
+      const matchKw = (r.keyword || '').toLowerCase().includes(query);
+      const matchGuide = (r.reply_guide || '').toLowerCase().includes(query);
+      return matchKw || matchGuide;
     }
+    return true;
   });
-}
 
-async function triggerStockTraderEval() {
-  if (!state.isAdmin) {
-    showToast('手動觸發看盤僅限管理員使用，請先登入！', 'warning');
-    openLoginModal();
+  const totalFiltered = filtered.length;
+
+  if (totalFiltered === 0) {
+    container.innerHTML = `
+      <div style="text-align: center; padding: 48px; color: var(--text-muted); background: var(--bg-card); border-radius: 12px; border: 1px dashed var(--border-color);">
+        <div style="font-size: 2.5rem; margin-bottom: 10px;">🔍</div>
+        <div style="font-size: 1.05rem; font-weight: 600; color: var(--text-main); margin-bottom: 6px;">尚無符合條件的吐槽規則</div>
+        <div style="font-size: 0.85rem;">點擊右上角「＋ 新增吐槽規則」即可自訂關鍵字與名偵探回覆導引！</div>
+      </div>
+    `;
+    if (pageInfoEl) pageInfoEl.textContent = '第 0 / 0 頁 (共 0 筆)';
+    if (prevBtn) prevBtn.disabled = true;
+    if (nextBtn) nextBtn.disabled = true;
     return;
   }
 
-  showToast('🤖 已對雪莉發送手動看盤與量化評估請求...', 'info');
+  // Pagination calculation
+  let displayRules = filtered;
+  let totalPages = 1;
+
+  if (state.roastPageSize !== 'all') {
+    const size = parseInt(state.roastPageSize, 10) || 10;
+    totalPages = Math.max(1, Math.ceil(totalFiltered / size));
+    if (state.roastCurrentPage > totalPages) state.roastCurrentPage = totalPages;
+    if (state.roastCurrentPage < 1) state.roastCurrentPage = 1;
+
+    const start = (state.roastCurrentPage - 1) * size;
+    displayRules = filtered.slice(start, start + size);
+
+    if (pageInfoEl) {
+      pageInfoEl.textContent = `第 ${state.roastCurrentPage} / ${totalPages} 頁 (共 ${totalFiltered} 筆)`;
+    }
+    if (prevBtn) prevBtn.disabled = state.roastCurrentPage <= 1;
+    if (nextBtn) nextBtn.disabled = state.roastCurrentPage >= totalPages;
+  } else {
+    if (pageInfoEl) {
+      pageInfoEl.textContent = `全部顯示 (共 ${totalFiltered} 筆)`;
+    }
+    if (prevBtn) prevBtn.disabled = true;
+    if (nextBtn) nextBtn.disabled = true;
+  }
+
+  container.innerHTML = displayRules.map(rule => {
+    const prob = rule.probability ?? 100;
+    const isEn = !!rule.enabled;
+    const modeBadge = rule.match_mode === 'exact' ? '完全一致' : rule.match_mode === 'regex' ? '正則表達' : '包含關鍵字';
+    const modeColor = rule.match_mode === 'exact' ? '#ffab00' : rule.match_mode === 'regex' ? '#00e5ff' : '#a855f7';
+
+    return `
+      <div class="roast-card" style="background: var(--bg-card); border: 1px solid ${isEn ? 'rgba(251, 191, 36, 0.25)' : 'var(--border-color)'}; border-radius: 12px; padding: 18px 22px; transition: all 0.2s ease; opacity: ${isEn ? '1' : '0.65'};">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 12px;">
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <span style="font-size: 1.15rem; font-weight: 800; color: #fbbf24; background: rgba(251, 191, 36, 0.12); border: 1px solid rgba(251, 191, 36, 0.4); padding: 4px 12px; border-radius: 8px; font-family: 'JetBrains Mono', monospace;">
+              ${escapeHtml(rule.keyword)}
+            </span>
+            <span style="font-size: 0.72rem; font-weight: 700; color: ${modeColor}; background: rgba(0,0,0,0.3); border: 1px solid ${modeColor}; padding: 2px 8px; border-radius: 6px;">
+              ${modeBadge}
+            </span>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">
+              ID: ${rule.id}
+            </span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.82rem; font-weight: 600; color: ${isEn ? '#00ff88' : 'var(--text-muted)'};">
+              <input type="checkbox" ${isEn ? 'checked' : ''} onchange="toggleRoastRule('${rule.id}', this.checked)" style="transform: scale(1.15); cursor: pointer;">
+              <span>${isEn ? '已啟用' : '已停用'}</span>
+            </label>
+            <button onclick="openRoastModal('${rule.id}')" title="編輯規則" style="background: rgba(255,255,255,0.06); border: 1px solid var(--border-color); color: var(--text-main); padding: 5px 12px; border-radius: 6px; font-size: 0.8rem; cursor: pointer;">
+              ✏️ 編輯
+            </button>
+            <button onclick="deleteRoastRule('${rule.id}')" title="刪除規則" style="background: rgba(255,68,68,0.1); border: 1px solid rgba(255,68,68,0.3); color: #ff5555; padding: 5px 10px; border-radius: 6px; font-size: 0.8rem; cursor: pointer;">
+              🗑️
+            </button>
+          </div>
+        </div>
+
+        <div style="background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; font-size: 0.9rem; line-height: 1.5; color: #e2e8f0;">
+          <span style="color: #fbbf24; font-weight: 700; margin-right: 6px;">💬 回覆導引:</span>
+          ${escapeHtml(rule.reply_guide)}
+        </div>
+
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 20px;">
+          <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+            <span style="font-size: 0.82rem; font-weight: 600; color: var(--text-muted); white-space: nowrap;">
+              🎲 獨立觸發機率:
+            </span>
+            <input type="range" min="0" max="100" value="${prob}" style="flex: 1; cursor: pointer;" oninput="onRoastProbSlide('${rule.id}', this.value)" onchange="onRoastProbChange('${rule.id}', this.value)">
+            <span id="roast-prob-badge-${rule.id}" style="font-size: 0.95rem; font-weight: 800; color: ${prob === 100 ? '#00ff88' : prob > 50 ? '#fbbf24' : '#ffab00'}; min-width: 45px; text-align: right;">
+              ${prob}%
+            </span>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function filterRoastRules() {
+  state.roastCurrentPage = 1;
+  renderRoastList();
+}
+
+function changeRoastPage(delta) {
+  state.roastCurrentPage += delta;
+  renderRoastList();
+  const listEl = document.getElementById('roast-rules-container');
+  if (listEl) listEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function onRoastPageSizeChange(val) {
+  state.roastPageSize = val === 'all' ? 'all' : (parseInt(val, 10) || 10);
+  state.roastCurrentPage = 1;
+  renderRoastList();
+}
+
+function onRoastProbSlide(ruleId, val) {
+  const badge = document.getElementById(`roast-prob-badge-${ruleId}`);
+  if (badge) badge.textContent = `${val}%`;
+}
+
+function onRoastProbChange(ruleId, val) {
+  const prob = parseInt(val, 10);
+  if (isNaN(prob)) return;
+
+  if (state.roastDebounceTimers[ruleId]) {
+    clearTimeout(state.roastDebounceTimers[ruleId]);
+  }
+
+  state.roastDebounceTimers[ruleId] = setTimeout(async () => {
+    try {
+      const res = await fetch(`/api/roast/rules/${ruleId}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ probability: prob })
+      });
+      if (res.ok) {
+        showToast(`✅ 已將規則機率更新為 ${prob}%`, 'success');
+        if (state.roastConfig && state.roastConfig.rules) {
+          const target = state.roastConfig.rules.find(r => r.id === ruleId);
+          if (target) target.probability = prob;
+        }
+      } else {
+        const err = await res.json();
+        showToast(`❌ 更新機率失敗: ${err.message}`, 'error');
+        loadRoastConfig();
+      }
+    } catch (e) {
+      showToast(`❌ 更新機率發生錯誤: ${e.message}`, 'error');
+    }
+  }, 200);
+}
+
+async function toggleRoastMaster(enabled) {
+  if (!state.isAdmin) {
+    showToast('修改吐槽開關需要管理員身份，請先登入！', 'warning');
+    openLoginModal();
+    const toggleEl = document.getElementById('roast-master-toggle');
+    if (toggleEl) toggleEl.checked = !enabled;
+    return;
+  }
 
   try {
-    const res = await fetch('/api/stock_trader/trigger', {
+    const res = await fetch('/api/roast/config', {
       method: 'POST',
-      headers: getAuthHeaders()
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ enabled: enabled })
     });
-
     if (res.ok) {
-      const data = await res.json();
-      if (data.status === 'success') {
-        showToast('✅ 雪莉完成看盤評估與演算法交易！', 'success');
-        loadStockTraderData();
-      } else {
-        showToast(`⚠️ 評估失敗: ${data.message || '未知錯誤'}`, 'error');
-      }
+      showToast(enabled ? '🟢 吐槽功能已啟用' : '🔴 吐槽功能已停用', 'success');
+      loadRoastConfig();
     } else {
-      showToast('❌ 呼叫伺服器失敗', 'error');
+      const err = await res.json();
+      showToast(`❌ 更新失敗: ${err.message}`, 'error');
     }
   } catch (e) {
     showToast(`❌ 發生異常: ${e.message}`, 'error');
   }
 }
 
-async function refreshStockTraderPrices() {
+async function updateRoastCooldown(cooldownVal) {
   if (!state.isAdmin) {
-    showToast('手動刷新行情僅限管理員使用，請先登入！', 'warning');
+    showToast('修改冷卻時間需要管理員身份，請先登入！', 'warning');
     openLoginModal();
     return;
   }
 
-  showToast('🔄 正在連線 yfinance 刷新美股最新行情與持倉損益...', 'info');
+  const sec = parseInt(cooldownVal, 10);
+  if (isNaN(sec) || sec < 0) return;
 
   try {
-    const res = await fetch('/api/stock_trader/refresh_prices', {
+    const res = await fetch('/api/roast/config', {
       method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ global_cooldown_seconds: sec })
+    });
+    if (res.ok) {
+      showToast(`✅ 頻道冷卻時間已設定為 ${sec} 秒`, 'success');
+    } else {
+      const err = await res.json();
+      showToast(`❌ 設定冷卻失敗: ${err.message}`, 'error');
+    }
+  } catch (e) {
+    showToast(`❌ 發生異常: ${e.message}`, 'error');
+  }
+}
+
+async function toggleRoastRule(ruleId, enabled) {
+  if (!state.isAdmin) {
+    showToast('切換規則狀態需要管理員身份，請先登入！', 'warning');
+    openLoginModal();
+    loadRoastConfig();
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/roast/rules/${ruleId}`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ enabled: enabled })
+    });
+    if (res.ok) {
+      showToast(enabled ? '✅ 規則已啟用' : '⏸️ 規則已停用', 'success');
+      if (state.roastConfig && state.roastConfig.rules) {
+        const target = state.roastConfig.rules.find(r => r.id === ruleId);
+        if (target) target.enabled = enabled;
+      }
+      renderRoastList();
+    } else {
+      const err = await res.json();
+      showToast(`❌ 更新失敗: ${err.message}`, 'error');
+      loadRoastConfig();
+    }
+  } catch (e) {
+    showToast(`❌ 發生異常: ${e.message}`, 'error');
+  }
+}
+
+function onRoastModalModeChange(mode) {
+  const kwEl = document.getElementById('roast-modal-kw');
+  const hintEl = document.getElementById('roast-modal-kw-hint');
+  if (!kwEl || !hintEl) return;
+
+  if (mode === 'regex') {
+    kwEl.placeholder = '例如：小奶|扁奶|ㄌㄌ|蘿莉|酪梨 （多組關鍵字請用 | 隔開）';
+    hintEl.innerHTML = '💡 <strong>正則模式</strong>：支援完整 Regex 語法。若要符合多個詞彙任一命中，請使用垂直線 <code>|</code> 隔開（例如：<code>小奶|扁奶|ㄌㄌ|蘿莉</code>）。';
+  } else if (mode === 'exact') {
+    kwEl.placeholder = '例如：笑死 （整句話必須完全等於此關鍵字）';
+    hintEl.innerHTML = '💡 <strong>完全一致</strong>：群友整句發言必須與關鍵字一模一樣（不含多餘字詞）才會觸發。';
+  } else {
+    kwEl.placeholder = '例如：== 或 你是笨蛋';
+    hintEl.innerHTML = '💡 <strong>包含模式</strong>：只要群友發言中含有該關鍵字即可觸發。';
+  }
+}
+
+function openRoastModal(ruleId = null) {
+  if (!state.isAdmin) {
+    showToast('編輯或新增規則需要管理員身份，請先登入！', 'warning');
+    openLoginModal();
+    return;
+  }
+
+  const backdrop = document.getElementById('roast-modal-backdrop');
+  const titleEl = document.getElementById('roast-modal-title');
+  const idEl = document.getElementById('roast-modal-id');
+  const kwEl = document.getElementById('roast-modal-kw');
+  const modeEl = document.getElementById('roast-modal-mode');
+  const guideEl = document.getElementById('roast-modal-guide');
+  const probEl = document.getElementById('roast-modal-prob');
+  const probDisplay = document.getElementById('roast-modal-prob-display');
+  const enabledEl = document.getElementById('roast-modal-enabled');
+
+  if (!backdrop) return;
+
+  let currentMode = 'contains';
+  if (ruleId && state.roastConfig && state.roastConfig.rules) {
+    const rule = state.roastConfig.rules.find(r => r.id === ruleId);
+    if (rule) {
+      titleEl.textContent = '✏️ 編輯吐槽規則';
+      idEl.value = rule.id;
+      kwEl.value = rule.keyword || '';
+      currentMode = rule.match_mode || 'contains';
+      modeEl.value = currentMode;
+      guideEl.value = rule.reply_guide || '';
+      const p = rule.probability ?? 100;
+      probEl.value = p;
+      probDisplay.textContent = `${p}%`;
+      enabledEl.checked = !!rule.enabled;
+    }
+  } else {
+    titleEl.textContent = '🎯 新增吐槽規則';
+    idEl.value = '';
+    kwEl.value = '';
+    currentMode = 'contains';
+    modeEl.value = currentMode;
+    guideEl.value = '';
+    probEl.value = 100;
+    probDisplay.textContent = '100%';
+    enabledEl.checked = true;
+  }
+
+  onRoastModalModeChange(currentMode);
+  backdrop.classList.remove('hidden');
+  setTimeout(() => kwEl.focus(), 50);
+}
+
+function closeRoastModal() {
+  const backdrop = document.getElementById('roast-modal-backdrop');
+  if (backdrop) backdrop.classList.add('hidden');
+}
+
+async function saveRoastRuleFromModal() {
+  const id = document.getElementById('roast-modal-id').value;
+  const keyword = document.getElementById('roast-modal-kw').value.trim();
+  const match_mode = document.getElementById('roast-modal-mode').value;
+  const reply_guide = document.getElementById('roast-modal-guide').value.trim();
+  const probability = parseInt(document.getElementById('roast-modal-prob').value, 10) || 100;
+  const enabled = document.getElementById('roast-modal-enabled').checked;
+
+  if (!keyword) {
+    showToast('請輸入觸發關鍵字！', 'warning');
+    return;
+  }
+  if (!reply_guide) {
+    showToast('請輸入吐槽回覆導引！', 'warning');
+    return;
+  }
+
+  const payload = {
+    keyword,
+    match_mode,
+    reply_guide,
+    probability,
+    enabled
+  };
+
+  try {
+    let res;
+    if (id) {
+      // Update
+      res = await fetch(`/api/roast/rules/${id}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload)
+      });
+    } else {
+      // Create
+      res = await fetch('/api/roast/rules', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload)
+      });
+    }
+
+    if (res.ok) {
+      showToast(id ? '✅ 吐槽規則修改成功！' : '🎉 吐槽規則新增成功！', 'success');
+      closeRoastModal();
+      loadRoastConfig();
+    } else {
+      const err = await res.json();
+      showToast(`❌ 儲存失敗: ${err.message}`, 'error');
+    }
+  } catch (e) {
+    showToast(`❌ 發生錯誤: ${e.message}`, 'error');
+  }
+}
+
+async function deleteRoastRule(ruleId) {
+  if (!state.isAdmin) {
+    showToast('刪除規則需要管理員身份，請先登入！', 'warning');
+    openLoginModal();
+    return;
+  }
+
+  if (!confirm('確定要刪除這條吐槽規則嗎？')) return;
+
+  try {
+    const res = await fetch(`/api/roast/rules/${ruleId}`, {
+      method: 'DELETE',
       headers: getAuthHeaders()
+    });
+    if (res.ok) {
+      showToast('🗑️ 吐槽規則已刪除', 'success');
+      loadRoastConfig();
+    } else {
+      const err = await res.json();
+      showToast(`❌ 刪除失敗: ${err.message}`, 'error');
+    }
+  } catch (e) {
+    showToast(`❌ 發生異常: ${e.message}`, 'error');
+  }
+}
+
+async function testRoastPreview() {
+  const inputEl = document.getElementById('roast-test-msg');
+  const forceEl = document.getElementById('roast-test-force');
+  const resultBox = document.getElementById('roast-test-result');
+
+  if (!inputEl) return;
+  const msg = inputEl.value.trim();
+  if (!msg) {
+    showToast('請輸入要測試的發言內容！', 'warning');
+    inputEl.focus();
+    return;
+  }
+
+  resultBox.style.display = 'block';
+  resultBox.innerHTML = '<span style="color: var(--text-muted);">🤖 雪莉正在分析關鍵字並構思吐槽...</span>';
+
+  try {
+    const res = await fetch('/api/roast/test', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders()
+      },
+      body: JSON.stringify({
+        message: msg,
+        force: forceEl ? forceEl.checked : true
+      })
     });
 
     if (res.ok) {
       const data = await res.json();
-      if (data.status === 'success') {
-        showToast(data.message || '✅ 最新美股行情與持倉損益刷新成功！', 'success');
-        loadStockTraderData();
+      if (!data.matched) {
+        resultBox.innerHTML = `
+          <div style="color: #888;">
+            ⚪ <strong>判定結果</strong>: 未命中任何已啟用的吐槽關鍵字
+          </div>
+        `;
+      } else if (data.matched && !data.triggered) {
+        resultBox.innerHTML = `
+          <div style="color: #ffab00;">
+            🟡 <strong>命中但未觸發</strong>: ${escapeHtml(data.message)}
+          </div>
+        `;
       } else {
-        showToast(`❌ 刷新失敗: ${data.message}`, 'error');
+        resultBox.innerHTML = `
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="background: rgba(0,255,136,0.15); color: #00ff88; border: 1px solid #00ff88; padding: 2px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 700;">
+                🎯 命中關鍵字: ${escapeHtml(data.rule.keyword)} (${data.rule.probability}%)
+              </span>
+              <span style="font-size: 0.8rem; color: var(--text-muted);">
+                導引: ${escapeHtml(data.rule.reply_guide)}
+              </span>
+            </div>
+            <div style="background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 8px; padding: 12px; color: #fff; font-size: 1rem; line-height: 1.4;">
+              <span style="color: #fbbf24; font-weight: 800;">🍊 雪莉 (名偵探):</span>
+              <span style="margin-left: 6px;">${escapeHtml(data.roast_reply || '')}</span>
+            </div>
+          </div>
+        `;
       }
     } else {
-      showToast('❌ 呼叫伺服器失敗', 'error');
+      resultBox.innerHTML = '<span style="color: #ff4444;">❌ 測試請求失敗</span>';
     }
   } catch (e) {
-    console.error('Failed to refresh stock trader prices:', e);
-    showToast('❌ 網路請求發生錯誤', 'error');
+    resultBox.innerHTML = `<span style="color: #ff4444;">❌ 測試發生異常: ${escapeHtml(e.message)}</span>`;
   }
 }
+
+
+
+
+function renderSimpleMarkdown(md) {
+  if (!md) return '';
+  let html = escapeHtml(md);
+
+  // Headers
+  html = html.replace(/^### (.*$)/gim, '<h4 class="md-h4">$1</h4>');
+  html = html.replace(/^## (.*$)/gim, '<h3 class="md-h3">$1</h3>');
+  html = html.replace(/^# (.*$)/gim, '<h2 class="md-h2">$1</h2>');
+
+  // Blockquotes
+  html = html.replace(/^\> (.*$)/gim, '<blockquote class="md-quote">$1</blockquote>');
+
+  // Bold & Italic
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+
+  // Inline Code
+  html = html.replace(/`([^`]+)`/g, '<code class="md-code">$1</code>');
+
+  // Links [text](url)
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="md-link">$1 🔗</a>');
+
+  // Bullet points
+  html = html.replace(/^\s*[-*•]\s+(.*$)/gim, '<li class="md-li">$1</li>');
+
+  // Paragraph breaks
+  html = html.replace(/\n\n+/g, '<br><br>');
+  html = html.replace(/\n/g, '<br>');
+
+  return html;
+}
+
 

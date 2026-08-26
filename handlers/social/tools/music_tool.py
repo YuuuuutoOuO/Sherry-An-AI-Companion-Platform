@@ -4,8 +4,11 @@ from discord.ext import commands
 import re
 import json
 
+from typing import Any, cast
+
 import settings
 from handlers.bot_brain import BotBrain, InferenceTask
+from handlers.social.contracts import ToolResult
 from handlers.social.tool_base import BaseTool, ToolResponseMode
 from handlers.social.utils import simulate_typing_and_send
 
@@ -17,7 +20,7 @@ class MusicTool(BaseTool):
 
     @property
     def llm_description(self) -> str:
-        return "涉及播放音樂、跳過歌曲、優先播放某首歌、查看清單、移除特定編號歌曲、搜尋歌曲"
+        return "播放音樂、點歌、播放 YouTube 網址（包含 youtube.com 或 youtu.be 連結）、跳過歌曲、優先播放、查看清單、切歌。"
 
     @property
     def response_mode(self) -> ToolResponseMode:
@@ -43,30 +46,30 @@ class MusicTool(BaseTool):
         user_query: str,
         vibe_snippet: str,
         full_context: str,
-        *,
-        silent: bool = False,
         **kwargs: object,
-    ) -> str | None:
+    ) -> ToolResult:
         """音樂工具核心。
 
-        Args:
-            silent: 若為 True，不直接發送 Discord 確認訊息，改為回傳狀態字串給 Agent。
-
         Returns:
-            silent=False 時回傳 None；silent=True 時回傳執行狀態字串。
+            標準 ToolResult 成果合約。
         """
-        brain   = bot.get_cog("BotBrain")
-        handler = bot.get_cog("MusicHandler")
-        if not brain or not handler:
-            return "音樂系統未就緒。" if silent else None
+        silent = bool(kwargs.get("silent", False))
+        brain_cog = bot.get_cog("BotBrain")
+        handler_cog = bot.get_cog("MusicHandler")
+        if not brain_cog or not handler_cog:
+            return ToolResult.error("音樂系統未就緒。", is_direct_rendered=True)
+        brain: Any = brain_cog
+        handler: Any = handler_cog
 
-        guild_id = message.guild.id
-        voice    = message.author.voice
+        guild = message.guild
+        if not guild:
+            return ToolResult.error("音樂功能僅支援伺服器頻道使用。", is_direct_rendered=True)
+        guild_id = guild.id
+        voice = getattr(message.author, "voice", None)
 
         async def _send(msg: str) -> None:
-            """統一發送 or 靜默回傳（由呼叫端捕獲）。"""
-            if not silent:
-                await simulate_typing_and_send(message, msg)
+            """統一發送 Discord 訊息給使用者。"""
+            await simulate_typing_and_send(message, msg)
 
         # ──────────────────────────────────────────────────────
         # [FAST PATH #1] YouTube 網址直接貼入 → 跳過 LLM，強制 PLAY
@@ -77,9 +80,8 @@ class MusicTool(BaseTool):
         if url_in_query:
             if not voice or not voice.channel:
                 msg = "你這不就鬧空城計嗎...人進去了魔法室(語音房)，再來點歌喔！"
-                if silent: return msg
                 await _send(msg)
-                return None
+                return ToolResult.error(msg, is_direct_rendered=True)
             real_target = url_in_query.group(1)
             is_insert = bool(re.search(r"(插播|插歌|插一首|優先插播|優先播|下一首播|下一首放)", user_query))
             await handler.headless_play(message.channel, voice.channel, real_target, insert_at_top=is_insert)
@@ -87,23 +89,21 @@ class MusicTool(BaseTool):
                 msg = f"📌 收到神秘的電波了！沒問題...這就發功幫你優先插播到最前面：「{real_target}」！🎵"
             else:
                 msg = f"我收到神秘的電波了。沒問題...這就發功幫你載入：「{real_target}」！🎵"
-            if silent: return msg
             await _send(msg)
-            return None
+            return ToolResult.success(msg, is_direct_rendered=True)
 
         # ──────────────────────────────────────────────────────
         # [FAST PATH #2] 「跳過 / 下一首」→ 不用問 LLM，直接 SKIP
         # ──────────────────────────────────────────────────────
         if re.search(r"(跳過|跳下一首|卡歌|切歌|換下一首|下一首歌?$)", user_query) and not re.search(r"(下一首播|下一首放|下一首唱)", user_query):
-            vc = message.guild.voice_client
-            if vc and (vc.is_playing() or vc.is_paused()):
+            vc = guild.voice_client
+            if isinstance(vc, discord.VoiceClient) and (vc.is_playing() or vc.is_paused()):
                 vc.stop()
                 msg = "收到！直接幫你喀擦！切去下一首囉！⏭️"
             else:
                 msg = "目前魔法留聲機安靜得很呢，你是不是聽錯了？沒有播歌喔！"
-            if silent: return msg
             await _send(msg)
-            return None
+            return ToolResult.success(msg, is_direct_rendered=True)
 
         # ──────────────────────────────────────────────────────
         # [FAST PATH #3] 「第N首」→ 不用問 LLM，直接 JUMP_TO
@@ -114,22 +114,19 @@ class MusicTool(BaseTool):
             queue = handler.queues.get(guild_id, [])
             if not queue:
                 msg = "佇列裡空空如也，沒有歌可以跳轉喔！"
-                if silent: return msg
                 await _send(msg)
-                return None
+                return ToolResult.error(msg, is_direct_rendered=True)
             song = handler.jump_to(guild_id, idx)
             if not song:
                 msg = f"找不到第 {idx} 首耶！清單目前只有 {len(queue)} 首，確認一下再叫我喔！"
-                if silent: return msg
                 await _send(msg)
-                return None
-            vc = message.guild.voice_client
-            if vc and (vc.is_playing() or vc.is_paused()):
+                return ToolResult.error(msg, is_direct_rendered=True)
+            vc = guild.voice_client
+            if isinstance(vc, discord.VoiceClient) and (vc.is_playing() or vc.is_paused()):
                 vc.stop()  # 觸發 after_playback → _play_next → 播 jump 後的首位
             msg = f"🎯 收到！立刻跳到第 {idx} 首：**{song['title']}**！"
-            if silent: return msg
             await _send(msg)
-            return None
+            return ToolResult.success(msg, is_direct_rendered=True)
 
         # ──────────────────────────────────────────────────────
         # [FAST PATH #4] 「清空 / 刪除全部」→ 不用問 LLM，直接 CLEAR
@@ -138,14 +135,12 @@ class MusicTool(BaseTool):
             queue = handler.queues.get(guild_id, [])
             if not queue:
                 msg = "目前播放清單本來就是空的喔，沒有東西可以清空啦！"
-                if silent: return msg
                 await _send(msg)
-                return None
+                return ToolResult.error(msg, is_direct_rendered=True)
             count = handler.clear_queue(guild_id)
             msg = f"🧹 收到！名偵探已經幫你把播放清單裡的 **{count}** 首歌曲全部清空囉！"
-            if silent: return msg
             await _send(msg)
-            return None
+            return ToolResult.success(msg, is_direct_rendered=True)
 
         # ──────────────────────────────────────────────────────
         # [FAST PATH #5] 「插播 / 優先插播」→ 不用問 LLM，直接 INSERT
@@ -154,16 +149,28 @@ class MusicTool(BaseTool):
         if insert_match:
             if not voice or not voice.channel:
                 msg = "你這不就鬧空城計嗎...人進去了魔法室(語音房)，再來點歌喔！"
-                if silent: return msg
                 await _send(msg)
-                return None
+                return ToolResult.error(msg, is_direct_rendered=True)
             target = insert_match.group(1).strip()
             if target:
                 await handler.headless_play(message.channel, voice.channel, target, insert_at_top=True)
                 msg = f"📌 沒問題！已經幫你把「**{target}**」優先插播到清單最前面囉！🎵"
-                if silent: return msg
                 await _send(msg)
-                return None
+                return ToolResult.success(msg, is_direct_rendered=True)
+
+        # ──────────────────────────────────────────────────────
+        # [FAST PATH #6] 「查看清單 / 歌單」→ 不用問 LLM，直接 LIST
+        # ──────────────────────────────────────────────────────
+        if re.search(r"(查看清單|列出播放清單|播放清單|排隊清單|看歌單|列出清單|查看歌單|目前的播放清單|當前播放清單|當前清單|查清單|看清單)", user_query):
+            queue = handler.queues.get(guild_id, [])
+            current = handler.current_song.get(guild_id)
+            if not current and not queue:
+                msg = "目前魔法音響的紀錄空空如也耶！要不要交給我加首刺激的？"
+                await _send(msg)
+                return ToolResult.no_data(msg, is_direct_rendered=True)
+            await _send("來啦！這就是現在魔法留聲機的排隊清單：🎵")
+            await handler.send_queue_embed(message.channel, guild_id)
+            return ToolResult.success("已在頻道中發布播放清單 Embed。", is_direct_rendered=True)
 
         # ──────────────────────────────────────────────────────
         # LLM 分析路徑（歌名搜尋 / LIST / REMOVE 等模糊指令）
@@ -193,12 +200,10 @@ class MusicTool(BaseTool):
                 pass
 
             async def _reply(msg: str) -> None:
-                """在 _handle_action 中統一送訊息或更新 future。"""
-                if silent:
-                    if not _result_future.done():
-                        _result_future.set_result(msg)
-                else:
-                    await simulate_typing_and_send(message, msg)
+                """在 _handle_action 中統一發送訊息並更新 future。"""
+                await simulate_typing_and_send(message, msg)
+                if silent and not _result_future.done():
+                    _result_future.set_result(msg)
 
             # ── LIST ───────────────────────────────────────────
             if action == "LIST":
@@ -208,8 +213,9 @@ class MusicTool(BaseTool):
                     await _reply("目前魔法音響的紀錄空空如也耶！要不要交給我加首刺激的？")
                     return
                 await _reply("來啦！這就是現在魔法留聲機的排隊清單：🎵")
-                if not silent:
-                    await handler.send_queue_embed(message.channel, guild_id)
+                await handler.send_queue_embed(message.channel, guild_id)
+                if silent and not _result_future.done():
+                    _result_future.set_result("已在頻道中發布播放清單 Embed。")
 
             # ── REMOVE ─────────────────────────────────────────
             elif action == "REMOVE":
@@ -302,9 +308,8 @@ class MusicTool(BaseTool):
             task_id=f"tool-music-act-{message.id}"
         ))
 
-        if silent:
-            try:
-                return await asyncio.wait_for(_result_future, timeout=settings.REACT_STEP_TIMEOUT)
-            except asyncio.TimeoutError:
-                return "音樂操作已送出，但未能及時取得確認結果。"
-        return None
+        try:
+            res = await asyncio.wait_for(_result_future, timeout=settings.REACT_STEP_TIMEOUT)
+            return ToolResult.success(res or "音樂操作已執行。", is_direct_rendered=True)
+        except asyncio.TimeoutError:
+            return ToolResult.error("音樂操作已送出，但未能及時取得確認結果。", is_direct_rendered=True)

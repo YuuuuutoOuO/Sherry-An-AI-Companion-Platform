@@ -18,3 +18,4 @@ class InferenceTask:
     sequence_id: int = dataclasses.field(default=0)
     images: list[str] | None = dataclasses.field(default=None, compare=False)
     temperature: float | None = dataclasses.field(default=None, compare=False)
+    stream_callback: Callable[[str], Awaitable[None]] | None = dataclasses.field(default=None, compare=False)
