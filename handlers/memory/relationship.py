@@ -34,9 +34,12 @@ class RelationshipManager:
         (0,  "stranger"),
     ]
 
-    def __init__(self) -> None:
+    def __init__(self, debounce_seconds: float = 30.0) -> None:
         self.store: dict[str, dict[str, Any]] = {}
         self._last_decay_date: str = ""
+        self._dirty: bool = False
+        self._debounce_seconds: float = debounce_seconds
+        self._flush_task: Any = None
         self._load()
 
     def _load(self) -> None:
@@ -50,26 +53,54 @@ class RelationshipManager:
             except Exception as e:
                 logger.error("讀取 relationship 失敗: %s", e)
 
-    def _save(self) -> None:
+    def _do_write_sync(self, store_copy: dict[str, dict[str, Any]]) -> None:
+        """同步原子寫入磁碟。"""
         path: Path = settings.USER_RELATIONS_PATH
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
-        store_copy = dict(self.store)
+        try:
+            with tmp.open("w", encoding="utf-8") as f:
+                json.dump(store_copy, f, ensure_ascii=False, indent=2)
+            tmp.replace(path)
+        except Exception as e:
+            logger.error("寫入 relationship 失敗: %s", e)
 
-        def _do_write():
-            try:
-                with tmp.open("w", encoding="utf-8") as f:
-                    json.dump(store_copy, f, ensure_ascii=False, indent=2)
-                tmp.replace(path)
-            except Exception as e:
-                logger.error("寫入 relationship 失敗: %s", e)
+    def flush(self, force: bool = False) -> None:
+        """強制或髒標記落盤。
+
+        Args:
+            force: 若為 True，即使 _dirty 為 False 也強制寫入磁碟。
+        """
+        if not self._dirty and not force:
+            return
+
+        self._dirty = False
+        store_copy = dict(self.store)
 
         try:
             import asyncio
             loop = asyncio.get_running_loop()
-            loop.run_in_executor(None, _do_write)
+            loop.run_in_executor(None, self._do_write_sync, store_copy)
         except RuntimeError:
-            _do_write()
+            self._do_write_sync(store_copy)
+
+    def _schedule_debounce(self) -> None:
+        """排程延遲落盤任務（Debounce）。"""
+        try:
+            import asyncio
+            loop = asyncio.get_running_loop()
+            if self._flush_task is None or self._flush_task.done():
+                async def _delayed_flush() -> None:
+                    await asyncio.sleep(self._debounce_seconds)
+                    self.flush()
+                self._flush_task = loop.create_task(_delayed_flush())
+        except RuntimeError:
+            # 無運行中的事件迴圈時（如非非同步環境或單元測試），由呼叫方或直接落盤
+            pass
+
+    def _save(self) -> None:
+        """相容舊版直接存檔介面，觸發 flush。"""
+        self.flush(force=True)
 
     def get_affinity(self, uid: int) -> float:
         """回傳目前好感度（float，保留小數精度）。"""
@@ -78,6 +109,8 @@ class RelationshipManager:
 
     def update_affinity(self, uid: int, delta: int | float) -> None:
         """更新好感度（以 float 精度儲存，防止 0.5 被 int() 截斷）。
+
+        採用 Debounce 機制延遲落盤，避免每則訊息重複觸發全量寫入。
 
         Args:
             uid: Discord 使用者 ID。
@@ -96,7 +129,8 @@ class RelationshipManager:
         self.store[uid_str]["last_interaction"] = datetime.now(timezone.utc).isoformat()
 
         if abs(delta) > 0:
-            self._save()
+            self._dirty = True
+            self._schedule_debounce()
 
     def get_affinity_tier(self, uid: int) -> str:
         """根據當前好感度回傳關係等級（使用 float 比較）。"""
@@ -126,7 +160,7 @@ class RelationshipManager:
                 affected += 1
 
         if affected > 0:
-            self._save()
+            self.flush(force=True)
             logger.info("RelationshipManager: 好感度每日衰減完成，影響 %d 人", affected)
         return affected
 

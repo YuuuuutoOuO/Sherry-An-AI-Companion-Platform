@@ -1,18 +1,75 @@
-import discord
-from typing import Any
+"""handlers/music/ui.py
+====================
+音樂播放系統 Discord 互動 UI 介面（按鈕面板、分頁清單與點歌彈窗）。
+"""
 
+from __future__ import annotations
+
+import logging
+from typing import Any, Optional
+
+import discord
+from discord import ui
+
+logger = logging.getLogger(__name__)
+
+
+# ===========================================================================
+# 1. 點歌 / 貼網址 Modal
+# ===========================================================================
+
+class SongInputModal(ui.Modal, title="🎵 點播音樂 / 貼上 YouTube 網址"):
+    """彈出式點歌與 YouTube 網址輸入表單。"""
+
+    query_input: Any = ui.TextInput(
+        label="YouTube 網址 或 歌曲名稱關鍵字",
+        placeholder="例如：https://youtu.be/... 或 Yoasobi Idol",
+        min_length=1,
+        max_length=300,
+        required=True,
+    )
+    play_mode_input: Any = ui.TextInput(
+        label="播放模式 (add: 加入佇列 / insert: 優先插播)",
+        placeholder="add (預設加入隊尾) 或 insert (優先插播到最前)",
+        default="add",
+        min_length=3,
+        max_length=10,
+        required=False,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        """處理點歌提交事件。"""
+        query = str(self.query_input.value).strip()
+        mode_val = str(self.play_mode_input.value).strip().lower()
+        play_type = "insert" if "ins" in mode_val else ("add" if query.startswith(("http://", "https://", "www.")) else "search")
+
+        cog: Any = getattr(interaction.client, "get_cog", lambda _: None)("MusicHandler")
+        if cog and hasattr(cog, "play_command"):
+            await cog.play_command.callback(cog, interaction, play_type=play_type, context=query)
+        else:
+            await interaction.response.send_message("❌ 音樂模組尚未載入！", ephemeral=True)
+
+
+# ===========================================================================
+# 2. 留聲機主控面板 View
+# ===========================================================================
 
 class MusicControlView(discord.ui.View):
     """音樂播放時的控制按鈕面板。
 
-    包含暫停/播放、跳過歌曲、隨機打亂、循環切換以及查看播放清單分頁面板。
+    包含點歌、暫停/播放、跳過歌曲、隨機打亂、循環切換、停止清空以及查看播放清單分頁面板。
     """
 
     def __init__(self) -> None:
         """初始化音樂播放控制介面。"""
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="⏯️ 暫停/播放", style=discord.ButtonStyle.secondary, custom_id="pause_resume_btn")
+    @discord.ui.button(label="➕ 點歌/貼網址", style=discord.ButtonStyle.success, custom_id="add_song_btn", row=0)
+    async def add_song_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """彈出點歌對話框。"""
+        await interaction.response.send_modal(SongInputModal())
+
+    @discord.ui.button(label="⏯️ 暫停/播放", style=discord.ButtonStyle.secondary, custom_id="pause_resume_btn", row=0)
     async def pause_resume_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """切換音樂播放或暫停狀態。"""
         vc: Any = interaction.guild.voice_client if interaction.guild else None
@@ -47,7 +104,7 @@ class MusicControlView(discord.ui.View):
         else:
             await interaction.response.send_message("❌ 機器人目前不在語音頻道內。", ephemeral=True)
 
-    @discord.ui.button(label="⏭️ 跳過此曲", style=discord.ButtonStyle.blurple, custom_id="skip_song_btn")
+    @discord.ui.button(label="⏭️ 跳過此曲", style=discord.ButtonStyle.blurple, custom_id="skip_song_btn", row=0)
     async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """跳過當前播放歌曲。"""
         vc: Any = interaction.guild.voice_client if interaction.guild else None
@@ -62,7 +119,22 @@ class MusicControlView(discord.ui.View):
         else:
             await interaction.response.send_message("❌ 機器人目前不在語音頻道內。", ephemeral=True)
 
-    @discord.ui.button(label="🔀 隨機", style=discord.ButtonStyle.secondary, custom_id="shuffle_btn")
+    @discord.ui.button(label="⏹️ 停止/清空", style=discord.ButtonStyle.danger, custom_id="stop_song_btn", row=0)
+    async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """停止播放並清空佇列。"""
+        cog: Any = getattr(interaction.client, "get_cog", lambda _: None)("MusicHandler")
+        vc: Any = interaction.guild.voice_client if interaction.guild else None
+        if cog and interaction.guild_id:
+            cog.queues[interaction.guild_id] = []
+            cog.current_song[interaction.guild_id] = None
+            if vc and vc.is_connected():
+                vc.stop()
+                await vc.disconnect()
+            await interaction.response.send_message(f"⏹️ {interaction.user.mention} 已停止播放並清空清單！", delete_after=5)
+        else:
+            await interaction.response.send_message("❌ 音樂模組未載入。", ephemeral=True)
+
+    @discord.ui.button(label="🔀 隨機", style=discord.ButtonStyle.secondary, custom_id="shuffle_btn", row=1)
     async def shuffle_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """隨機打亂目前排隊中的播放清單。"""
         cog: Any = getattr(interaction.client, "get_cog", lambda _: None)("MusicHandler")
@@ -79,7 +151,7 @@ class MusicControlView(discord.ui.View):
         else:
             await interaction.response.send_message("❌ 音樂模組未載入。", ephemeral=True)
 
-    @discord.ui.button(label="🔁 循環", style=discord.ButtonStyle.secondary, custom_id="loop_btn")
+    @discord.ui.button(label="🔁 循環", style=discord.ButtonStyle.secondary, custom_id="loop_btn", row=1)
     async def loop_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """切換循環模式：關閉、清單循環或單曲循環。"""
         cog: Any = getattr(interaction.client, "get_cog", lambda _: None)("MusicHandler")
@@ -102,7 +174,7 @@ class MusicControlView(discord.ui.View):
         else:
             await interaction.response.send_message("❌ 音樂模組未載入。", ephemeral=True)
 
-    @discord.ui.button(label="📋 播放清單", style=discord.ButtonStyle.secondary, custom_id="view_queue_btn")
+    @discord.ui.button(label="📋 播放清單", style=discord.ButtonStyle.secondary, custom_id="view_queue_btn", row=1)
     async def view_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """顯示目前的音樂播放清單與分頁介面。"""
         cog: Any = getattr(interaction.client, "get_cog", lambda _: None)("MusicHandler")
@@ -121,22 +193,15 @@ class MusicControlView(discord.ui.View):
             await interaction.response.send_message("❌ 音樂模組未載入。", ephemeral=True)
 
 
-class MusicQueueView(discord.ui.View):
-    """音樂播放清單的分頁與管理介面。
+# ===========================================================================
+# 3. 播放清單分頁檢視 View
+# ===========================================================================
 
-    Attributes:
-        guild_id: Discord 伺服器 ID。
-        page: 當前顯示的頁碼 (0-indexed)。
-        per_page: 每頁顯示的歌曲筆數。
-    """
+class MusicQueueView(discord.ui.View):
+    """音樂播放清單的分頁與管理介面。"""
 
     def __init__(self, guild_id: int, page: int = 0, per_page: int = 10) -> None:
-        """初始化播放清單分頁檢視介面。
-
-        Args:
-            guild_id: Discord 伺服器 ID。
-            page: 初始頁碼 (預設為 0)。
-        """
+        """初始化播放清單分頁檢視介面。"""
         import settings
         super().__init__(timeout=getattr(settings, "MUSIC_QUEUE_VIEW_TIMEOUT", 180))
         self.guild_id = guild_id
@@ -144,11 +209,7 @@ class MusicQueueView(discord.ui.View):
         self.per_page = per_page
 
     def update_button_states(self, total_pages: int) -> None:
-        """依據頁碼與總頁數更新翻頁按鈕的啟用狀態。
-
-        Args:
-            total_pages: 播放清單的總頁數。
-        """
+        """依據頁碼與總頁數更新翻頁按鈕的啟用狀態。"""
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 if child.custom_id == "queue_prev_btn":
@@ -207,4 +268,4 @@ class MusicQueueView(discord.ui.View):
             if hasattr(self, "message") and self.message:
                 await self.message.edit(view=self)
         except Exception:
-            pass
+            pass

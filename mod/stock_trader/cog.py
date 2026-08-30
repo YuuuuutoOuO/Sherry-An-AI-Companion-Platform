@@ -426,7 +426,7 @@ class StockTraderCog(commands.Cog, name="Sherry Stock Trader"):
     # Discord Commands
     # -----------------------------------------------------------------------
     @commands.command(name="stock_status")
-    async def cmd_stock_status(self, ctx: commands.Context) -> None:
+    async def cmd_stock_status(self, ctx: commands.Context[Any]) -> None:
         """查詢雪莉美股虛擬帳戶狀態。"""
         acc = self.repo.load_portfolio()
         embed = discord.Embed(

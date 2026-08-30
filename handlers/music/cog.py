@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import discord
 from discord.ext import commands
 from discord import app_commands
 import asyncio
 import re
 import time
-from typing import Any
+from typing import Any, Optional
 
 import settings
 # 匯入分離出來的模塊
@@ -592,10 +594,10 @@ class MusicHandler(commands.Cog):
     # 單一 /play 指令（合併所有操作為下拉選單）
     # ──────────────────────────────────────────────────────────
 
-    @app_commands.command(name="play", description="🎵 音樂播放系統 — 選擇操作類型後填入對應內容")
+    @app_commands.command(name="play", description="🎵 音樂播放系統 — 無參數開啟留聲機主控面板，或直接選擇操作")
     @app_commands.describe(
-        play_type="選擇操作類型",
-        context="補充內容（YouTube 網址 / 歌名 / 編號），部分操作不需填寫"
+        play_type="操作類型（可選，留空則開啟留聲機互動主控台）",
+        context="補充內容（YouTube 網址 / 歌名 / 編號），部分操作不需填寫",
     )
     @app_commands.choices(play_type=[
         app_commands.Choice(name="▶️  add    — 新增 YouTube 網址到佇列", value="add"),
@@ -610,19 +612,27 @@ class MusicHandler(commands.Cog):
     async def play_command(
         self,
         interaction: discord.Interaction,
-        play_type: str,
-        context: str = ""
+        play_type: Optional[str] = None,
+        context: Optional[str] = "",
     ) -> None:
-        """處理 /play 斜線指令的分支操作。
+        """處理 /play 斜線指令的分支操作與主控台發送。
 
         Args:
             interaction: Discord 互動事件。
-            play_type: 操作類型 (add, search, list, skip, jump, remove)。
+            play_type: 操作類型 (add, search, list, skip, jump, remove 等，留空開啟面板)。
             context: 相關參數 (網址、關鍵字或歌曲編號)。
         """
         guild_id = interaction.guild_id
         if guild_id is None:
             return
+
+        if not play_type:
+            embed = self.build_playing_embed(guild_id)
+            await interaction.response.send_message(embed=embed, view=MusicControlView(), ephemeral=False)
+            return
+
+        context_str: str = context or ""
+        context = context_str
         queue    = self.queues.get(guild_id, [])
         current  = self.current_song.get(guild_id)
         vc: Any  = interaction.guild.voice_client if interaction.guild else None
@@ -636,22 +646,22 @@ class MusicHandler(commands.Cog):
         if play_type == "add":
             await interaction.response.defer()
             youtube_regex = r'^(https?\:\/\/)?(www\.youtube\.com|youtu\.?be)\/.+$'
-            if not context.strip():
+            if not context_str.strip():
                 await interaction.followup.send("❌ 請在 `context` 填入 YouTube 網址！", ephemeral=True)
                 return
-            if not re.match(youtube_regex, context.strip()):
+            if not re.match(youtube_regex, context_str.strip()):
                 await interaction.followup.send("❌ 格式錯誤！請提供有效的 YouTube 影片或播放清單網址。", ephemeral=True)
                 return
             if not user_vc:
                 await interaction.followup.send("❌ 你必須先加入一個語音頻道！", ephemeral=True)
                 return
-            await self.headless_play(interaction.channel, user_vc, context.strip())  # type: ignore[arg-type]
-            await interaction.followup.send(f"✅ 已收到！正在把 `{context.strip()}` 載入佇列...")
+            await self.headless_play(interaction.channel, user_vc, context_str.strip())  # type: ignore[arg-type]
+            await interaction.followup.send(f"✅ 已收到！正在把 `{context_str.strip()}` 載入佇列...")
 
         # ── search ─────────────────────────────────────────────
         elif play_type == "search":
             await interaction.response.defer()
-            if not context.strip():
+            if not context_str.strip():
                 await interaction.followup.send("❌ 請在 `context` 填入想搜尋的歌名或關鍵字！", ephemeral=True)
                 return
             if not user_vc:

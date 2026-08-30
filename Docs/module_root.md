@@ -1,6 +1,6 @@
 # 🏠 module_root — 根目錄模組文件
 
-> 最後更新：2026-08-26 20:13  |  自動生成自 AST 掃描
+> 最後更新：2026-08-30 18:04  |  自動生成自 AST 掃描
 
 涵蓋根目錄的所有 `.py` 檔案：`main.py`, `settings.py`, `build_tag_dict.py`
 
@@ -116,15 +116,18 @@ def build() -> None
 
 | 名稱 | 型別 | 值（摘要） | 行號 |
 |---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L45 |
-| `EXTENSIONS` | `list[str]` | `['handlers.bot_brain', 'handlers.social', 'handlers.vibe_manager', 'handlers.mus...` | L50 |
-| `BASE_DIR` | `Path` | `Path(__file__).resolve().parent` | L72 |
-| `MOD_DIR` | `Path` | `BASE_DIR / 'mod'` | L73 |
+| `_stream_handler` | `—` | `logging.StreamHandler(sys.stdout)` | L63 |
+| `_file_handler` | `—` | `logging.FileHandler(settings.BOT_LOG_PATH, encoding='utf-8')` | L64 |
+| `_trace_filter` | `—` | `TraceIdFilter()` | L65 |
+| `logger` | `—` | `logging.getLogger(__name__)` | L75 |
+| `EXTENSIONS` | `list[str]` | `['handlers.bot_brain', 'handlers.social', 'handlers.vibe_manager', 'handlers.mus...` | L81 |
+| `BASE_DIR` | `Path` | `Path(__file__).resolve().parent` | L103 |
+| `MOD_DIR` | `Path` | `BASE_DIR / 'mod'` | L104 |
 
 
 ### Functions
 
-#### `_discover_optional_extensions`  (L76)
+#### `_discover_optional_extensions`  (L107)
 
 ```python
 def _discover_optional_extensions() -> list[str]
@@ -132,7 +135,7 @@ def _discover_optional_extensions() -> list[str]
 
 > 掃描 ./mod/ 目錄，自動找出含有 cog.py 的子資料夾。
 
-#### `build_bot`  (L91)
+#### `build_bot`  (L122)
 
 ```python
 def build_bot() -> commands.Bot
@@ -140,7 +143,7 @@ def build_bot() -> commands.Bot
 
 > Construct and return the configured Bot instance.
 
-#### `main`  (L109)
+#### `main`  (L140)
 
 ```python
 async def main() -> None
@@ -215,7 +218,7 @@ async def main() -> None
 | `LLM_TIMEOUT` | `int` | `int(os.getenv('LLM_TIMEOUT', '180'))` | L157 |
 | `LLM_STREAM_CHUNK_TIMEOUT` | `float` | `float(os.getenv('LLM_STREAM_CHUNK_TIMEOUT', '60.0'))` | L158 |
 | `OLLAMA_TIMEOUT` | `int` | `int(os.getenv('OLLAMA_TIMEOUT', str(LLM_TIMEOUT)))` | L159 |
-| `AGENT_DISPATCH_MODE` | `str` | `os.getenv('AGENT_DISPATCH_MODE', 'PARALLEL').upper()` | L165 |
+| `AGENT_DISPATCH_MODE` | `str` | `os.getenv('AGENT_DISPATCH_MODE', 'INTEGRATED').upper()` | L165 |
 | `ACTION_EARLY_TERMINATION_ENABLED` | `bool` | `os.getenv('ACTION_EARLY_TERMINATION_ENABLED', 'True').lower() in ('true', '1', '...` | L168 |
 | `PARALLEL_PLANNER_MODEL` | `str` | `os.getenv('PARALLEL_PLANNER_MODEL', CLASSIFIER_MODEL)` | L171 |
 | `PARALLEL_MAX_TASKS` | `int` | `5` | L172 |
@@ -300,80 +303,82 @@ async def main() -> None
 | `SD_NEGATIVE_PROMPT_BASE` | `str` | `'lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewe...` | L351 |
 | `MICRO_COT_ENABLED` | `bool` | `True` | L359 |
 | `DEBUG_DETAIL` | `bool` | `False` | L362 |
-| `CHAT_LOG_DIR` | `Path` | `DATA_DIR / 'chat_logs'` | L368 |
-| `NIGHTLY_DIGEST_HOUR` | `int` | `4` | L369 |
-| `NIGHTLY_DIGEST_MINUTE` | `int` | `30` | L370 |
-| `NIGHTLY_DIGEST_MODEL` | `str` | `PRIMARY_MODEL` | L371 |
-| `NIGHTLY_MAX_MSGS_PER_USER` | `int` | `200` | L372 |
-| `WEB_UI_HOST` | `str` | `os.getenv('WEB_UI_HOST', '0.0.0.0')` | L377 |
-| `WEB_UI_PORT` | `int` | `int(os.getenv('WEB_UI_PORT', '8080'))` | L378 |
-| `WEB_UI_HTTPS` | `bool` | `True` | L379 |
-| `WEB_UI_SSL_CERT` | `str | None` | `os.getenv('WEB_UI_SSL_CERT', None)` | L380 |
-| `WEB_UI_SSL_KEY` | `str | None` | `os.getenv('WEB_UI_SSL_KEY', None)` | L381 |
-| `WEB_UI_RADMIN_IP` | `str | None` | `os.getenv('WEB_UI_RADMIN_IP', '26.108.83.196')` | L382 |
-| `WEB_UI_HTTP_TIMEOUT` | `float` | `5.0` | L383 |
-| `YOUTUBE_COOKIES_PATH` | `Path` | `DATA_DIR / 'cookies.txt'` | L388 |
-| `MUSIC_PLAYLIST_MAX_ITEMS` | `int` | `100` | L389 |
-| `MUSIC_FFMPEG_BEFORE_OPTIONS` | `str` | `'-reconnect 1 -reconnect_streamed 1 -reconnect_at_eof 1 -reconnect_on_network_er...` | L390 |
-| `MUSIC_FFMPEG_OPTIONS` | `str` | `'-vn -af "loudnorm=I=-9:LRA=11:TP=-1.0"'` | L391 |
-| `MUSIC_DEFAULT_VOLUME` | `float` | `1.2` | L392 |
-| `MUSIC_QUEUE_VIEW_TIMEOUT` | `int` | `180` | L393 |
-| `VOICE_STT_REPO_ID` | `str` | `'nvidia/nemotron-3.5-asr-streaming-0.6b'` | L395 |
-| `VOICE_TTS_MODEL_NAME` | `str` | `'tts_models/multilingual/multi-dataset/xtts_v2'` | L396 |
-| `VOICE_VAD_REPO_OR_DIR` | `str` | `'snakers4/silero-vad'` | L397 |
-| `VOICE_VAD_MODEL_NAME` | `str` | `'silero_vad'` | L398 |
-| `PIXIV_TAG_PATH` | `Path` | `FILE_DIR / 'pixiv_tag.json'` | L403 |
-| `TAG_METADATA_PATH` | `Path` | `FILE_DIR / 'tag_metadata.json'` | L404 |
-| `PIXIV_TAG_MIN_POST_COUNT` | `int` | `100` | L405 |
-| `PIXIV_TAG_MAX_PAGES` | `int` | `60` | L406 |
-| `PIXIV_TAG_REQUEST_DELAY` | `float` | `0.5` | L407 |
-| `DANBOORU_API_URL` | `str` | `'https://danbooru.donmai.us/tags.json'` | L408 |
-| `DANBOORU_POSTS_API_URL` | `str` | `'https://danbooru.donmai.us/posts.json'` | L409 |
-| `WORLD_LOG_DIR` | `Path` | `DATA_DIR / 'world_history'` | L411 |
-| `WORLD_MEMORY_PATH` | `Path` | `DATA_DIR / 'world_memory.json'` | L412 |
-| `BOT_LOG_PATH` | `Path` | `DATA_DIR / 'bot.log'` | L413 |
-| `NIGHTLY_MIN_MSGS_THRESHOLD` | `int` | `int(os.getenv('NIGHTLY_MIN_MSGS_THRESHOLD', '5'))` | L418 |
-| `BOT_BRAIN_MAX_RETRIES` | `int` | `3` | L423 |
-| `BOT_BRAIN_RETRY_DELAY` | `float` | `2.0` | L424 |
-| `HEARTBEAT_CHECK_INTERVAL_MINUTES` | `int` | `30` | L429 |
-| `HEARTBEAT_CONDITION_START_HOUR` | `int` | `9` | L430 |
-| `HEARTBEAT_CONDITION_END_HOUR` | `int` | `22` | L431 |
-| `HEARTBEAT_CONDITION_MIN_GAP_SECONDS` | `int` | `14400` | L432 |
-| `OPENWEATHERMAP_API_URL` | `str` | `'https://api.openweathermap.org/data/2.5/weather'` | L437 |
-| `SAFEBOORU_API_URL` | `str` | `'https://safebooru.org/index.php?page=dapi&s=post'` | L438 |
-| `SAFEBOORU_IMAGE_BASE_URL` | `str` | `'https://safebooru.org/images/'` | L439 |
-| `DUCKDUCKGO_SEARCH_URL` | `str` | `'https://html.duckduckgo.com/html/?q='` | L440 |
-| `DEFAULT_HTTP_TIMEOUT` | `int` | `10` | L441 |
-| `YOUTUBE_SEARCH_API_URL` | `str` | `'https://www.googleapis.com/youtube/v3/search'` | L442 |
-| `YOUTUBE_RSS_FEED_URL` | `str` | `'https://www.youtube.com/feeds/videos.xml?channel_id='` | L443 |
-| `YOUTUBE_RSS_NS` | `str` | `'http://www.w3.org/2005/Atom'` | L444 |
-| `DEFAULT_USER_AGENT` | `str` | `'DiscordBot/1.0 (https://github.com/placeholder; contact@placeholder.com)'` | L445 |
-| `WEATHER_EXTRACT_TIMEOUT` | `float` | `10.0` | L450 |
-| `WEATHER_REPLY_TIMEOUT` | `float` | `60.0` | L451 |
-| `SAFEBOORU_HTTP_TIMEOUT` | `int` | `12` | L452 |
-| `DANBOORU_HTTP_TIMEOUT` | `int` | `12` | L453 |
-| `VISION_ANALYSIS_TIMEOUT` | `int` | `120` | L454 |
-| `STOCK_EXTRACT_TIMEOUT` | `float` | `10.0` | L455 |
-| `STOCK_REPLY_TIMEOUT` | `float` | `60.0` | L456 |
-| `SCHEDULE_PARSE_TIMEOUT` | `float` | `20.0` | L457 |
-| `DRAW_RAW_TIMEOUT` | `float` | `30.0` | L458 |
-| `DRAW_EXPAND_TIMEOUT` | `float` | `10.0` | L459 |
-| `COMPOUND_PARSER_TIMEOUT` | `float` | `10.0` | L460 |
-| `INTERJECT_SCORE_TIMEOUT` | `float` | `30.0` | L461 |
-| `INTERJECT_REPLY_TIMEOUT` | `float` | `60.0` | L462 |
-| `YOUTUBE_EXPLORER_TIMEOUT` | `float` | `20.0` | L463 |
-| `NIGHTLY_DIGEST_TIMEOUT` | `float` | `120.0` | L464 |
-| `HEALTH_CHECK_TIMEOUT` | `float` | `5.0` | L465 |
-| `DISCORD_UI_VIEW_TIMEOUT` | `int` | `300` | L466 |
-| `CONFIG_OVERRIDE_PATH` | `Path` | `DATA_DIR / 'config_override.json'` | L472 |
-| `WEB_UI_PASSWORD` | `str` | `os.getenv('WEB_UI_PASSWORD', '1919810')` | L509 |
-| `WEB_UI_MAX_LOGIN_ATTEMPTS` | `int` | `5` | L510 |
-| `WEB_UI_LOCKOUT_MINUTES` | `int` | `15` | L511 |
+| `LIVE_THINKING_EDIT` | `bool` | `True` | L365 |
+| `CHAT_LOG_DIR` | `Path` | `DATA_DIR / 'chat_logs'` | L371 |
+| `NIGHTLY_DIGEST_HOUR` | `int` | `4` | L372 |
+| `NIGHTLY_DIGEST_MINUTE` | `int` | `30` | L373 |
+| `NIGHTLY_DIGEST_MODEL` | `str` | `PRIMARY_MODEL` | L374 |
+| `NIGHTLY_MAX_MSGS_PER_USER` | `int` | `200` | L375 |
+| `WEB_UI_HOST` | `str` | `os.getenv('WEB_UI_HOST', '0.0.0.0')` | L380 |
+| `WEB_UI_PORT` | `int` | `int(os.getenv('WEB_UI_PORT', '8080'))` | L381 |
+| `WEB_UI_HTTPS` | `bool` | `True` | L382 |
+| `WEB_UI_SSL_CERT` | `str | None` | `os.getenv('WEB_UI_SSL_CERT', None)` | L383 |
+| `WEB_UI_SSL_KEY` | `str | None` | `os.getenv('WEB_UI_SSL_KEY', None)` | L384 |
+| `WEB_UI_RADMIN_IP` | `str | None` | `os.getenv('WEB_UI_RADMIN_IP', '26.108.83.196')` | L385 |
+| `WEB_UI_HTTP_TIMEOUT` | `float` | `5.0` | L386 |
+| `YOUTUBE_COOKIES_PATH` | `Path` | `DATA_DIR / 'cookies.txt'` | L391 |
+| `MUSIC_PLAYLIST_MAX_ITEMS` | `int` | `100` | L392 |
+| `MUSIC_FFMPEG_BEFORE_OPTIONS` | `str` | `'-reconnect 1 -reconnect_streamed 1 -reconnect_at_eof 1 -reconnect_on_network_er...` | L393 |
+| `MUSIC_FFMPEG_OPTIONS` | `str` | `'-vn -af "loudnorm=I=-9:LRA=11:TP=-1.0"'` | L394 |
+| `MUSIC_DEFAULT_VOLUME` | `float` | `1.2` | L395 |
+| `MUSIC_QUEUE_VIEW_TIMEOUT` | `int` | `180` | L396 |
+| `VOICE_STT_REPO_ID` | `str` | `'nvidia/nemotron-3.5-asr-streaming-0.6b'` | L398 |
+| `VOICE_TTS_MODEL_NAME` | `str` | `'tts_models/multilingual/multi-dataset/xtts_v2'` | L399 |
+| `VOICE_VAD_REPO_OR_DIR` | `str` | `'snakers4/silero-vad'` | L400 |
+| `VOICE_VAD_MODEL_NAME` | `str` | `'silero_vad'` | L401 |
+| `PIXIV_TAG_PATH` | `Path` | `FILE_DIR / 'pixiv_tag.json'` | L406 |
+| `TAG_METADATA_PATH` | `Path` | `FILE_DIR / 'tag_metadata.json'` | L407 |
+| `PIXIV_TAG_MIN_POST_COUNT` | `int` | `100` | L408 |
+| `PIXIV_TAG_MAX_PAGES` | `int` | `60` | L409 |
+| `PIXIV_TAG_REQUEST_DELAY` | `float` | `0.5` | L410 |
+| `DANBOORU_API_URL` | `str` | `'https://danbooru.donmai.us/tags.json'` | L411 |
+| `DANBOORU_POSTS_API_URL` | `str` | `'https://danbooru.donmai.us/posts.json'` | L412 |
+| `WORLD_LOG_DIR` | `Path` | `DATA_DIR / 'world_history'` | L414 |
+| `WORLD_MEMORY_PATH` | `Path` | `DATA_DIR / 'world_memory.json'` | L415 |
+| `BOT_LOG_PATH` | `Path` | `DATA_DIR / 'bot.log'` | L416 |
+| `WEB_UI_LOG_PATH` | `Path` | `DATA_DIR / 'web_ui.log'` | L417 |
+| `NIGHTLY_MIN_MSGS_THRESHOLD` | `int` | `int(os.getenv('NIGHTLY_MIN_MSGS_THRESHOLD', '5'))` | L423 |
+| `BOT_BRAIN_MAX_RETRIES` | `int` | `3` | L428 |
+| `BOT_BRAIN_RETRY_DELAY` | `float` | `2.0` | L429 |
+| `HEARTBEAT_CHECK_INTERVAL_MINUTES` | `int` | `30` | L434 |
+| `HEARTBEAT_CONDITION_START_HOUR` | `int` | `9` | L435 |
+| `HEARTBEAT_CONDITION_END_HOUR` | `int` | `22` | L436 |
+| `HEARTBEAT_CONDITION_MIN_GAP_SECONDS` | `int` | `14400` | L437 |
+| `OPENWEATHERMAP_API_URL` | `str` | `'https://api.openweathermap.org/data/2.5/weather'` | L442 |
+| `SAFEBOORU_API_URL` | `str` | `'https://safebooru.org/index.php?page=dapi&s=post'` | L443 |
+| `SAFEBOORU_IMAGE_BASE_URL` | `str` | `'https://safebooru.org/images/'` | L444 |
+| `DUCKDUCKGO_SEARCH_URL` | `str` | `'https://html.duckduckgo.com/html/?q='` | L445 |
+| `DEFAULT_HTTP_TIMEOUT` | `int` | `10` | L446 |
+| `YOUTUBE_SEARCH_API_URL` | `str` | `'https://www.googleapis.com/youtube/v3/search'` | L447 |
+| `YOUTUBE_RSS_FEED_URL` | `str` | `'https://www.youtube.com/feeds/videos.xml?channel_id='` | L448 |
+| `YOUTUBE_RSS_NS` | `str` | `'http://www.w3.org/2005/Atom'` | L449 |
+| `DEFAULT_USER_AGENT` | `str` | `'DiscordBot/1.0 (https://github.com/placeholder; contact@placeholder.com)'` | L450 |
+| `WEATHER_EXTRACT_TIMEOUT` | `float` | `10.0` | L455 |
+| `WEATHER_REPLY_TIMEOUT` | `float` | `60.0` | L456 |
+| `SAFEBOORU_HTTP_TIMEOUT` | `int` | `12` | L457 |
+| `DANBOORU_HTTP_TIMEOUT` | `int` | `12` | L458 |
+| `VISION_ANALYSIS_TIMEOUT` | `int` | `120` | L459 |
+| `STOCK_EXTRACT_TIMEOUT` | `float` | `10.0` | L460 |
+| `STOCK_REPLY_TIMEOUT` | `float` | `60.0` | L461 |
+| `SCHEDULE_PARSE_TIMEOUT` | `float` | `20.0` | L462 |
+| `DRAW_RAW_TIMEOUT` | `float` | `30.0` | L463 |
+| `DRAW_EXPAND_TIMEOUT` | `float` | `10.0` | L464 |
+| `INTERJECT_SCORE_TIMEOUT` | `float` | `30.0` | L465 |
+| `INTERJECT_REPLY_TIMEOUT` | `float` | `60.0` | L466 |
+| `YOUTUBE_EXPLORER_TIMEOUT` | `float` | `20.0` | L467 |
+| `NIGHTLY_DIGEST_TIMEOUT` | `float` | `120.0` | L468 |
+| `HEALTH_CHECK_TIMEOUT` | `float` | `5.0` | L469 |
+| `DISCORD_UI_VIEW_TIMEOUT` | `int` | `300` | L470 |
+| `ROAST_REPLY_TIMEOUT` | `float` | `float(os.getenv('ROAST_REPLY_TIMEOUT', '30.0'))` | L471 |
+| `CONFIG_OVERRIDE_PATH` | `Path` | `DATA_DIR / 'config_override.json'` | L477 |
+| `WEB_UI_PASSWORD` | `str` | `os.getenv('WEB_UI_PASSWORD', '1919810')` | L514 |
+| `WEB_UI_MAX_LOGIN_ATTEMPTS` | `int` | `5` | L515 |
+| `WEB_UI_LOCKOUT_MINUTES` | `int` | `15` | L516 |
 
 
 ### Functions
 
-#### `update_setting`  (L513)
+#### `update_setting`  (L518)
 
 ```python
 def update_setting(key: str, value: Any) -> bool
@@ -386,7 +391,7 @@ def update_setting(key: str, value: Any) -> bool
 | `key` | `str` | `—` |
 | `value` | `Any` | `—` |
 
-#### `get_editable_settings`  (L558)
+#### `get_editable_settings`  (L563)
 
 ```python
 def get_editable_settings() -> dict[str, Any]
@@ -398,6 +403,6 @@ def get_editable_settings() -> dict[str, Any]
 ---
 
 
-## 📄 `tests\unit\test_core_tools_matrix.py`
+## 📄 `tests\unit\test_integrated_action_agent.py`
 
-> ⚠️ **語法錯誤**：invalid non-printable character U+FEFF (test_core_tools_matrix.py, line 1)
+> ⚠️ **語法錯誤**：invalid non-printable character U+FEFF (test_integrated_action_agent.py, line 1)

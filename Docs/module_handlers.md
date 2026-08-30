@@ -1,6 +1,6 @@
 # ⚙️ module_handlers — `handlers/` 所有子模組文件
 
-> 最後更新：2026-08-26 20:13  |  自動生成自 AST 掃描
+> 最後更新：2026-08-30 18:04  |  自動生成自 AST 掃描
 
 ## 📑 子模組目錄
 
@@ -708,16 +708,16 @@ async def close(self) -> None
 
 | 名稱 | 型別 | 值（摘要） | 行號 |
 |---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L12 |
+| `logger` | `—` | `logging.getLogger(__name__)` | L13 |
 
 
-#### Class `BotBrain` ← `commands.Cog`  (L14)
+#### Class `BotBrain` ← `commands.Cog`  (L16)
 
 > 大腦推斷單步佇列守衛：限制GPU顯存佔滿之生命線守衛兵。
 
 ##### Methods
 
-###### `__init__`  (L17)
+###### `__init__`  (L19)
 
 ```python
 def __init__(self, bot: commands.Bot) -> None
@@ -728,7 +728,7 @@ def __init__(self, bot: commands.Bot) -> None
 | `self` | `—` | `—` |
 | `bot` | `commands.Bot` | `—` |
 
-###### `sd_generating`  (L31)
+###### `sd_generating`  (L33)
 
 ```python
 @property
@@ -739,7 +739,7 @@ def sd_generating(self) -> bool
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `sd_generating`  (L35)
+###### `sd_generating`  (L37)
 
 ```python
 @sd_generating.setter
@@ -751,7 +751,7 @@ def sd_generating(self, value: bool) -> None
 | `self` | `—` | `—` |
 | `value` | `bool` | `—` |
 
-###### `cog_load`  (L42)
+###### `cog_load`  (L44)
 
 ```python
 async def cog_load(self) -> None
@@ -761,7 +761,7 @@ async def cog_load(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `cog_unload`  (L48)
+###### `cog_unload`  (L50)
 
 ```python
 async def cog_unload(self) -> None
@@ -771,7 +771,7 @@ async def cog_unload(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `enqueue_task`  (L56)
+###### `enqueue_task`  (L58)
 
 ```python
 async def enqueue_task(self, task: InferenceTask) -> None
@@ -782,7 +782,7 @@ async def enqueue_task(self, task: InferenceTask) -> None
 | `self` | `—` | `—` |
 | `task` | `InferenceTask` | `—` |
 
-###### `get_pending_tasks`  (L63)
+###### `get_pending_tasks`  (L71)
 
 ```python
 def get_pending_tasks(self) -> list[dict[str, Any]]
@@ -794,7 +794,7 @@ def get_pending_tasks(self) -> list[dict[str, Any]]
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `_inference_worker`  (L80)
+###### `_inference_worker`  (L88)
 
 ```python
 async def _inference_worker(self) -> None
@@ -804,7 +804,7 @@ async def _inference_worker(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `_process_task`  (L95)
+###### `_process_task`  (L103)
 
 ```python
 async def _process_task(self, task: InferenceTask, max_retries: int, retry_delay: float) -> None
@@ -1018,7 +1018,7 @@ async def on_message(self, message: discord.Message) -> None
 | `self` | `—` | `—` |
 | `message` | `discord.Message` | `—` |
 
-###### `on_raw_reaction_add`  (L80)
+###### `on_raw_reaction_add`  (L97)
 
 ```python
 @commands.Cog.listener()
@@ -1033,7 +1033,7 @@ async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> 
 
 #### Functions
 
-##### `setup`  (L182)
+##### `setup`  (L199)
 
 ```python
 async def setup(bot: commands.Bot) -> None
@@ -1044,35 +1044,6 @@ async def setup(bot: commands.Bot) -> None
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `bot` | `commands.Bot` | `—` |
-
-
----
-
-
-### 📄 `handlers/social/compound_parser.py`
-
-
-#### 全域變數 / 模組常數
-
-| 名稱 | 型別 | 值（摘要） | 行號 |
-|---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L11 |
-
-
-#### Functions
-
-##### `parse_compound_command`  (L13)
-
-```python
-async def parse_compound_command(bot: commands.Bot, user_query: str) -> list[str]
-```
-
-> 攔截複合指令，若判斷為單一指令則直接回傳。  \n>     若判斷為複合指令，交給 LLM 拆解為多個動作子句。
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `bot` | `commands.Bot` | `—` |
-| `user_query` | `str` | `—` |
 
 
 ---
@@ -1179,6 +1150,461 @@ def no_data(cls, message: str = '未找到相關數據。', is_direct_rendered: 
 ---
 
 
+### 📄 `handlers/social/dispatch_agent.py`
+
+> handlers/social/dispatch_agent.py
+
+
+#### 全域變數 / 模組常數
+
+| 名稱 | 型別 | 值（摘要） | 行號 |
+|---|---|---|---|
+| `logger` | `—` | `logging.getLogger(__name__)` | L49 |
+| `_TOOL_DESC_TEMPLATE` | `—` | `'- **{name}**：{description}'` | L55 |
+| `_USER_MESSAGE_TEMPLATE` | `—` | `'使用者（{author}）說：「{content}」'` | L56 |
+| `_TOOL_ALIASES` | `dict[str, str]` | `{'PIXIV_SEARCH': 'PIXIV', 'PIXIV_TOOL': 'PIXIV', 'FIND_IMAGE': 'PIXIV', 'SEARCH_...` | L59 |
+| `_INTEGRATED_TOOL_TEMPLATE` | `—` | `'\n【外部工具調用特權】\n若對方的問題需要即時情報、多媒體操作或外部功能（如查股市、放歌、搜圖、畫圖、查天氣、定時提醒、推薦美食/時事），妳可以在回覆最開頭...` | L114 |
+| `_PARALLEL_PLANNER_SYSTEM_TEMPLATE` | `—` | `'[SYSTEM: PARALLEL TASK DISPATCH & CHAT SUPPRESSION ENGINE]\n你是一個高效率、極致冷靜的任務排程與對...` | L183 |
+| `_REACT_SYSTEM_TEMPLATE` | `—` | `'[SYSTEM: TASK PLANNING & TOOL DISPATCH ENGINE]\n你是一個冷靜、精準的任務規劃與工具調度引擎。\n嚴格鐵則：\n...` | L293 |
+| `_OBSERVATION_TEMPLATE` | `—` | `'<observation>\n工具 [{tool}] 執行完畢，結果如下：\n{result}\n</observation>'` | L334 |
+| `_REACT_CONTINUATION_TEMPLATE` | `—` | `'以下是目前的對話歷史與工具執行記錄。請根據這些資訊繼續推理：\n\n{transcript}\n\n現在輪到你回覆：'` | L339 |
+| `parse_plan_json` | `—` | `_parse_plan_json` | L1547 |
+
+
+#### Class `PlannedTask` ← `object`  (L94)
+
+> 規劃器輸出的單一工具任務。
+
+
+#### Class `ExecutionPlan` ← `object`  (L102)
+
+> 規劃器輸出的完整執行計畫。
+
+
+#### Class `DispatchAgentTool` ← `BaseTool`  (L407)
+
+> 統一調度 Agent，支援 INTEGRATED（單階段整合）、PARALLEL（雙階段並行）與 REACT（多步驟）三種執行模式。
+
+    三種模式共用：工具載入、別名解析、_generate_final_response、_call_llm。
+
+##### Methods
+
+###### `__init__`  (L413)
+
+```python
+def __init__(self, tool_registry: list[BaseTool], mode: Literal['INTEGRATED', 'PARALLEL', 'REACT'] = 'INTEGRATED') -> None
+```
+
+> 初始化調度器。  \n>   \n>         Args:  \n>             tool_registry: 所有可用工具的列表。  \n>             mode: 執行模式，'INTEGRATED'（預設）、'PARALLEL' 或 'REACT'。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `tool_registry` | `list[BaseTool]` | `—` |
+| `mode` | `Literal['INTEGRATED', 'PARALLEL', 'REACT']` | `'INTEGRATED'` |
+
+###### `intent_name`  (L433)
+
+```python
+@property
+def intent_name(self) -> str
+```
+
+> Returns: 工具意圖名稱（依模式區分）。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `llm_description`  (L438)
+
+```python
+@property
+def llm_description(self) -> str
+```
+
+> Returns: 工具說明（不直接暴露給分類 LLM）。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `can_handle_by_regex`  (L442)
+
+```python
+def can_handle_by_regex(self, text: str) -> bool
+```
+
+> Returns: 永遠回傳 False，由 router 直接呼叫。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `text` | `str` | `—` |
+
+###### `_build_tool_descriptions`  (L450)
+
+```python
+def _build_tool_descriptions(self, include_chat: bool = False) -> str
+```
+
+> 組裝工具描述清單（供 Planner/ReAct Prompt 使用）。  \n>   \n>         Args:  \n>             include_chat: 是否在末尾加入 CHAT 虛擬工具描述（ReAct 模式需要）。  \n>   \n>         Returns:  \n>             格式化的工具描述字串。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `include_chat` | `bool` | `False` |
+
+###### `_build_system_prompt`  (L469)
+
+```python
+def _build_system_prompt(self) -> str
+```
+
+> 組裝系統提示（供 Planner/ReAct/Integrated Prompt 使用）。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `_should_early_terminate`  (L483)
+
+```python
+def _should_early_terminate(self, plan: ExecutionPlan, executed_results: list[tuple[str, ToolResponseMode, str]], user_query: str) -> bool
+```
+
+> 舊版 _should_early_terminate 相容方法。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `plan` | `ExecutionPlan` | `—` |
+| `executed_results` | `list[tuple[str, ToolResponseMode, str]]` | `—` |
+| `user_query` | `str` | `—` |
+
+###### `_execute_single_task`  (L492)
+
+```python
+async def _execute_single_task(self, task: PlannedTask, bot: commands.Bot, message: discord.Message, vibe_snippet: str, full_context: str, images: list[str] | None = None) -> tuple[str, ToolResponseMode, str]
+```
+
+> 舊版 _execute_single_task 相容方法。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `task` | `PlannedTask` | `—` |
+| `bot` | `commands.Bot` | `—` |
+| `message` | `discord.Message` | `—` |
+| `vibe_snippet` | `str` | `—` |
+| `full_context` | `str` | `—` |
+| `images` | `list[str] | None` | `None` |
+
+###### `_execute_tool`  (L504)
+
+```python
+async def _execute_tool(self, tool_name: str, action_input: str, bot: commands.Bot, message: discord.Message, vibe_snippet: str, full_context: str, images: list[str] | None = None) -> str
+```
+
+> 舊版 _execute_tool 相容方法。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `tool_name` | `str` | `—` |
+| `action_input` | `str` | `—` |
+| `bot` | `commands.Bot` | `—` |
+| `message` | `discord.Message` | `—` |
+| `vibe_snippet` | `str` | `—` |
+| `full_context` | `str` | `—` |
+| `images` | `list[str] | None` | `None` |
+
+###### `_call_llm`  (L521)
+
+```python
+async def _call_llm(self, brain: BotBrain, system_prompt: str, user_prompt: str, task_id: str, model: str, temperature: float = 0.1, timeout: float | None = None, images: list[str] | None = None, stream_callback: Any | None = None) -> str
+```
+
+> 向 BotBrain 發送推理任務並等待結果。  \n>   \n>         Args:  \n>             brain: BotBrain Cog 實例。  \n>             system_prompt: 系統提示。  \n>             user_prompt: 使用者提示（可含歷史記錄）。  \n>             task_id: 任務識別 ID。  \n>             model: 目標 LLM 模型名稱。  \n>             temperature: 採樣溫度。  \n>             timeout: 等待逾時秒數，None 則使用 REACT_STEP_TIMEOUT。  \n>             images: 多模態圖片 Base64 列表（若有）。  \n>             stream_callback: 即時 Token 串流回調協程（若有）。  \n>   \n>         Returns:  \n>             LLM 生成的文字，超時則回傳空字串。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `brain` | `BotBrain` | `—` |
+| `system_prompt` | `str` | `—` |
+| `user_prompt` | `str` | `—` |
+| `task_id` | `str` | `—` |
+| `model` | `str` | `—` |
+| `temperature` | `float` | `0.1` |
+| `timeout` | `float | None` | `None` |
+| `images` | `list[str] | None` | `None` |
+| `stream_callback` | `Any | None` | `None` |
+
+###### `_generate_final_response`  (L581)
+
+```python
+async def _generate_final_response(self, brain: BotBrain, user_query: str, channel_id: int | None, bot: commands.Bot, user_id: int, display_name: str, observations: list[tuple[str, str]], vibe_snippet: str = '', full_context: str = '', draft_answer: str = '', images: list[str] | None = None, session: LiveThinkingSession | None = None) -> tuple[str, str, str, str]
+```
+
+> 使用 PRIMARY_MODEL 合成最終給使用者的對話文本。  \n>   \n>         Args:  \n>             brain: BotBrain Cog 實例。  \n>             user_query: 使用者原始訊息。  \n>             channel_id: 頻道 ID（用於動態人設）。  \n>             bot: Discord Bot 實例。  \n>             user_id: 使用者 ID（用於記憶查詢）。  \n>             display_name: 使用者顯示名稱。  \n>             observations: 工具執行結果列表 (tool_name, result_text)。  \n>             vibe_snippet: 頻道近期話題氛圍摘要。  \n>             full_context: 完整上下文。  \n>             draft_answer: 規劃階段產生的草稿答案（ReAct 模式用）。  \n>             images: 多模態圖片 Base64 列表。  \n>             session: 即時思考會話（用於串流思考鏈）。  \n>   \n>         Returns:  \n>             (clean_speech, persona_thought, sys_prompt, user_prompt) 四元組。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `brain` | `BotBrain` | `—` |
+| `user_query` | `str` | `—` |
+| `channel_id` | `int | None` | `—` |
+| `bot` | `commands.Bot` | `—` |
+| `user_id` | `int` | `—` |
+| `display_name` | `str` | `—` |
+| `observations` | `list[tuple[str, str]]` | `—` |
+| `vibe_snippet` | `str` | `''` |
+| `full_context` | `str` | `''` |
+| `draft_answer` | `str` | `''` |
+| `images` | `list[str] | None` | `None` |
+| `session` | `LiveThinkingSession | None` | `None` |
+
+###### `_parallel_execute_single_task`  (L700)
+
+```python
+async def _parallel_execute_single_task(self, task: PlannedTask, bot: commands.Bot, message: discord.Message, vibe_snippet: str, full_context: str, images: list[str] | None = None) -> tuple[str, ToolResponseMode, str]
+```
+
+> 非同步執行單一規劃工具任務。  \n>   \n>         Args:  \n>             task: PlannedTask 實例。  \n>             bot: Discord Bot 實例。  \n>             message: 觸發訊息。  \n>             vibe_snippet: 氛圍摘要。  \n>             full_context: 完整上下文。  \n>             images: 多模態圖片列表。  \n>   \n>         Returns:  \n>             (canonical_tool_name, response_mode, observation_result) 三元組。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `task` | `PlannedTask` | `—` |
+| `bot` | `commands.Bot` | `—` |
+| `message` | `discord.Message` | `—` |
+| `vibe_snippet` | `str` | `—` |
+| `full_context` | `str` | `—` |
+| `images` | `list[str] | None` | `None` |
+
+###### `_parallel_should_early_terminate`  (L784)
+
+```python
+def _parallel_should_early_terminate(self, plan: ExecutionPlan, executed_results: list[tuple[str, ToolResponseMode, str]], user_query: str) -> bool
+```
+
+> 判定是否觸發 PARALLEL 模式的行為自適應對話抑制。  \n>   \n>         條件：1.ACTION_EARLY_TERMINATION_ENABLED 為 True 2.所有工具皆為 DIRECT_UI  \n>         3.Planner 判定 needs_persona_reply 為 False 4.無明確閒聊關鍵字。  \n>   \n>         Args:  \n>             plan: Planner 輸出的執行計畫。  \n>             executed_results: 已執行工具結果列表。  \n>             user_query: 使用者原始訊息。  \n>   \n>         Returns:  \n>             True 代表應終止並跳過對話合成。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `plan` | `ExecutionPlan` | `—` |
+| `executed_results` | `list[tuple[str, ToolResponseMode, str]]` | `—` |
+| `user_query` | `str` | `—` |
+
+###### `_run_integrated`  (L819)
+
+```python
+async def _run_integrated(self, brain: Any, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str, images: list[str] | None, start_time: float) -> None
+```
+
+> INTEGRATED 模式主流程（單階段內嵌 Action 標籤調度）。  \n>   \n>         Args:  \n>             brain: BotBrain Cog 實例。  \n>             bot: Discord Bot 實例。  \n>             message: 觸發訊息。  \n>             user_query: 使用者原始訊息。  \n>             vibe_snippet: 氛圍摘要。  \n>             full_context: 完整上下文。  \n>             images: 多模態圖片列表。  \n>             start_time: 流程開始時間戳。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `brain` | `Any` | `—` |
+| `bot` | `commands.Bot` | `—` |
+| `message` | `discord.Message` | `—` |
+| `user_query` | `str` | `—` |
+| `vibe_snippet` | `str` | `—` |
+| `full_context` | `str` | `—` |
+| `images` | `list[str] | None` | `—` |
+| `start_time` | `float` | `—` |
+
+###### `_run_parallel`  (L1085)
+
+```python
+async def _run_parallel(self, brain: Any, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str, images: list[str] | None, start_time: float) -> None
+```
+
+> PARALLEL 模式主流程。  \n>   \n>         Args:  \n>             brain: BotBrain Cog 實例。  \n>             bot: Discord Bot 實例。  \n>             message: 觸發訊息。  \n>             user_query: 使用者原始訊息。  \n>             vibe_snippet: 氛圍摘要。  \n>             full_context: 完整上下文。  \n>             images: 多模態圖片列表。  \n>             start_time: 流程開始時間戳。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `brain` | `Any` | `—` |
+| `bot` | `commands.Bot` | `—` |
+| `message` | `discord.Message` | `—` |
+| `user_query` | `str` | `—` |
+| `vibe_snippet` | `str` | `—` |
+| `full_context` | `str` | `—` |
+| `images` | `list[str] | None` | `—` |
+| `start_time` | `float` | `—` |
+
+###### `_react_execute_tool`  (L1232)
+
+```python
+async def _react_execute_tool(self, tool_name: str, action_input: str, bot: commands.Bot, message: discord.Message, vibe_snippet: str, full_context: str, images: list[str] | None = None) -> str
+```
+
+> 呼叫指定工具（silent=True）並收集文字結果。  \n>   \n>         Args:  \n>             tool_name: 工具名稱（大寫）。  \n>             action_input: 給工具的指令文字。  \n>             bot: Bot 實例。  \n>             message: 觸發訊息。  \n>             vibe_snippet: 氛圍摘要。  \n>             full_context: 完整上下文。  \n>             images: 多模態圖片列表。  \n>   \n>         Returns:  \n>             工具執行的觀察結果字串。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `tool_name` | `str` | `—` |
+| `action_input` | `str` | `—` |
+| `bot` | `commands.Bot` | `—` |
+| `message` | `discord.Message` | `—` |
+| `vibe_snippet` | `str` | `—` |
+| `full_context` | `str` | `—` |
+| `images` | `list[str] | None` | `None` |
+
+###### `_run_react`  (L1306)
+
+```python
+async def _run_react(self, brain: Any, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str, images: list[str] | None, start_time: float) -> None
+```
+
+> REACT 模式主流程（多步推理迴圈）。  \n>   \n>         Args:  \n>             brain: BotBrain Cog 實例。  \n>             bot: Discord Bot 實例。  \n>             message: 觸發訊息。  \n>             user_query: 使用者原始訊息。  \n>             vibe_snippet: 氛圍摘要。  \n>             full_context: 完整上下文。  \n>             images: 多模態圖片列表。  \n>             start_time: 流程開始時間戳。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `brain` | `Any` | `—` |
+| `bot` | `commands.Bot` | `—` |
+| `message` | `discord.Message` | `—` |
+| `user_query` | `str` | `—` |
+| `vibe_snippet` | `str` | `—` |
+| `full_context` | `str` | `—` |
+| `images` | `list[str] | None` | `—` |
+| `start_time` | `float` | `—` |
+
+###### `execute`  (L1501)
+
+```python
+async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str, **kwargs: object) -> ToolResult | str | None
+```
+
+> DispatchAgent 主執行入口，依 mode 分派至對應流程。  \n>   \n>         Args:  \n>             bot: Discord Bot 實例。  \n>             message: 觸發的 Discord 訊息。  \n>             user_query: 使用者原始文字。  \n>             vibe_snippet: 頻道近期氛圍摘要。  \n>             full_context: 含上下文的完整提示文本。  \n>             **kwargs: 擴充參數，支援 images (list[str])。  \n>   \n>         Returns:  \n>             None（訊息已透過 Discord API 直接發送）。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `bot` | `commands.Bot` | `—` |
+| `message` | `discord.Message` | `—` |
+| `user_query` | `str` | `—` |
+| `vibe_snippet` | `str` | `—` |
+| `full_context` | `str` | `—` |
+| `**kwargs` | `object` | `—` |
+
+
+#### Class `IntegratedAgentTool` ← `DispatchAgentTool`  (L1550)
+
+> IntegratedAgentTool 別名類別。
+
+##### Methods
+
+###### `__init__`  (L1553)
+
+```python
+def __init__(self, tool_registry: list[BaseTool]) -> None
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `tool_registry` | `list[BaseTool]` | `—` |
+
+
+#### Class `ParallelAgentTool` ← `DispatchAgentTool`  (L1557)
+
+> ParallelAgentTool 相容別名類別。
+
+##### Methods
+
+###### `__init__`  (L1560)
+
+```python
+def __init__(self, tool_registry: list[BaseTool]) -> None
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `tool_registry` | `list[BaseTool]` | `—` |
+
+
+#### Class `ReactAgentTool` ← `DispatchAgentTool`  (L1564)
+
+> ReactAgentTool 相容別名類別。
+
+##### Methods
+
+###### `__init__`  (L1567)
+
+```python
+def __init__(self, tool_registry: list[BaseTool]) -> None
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `tool_registry` | `list[BaseTool]` | `—` |
+
+
+#### Functions
+
+##### `_parse_actions`  (L134)
+
+```python
+def _parse_actions(text: str) -> list[PlannedTask]
+```
+
+> 從 LLM 生成文字中解析 <action name="TOOL">input</action> 或相關變體。  \n>   \n>     Args:  \n>         text: LLM 原始生成文字。  \n>   \n>     Returns:  \n>         list[PlannedTask]: 解析出的工具任務列表。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `text` | `str` | `—` |
+
+##### `_parse_plan_json`  (L231)
+
+```python
+def _parse_plan_json(raw: str, default_query: str) -> ExecutionPlan
+```
+
+> 從 LLM 原始輸出中解析 ExecutionPlan，具備多層容錯回退機制。  \n>   \n>     Args:  \n>         raw: LLM 原始文字輸出。  \n>         default_query: 解析失敗時的兜底查詢文字。  \n>   \n>     Returns:  \n>         ExecutionPlan 實例。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `raw` | `str` | `—` |
+| `default_query` | `str` | `—` |
+
+##### `_extract_xml_tag`  (L346)
+
+```python
+def _extract_xml_tag(text: str, tag: str) -> str | None
+```
+
+> 從文字中提取 <tag>content</tag>。  \n>   \n>     Args:  \n>         text: 要解析的原始文字。  \n>         tag: XML 標籤名稱。  \n>   \n>     Returns:  \n>         標籤內容字串，若未找到則回傳 None。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `text` | `str` | `—` |
+| `tag` | `str` | `—` |
+
+##### `_parse_react_output`  (L360)
+
+```python
+def _parse_react_output(raw: str) -> dict[str, str]
+```
+
+> 解析 LLM 的 ReAct 格式輸出（支援 XML 標籤與標準文字 fallback）。  \n>   \n>     Args:  \n>         raw: LLM 原始輸出文字。  \n>   \n>     Returns:  \n>         dict，含 type ('action'|'final')、thought、  \n>         及 action+action_input 或 final_answer。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `raw` | `str` | `—` |
+
+
+---
+
+
 ### 📄 `handlers/social/interject.py`
 
 
@@ -1267,24 +1693,26 @@ async def maybe_interject(bot: commands.Bot, channel: discord.TextChannel | disc
 
 | 名稱 | 型別 | 值（摘要） | 行號 |
 |---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L15 |
+| `logger` | `—` | `logging.getLogger(__name__)` | L16 |
 
 
 #### Functions
 
-##### `build_user_memory_block`  (L18)
+##### `build_user_memory_block`  (L19)
 
 ```python
-def build_user_memory_block(bot, user_id: int, display_name: str) -> str
+def build_user_memory_block(bot: Any, user_id: int, display_name: str, mentioned_users: list[Any] | None = None, query_text: str = '') -> str
 ```
 
-> 從 MemoryManager 取得特定使用者的記憶摘要。  \n>     若 MemoryManager 尚未載入或該使用者無記錄，回傳空字串。  \n>   \n>     Args:  \n>         bot: discord.ext.commands.Bot 實例，用來取得 MemoryManager Cog。  \n>         user_id: Discord 使用者的 ID。  \n>         display_name: 使用者的目前顯示名稱，用於 fallback 稱呼。  \n>   \n>     Returns:  \n>         組裝完成的記憶字串，可直接嵌入 Prompt。
+> 從 MemoryManager 取得特定使用者與提及對象的記憶摘要。  \n>     若 MemoryManager 尚未載入或該使用者無記錄，回傳空字串。  \n>   \n>     Args:  \n>         bot: discord.ext.commands.Bot 實例，用來取得 MemoryManager Cog。  \n>         user_id: Discord 使用者的 ID。  \n>         display_name: 使用者的目前顯示名稱，用於 fallback 稱呼。  \n>         mentioned_users: 訊息中顯式 @提及 之使用者列表（可選）。  \n>         query_text: 使用者訊息文字，用於模糊比對記憶庫中其他使用者的暱稱（可選）。  \n>   \n>     Returns:  \n>         組裝完成的記憶字串，可直接嵌入 Prompt。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
-| `bot` | `—` | `—` |
+| `bot` | `Any` | `—` |
 | `user_id` | `int` | `—` |
 | `display_name` | `str` | `—` |
+| `mentioned_users` | `list[Any] | None` | `None` |
+| `query_text` | `str` | `''` |
 
 
 ---
@@ -1299,15 +1727,70 @@ def build_user_memory_block(bot, user_id: int, display_name: str) -> str
 
 | 名稱 | 型別 | 值（摘要） | 行號 |
 |---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L27 |
-| `_RUNTIME_LOG_PATH` | `Path` | `settings.RUNTIME_LOG_PATH` | L29 |
-| `_ERROR_LOG_PATH` | `Path` | `settings.ERROR_LOG_PATH` | L30 |
-| `_MAX_LOG_SIZE_BYTES` | `int` | `50 * 1024 * 1024` | L31 |
+| `logger` | `—` | `logging.getLogger(__name__)` | L29 |
+| `current_trace_id` | `contextvars.ContextVar[str]` | `contextvars.ContextVar('current_trace_id', default='')` | L34 |
+| `_RUNTIME_LOG_PATH` | `Path` | `settings.RUNTIME_LOG_PATH` | L88 |
+| `_ERROR_LOG_PATH` | `Path` | `settings.ERROR_LOG_PATH` | L89 |
+| `_MAX_LOG_SIZE_BYTES` | `int` | `50 * 1024 * 1024` | L90 |
+| `_WRITE_COUNTS` | `dict[str, int]` | `{}` | L93 |
+| `_STAT_CHECK_INTERVAL` | `int` | `100` | L94 |
+
+
+#### Class `TraceIdFilter` ← `logging.Filter`  (L72)
+
+> 將當前 ContextVar 中的 trace_id 自動注入所有 LogRecord 的過濾器。
+
+##### Methods
+
+###### `filter`  (L75)
+
+```python
+def filter(self, record: logging.LogRecord) -> bool
+```
+
+> 過濾並補充 trace_id 屬性。  \n>   \n>         Args:  \n>             record: Python 日誌記錄物件。  \n>   \n>         Returns:  \n>             bool: 恆為 True（放行所有記錄）。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `record` | `logging.LogRecord` | `—` |
 
 
 #### Functions
 
-##### `_write_line`  (L38)
+##### `get_trace_id`  (L37)
+
+```python
+def get_trace_id() -> str
+```
+
+> 取得當前協程/執行緒的 Trace ID。  \n>   \n>     Returns:  \n>         str: 當前的 Trace ID 字串，若未設定則回傳空字串。
+
+##### `new_trace_id`  (L46)
+
+```python
+def new_trace_id(prefix: str = 'tr') -> str
+```
+
+> 生成一個新的唯一 Trace ID。  \n>   \n>     Args:  \n>         prefix: 前綴字串，預設為 'tr'。可為 'cmd', 'btn', 'chat', 'llm' 等。  \n>   \n>     Returns:  \n>         str: 組合後的唯一 Trace ID，如 'cmd-a1b2c3d4'。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `prefix` | `str` | `'tr'` |
+
+##### `set_trace_id`  (L58)
+
+```python
+def set_trace_id(tid: str | None = None) -> str
+```
+
+> 設定當前協程的 Trace ID。  \n>   \n>     Args:  \n>         tid: 指定的 Trace ID。若為 None 或空字串，則自動生成一組新 ID。  \n>   \n>     Returns:  \n>         str: 設定成功的 Trace ID 字串。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `tid` | `str | None` | `None` |
+
+##### `_write_line`  (L101)
 
 ```python
 def _write_line(path: Path, entry: dict) -> None
@@ -1320,13 +1803,13 @@ def _write_line(path: Path, entry: dict) -> None
 | `path` | `Path` | `—` |
 | `entry` | `dict` | `—` |
 
-##### `log_event`  (L62)
+##### `log_event`  (L130)
 
 ```python
-def log_event(event: str, message_id: int = 0, user: str = '', channel_id: int = 0, raw_input: str = '', intent: str = '', intent_source: str = '', veto_fired: bool = False, self_aware_triggered: bool = False, vision_hit_count: int = 0, tags_resolved: list[str] | None = None, cot_thought: str = '', reply_preview: str = '', model_used: str = '', latency_ms: int = 0, queue_size: int = 0, **extra: Any) -> None
+def log_event(event: str, message_id: int = 0, user: str = '', channel_id: int = 0, trace_id: str = '', raw_input: str = '', intent: str = '', intent_source: str = '', veto_fired: bool = False, self_aware_triggered: bool = False, vision_hit_count: int = 0, tags_resolved: list[str] | None = None, tools_invoked: list[str] | None = None, cot_thought: str = '', reply_preview: str = '', model_used: str = '', latency_ms: int = 0, queue_size: int = 0, **extra: Any) -> None
 ```
 
-> 記錄一筆互動事件到 runtime_log.jsonl。  \n>   \n>     event 類型清單：  \n>       chat_reply      — CHAT Tool 完成回覆  \n>       image_search    — PIXIV Tool 完成搜圖  \n>       draw            — DRAW Tool 完成（或失敗）  \n>       search_rag      — SEARCH Tool 完成 RAG 回覆  \n>       music_action    — MUSIC Tool 執行動作  \n>       schedule_action — SCHEDULE Tool 執行動作  \n>       stock_query     — STOCK Tool 查詢完成  \n>       weather_query   — WEATHER Tool 查詢完成  \n>       interject       — 插話引擎執行評分（不論是否插話）  \n>       vision_analysis — Vision 圖片辨識完成  \n>       intent_classify — LLM Classifier 完成 Intent 判斷  \n>       veto_fired      — Veto 機制觸發降級  \n>       self_aware      — 自我辨識信號被觸發  \n>       user_debug_report — 使用者對回覆按 ❓ 表情符號  \n>       error           — 任何 exception 發生
+> 記錄一筆互動事件到 runtime_log.jsonl。  \n>   \n>     event 類型清單：  \n>       chat_reply           — CHAT / Agent 完成回覆  \n>       command_exec         — Discord Slash / Prefix 指令執行  \n>       component_interaction — Discord 按鈕 / 選單互動  \n>       modal_submit         — Discord 表單提交  \n>       tool_exec            — 工具獨立執行（輸入、輸出與耗時）  \n>       inference_done       — BotBrain LLM 推論任務完成  \n>       image_search         — PIXIV Tool 完成搜圖  \n>       draw                 — DRAW Tool 完成（或失敗）  \n>       search_rag           — SEARCH Tool 完成 RAG 回覆  \n>       music_action         — MUSIC Tool 執行動作  \n>       schedule_action      — SCHEDULE Tool 執行動作  \n>       stock_query          — STOCK Tool 查詢完成  \n>       weather_query        — WEATHER Tool 查詢完成  \n>       interject            — 插話引擎執行評分（不論是否插話）  \n>       vision_analysis      — Vision 圖片辨識完成  \n>       intent_classify      — LLM Classifier 完成 Intent 判斷  \n>       veto_fired           — Veto 機制觸發降級  \n>       self_aware           — 自我辨識信號被觸發  \n>       user_debug_report    — 使用者對回覆按 ❓ 表情符號  \n>       error                — 任何 exception 發生
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
@@ -1334,6 +1817,7 @@ def log_event(event: str, message_id: int = 0, user: str = '', channel_id: int =
 | `message_id` | `int` | `0` |
 | `user` | `str` | `''` |
 | `channel_id` | `int` | `0` |
+| `trace_id` | `str` | `''` |
 | `raw_input` | `str` | `''` |
 | `intent` | `str` | `''` |
 | `intent_source` | `str` | `''` |
@@ -1341,6 +1825,7 @@ def log_event(event: str, message_id: int = 0, user: str = '', channel_id: int =
 | `self_aware_triggered` | `bool` | `False` |
 | `vision_hit_count` | `int` | `0` |
 | `tags_resolved` | `list[str] | None` | `None` |
+| `tools_invoked` | `list[str] | None` | `None` |
 | `cot_thought` | `str` | `''` |
 | `reply_preview` | `str` | `''` |
 | `model_used` | `str` | `''` |
@@ -1348,10 +1833,10 @@ def log_event(event: str, message_id: int = 0, user: str = '', channel_id: int =
 | `queue_size` | `int` | `0` |
 | `**extra` | `Any` | `—` |
 
-##### `log_error`  (L134)
+##### `log_error`  (L216)
 
 ```python
-def log_error(event: str = 'error', message_id: int = 0, task_id: str = '', error_type: str = '', message: str = '', **extra: Any) -> None
+def log_error(event: str = 'error', message_id: int = 0, task_id: str = '', trace_id: str = '', error_type: str = '', message: str = '', **extra: Any) -> None
 ```
 
 > 記錄一筆錯誤/降級事件，同時寫入 runtime_log 與 error_log。
@@ -1361,228 +1846,88 @@ def log_error(event: str = 'error', message_id: int = 0, task_id: str = '', erro
 | `event` | `str` | `'error'` |
 | `message_id` | `int` | `0` |
 | `task_id` | `str` | `''` |
+| `trace_id` | `str` | `''` |
 | `error_type` | `str` | `''` |
 | `message` | `str` | `''` |
 | `**extra` | `Any` | `—` |
 
-##### `make_timer`  (L163)
+##### `log_command`  (L248)
+
+```python
+def log_command(command_type: str = 'slash', command_name: str = '', user: str = '', user_id: int = 0, guild_name: str = '', guild_id: int = 0, channel_name: str = '', channel_id: int = 0, options: dict[str, Any] | None = None, latency_ms: int = 0, status: str = 'success', error_msg: str = '', trace_id: str = '', **extra: Any) -> None
+```
+
+> 記錄 Discord 指令與元件互動生命週期事件。  \n>   \n>     Args:  \n>         command_type: 指令類型 ('slash', 'prefix', 'button', 'select', 'modal', 'autocomplete')。  \n>         command_name: 指令名稱（如 'vibe', 'market', 'play' 或按鈕 custom_id）。  \n>         user: 使用者顯示名稱與帳號。  \n>         user_id: Discord 使用者 ID。  \n>         guild_name: 伺服器名稱。  \n>         guild_id: 伺服器 ID。  \n>         channel_name: 頻道名稱。  \n>         channel_id: 頻道 ID。  \n>         options: 傳入的參數字典。  \n>         latency_ms: 執行耗時（毫秒）。  \n>         status: 執行狀態 ('success', 'error', 'deferred')。  \n>         error_msg: 若出錯時的錯誤訊息。  \n>         trace_id: 指定的 Trace ID，預設自動自 ContextVar 取得。  \n>         **extra: 任意附加欄位。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `command_type` | `str` | `'slash'` |
+| `command_name` | `str` | `''` |
+| `user` | `str` | `''` |
+| `user_id` | `int` | `0` |
+| `guild_name` | `str` | `''` |
+| `guild_id` | `int` | `0` |
+| `channel_name` | `str` | `''` |
+| `channel_id` | `int` | `0` |
+| `options` | `dict[str, Any] | None` | `None` |
+| `latency_ms` | `int` | `0` |
+| `status` | `str` | `'success'` |
+| `error_msg` | `str` | `''` |
+| `trace_id` | `str` | `''` |
+| `**extra` | `Any` | `—` |
+
+##### `log_tool_exec`  (L324)
+
+```python
+def log_tool_exec(tool_name: str = '', tool_input: str = '', observation: str = '', latency_ms: int = 0, status: str = 'success', user: str = '', channel_id: int = 0, message_id: int = 0, error_msg: str = '', trace_id: str = '', **extra: Any) -> None
+```
+
+> 記錄 Agent 內部工具調用事件（Tool Execution）。  \n>   \n>     Args:  \n>         tool_name: 工具名稱（如 'SEARCH', 'PIXIV', 'DRAW', 'MUSIC', 'STOCK' 等）。  \n>         tool_input: 傳入工具之參數內容。  \n>         observation: 工具回傳之 Observation 觀測數據。  \n>         latency_ms: 工具執行耗時（毫秒）。  \n>         status: 執行狀態 ('success', 'error')。  \n>         user: 關聯使用者名稱。  \n>         channel_id: 頻道 ID。  \n>         message_id: 訊息 ID。  \n>         error_msg: 錯誤訊息（若有）。  \n>         trace_id: Trace ID。  \n>         **extra: 任意附加欄位。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `tool_name` | `str` | `''` |
+| `tool_input` | `str` | `''` |
+| `observation` | `str` | `''` |
+| `latency_ms` | `int` | `0` |
+| `status` | `str` | `'success'` |
+| `user` | `str` | `''` |
+| `channel_id` | `int` | `0` |
+| `message_id` | `int` | `0` |
+| `error_msg` | `str` | `''` |
+| `trace_id` | `str` | `''` |
+| `**extra` | `Any` | `—` |
+
+##### `log_inference`  (L380)
+
+```python
+def log_inference(task_id: str = '', model: str = '', prompt_length: int = 0, completion_length: int = 0, queue_latency_ms: int = 0, inference_latency_ms: int = 0, status: str = 'success', prompt_preview: str = '', completion_preview: str = '', error_msg: str = '', trace_id: str = '', **extra: Any) -> None
+```
+
+> 記錄 BotBrain LLM 推論任務生命週期事件。  \n>   \n>     Args:  \n>         task_id: 任務 ID。  \n>         model: 使用之模型名稱。  \n>         prompt_length: 輸入 Prompt 字數。  \n>         completion_length: 生成回覆字數。  \n>         queue_latency_ms: 佇列排隊等候耗時（毫秒）。  \n>         inference_latency_ms: 實際推論耗時（毫秒）。  \n>         status: 狀態 ('success', 'retry', 'error')。  \n>         prompt_preview: Prompt 前段摘要。  \n>         completion_preview: 生成內容摘要。  \n>         error_msg: 錯誤訊息（若有）。  \n>         trace_id: Trace ID。  \n>         **extra: 任意附加欄位。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `task_id` | `str` | `''` |
+| `model` | `str` | `''` |
+| `prompt_length` | `int` | `0` |
+| `completion_length` | `int` | `0` |
+| `queue_latency_ms` | `int` | `0` |
+| `inference_latency_ms` | `int` | `0` |
+| `status` | `str` | `'success'` |
+| `prompt_preview` | `str` | `''` |
+| `completion_preview` | `str` | `''` |
+| `error_msg` | `str` | `''` |
+| `trace_id` | `str` | `''` |
+| `**extra` | `Any` | `—` |
+
+##### `make_timer`  (L436)
 
 ```python
 def make_timer() -> Callable[[], int]
 ```
 
 > 回傳一個 callable，呼叫時回傳距離建立時的毫秒數。  \n>   \n>     使用方式：  \n>         elapsed = make_timer()  \n>         # ... 執行一些工作 ...  \n>         latency_ms = elapsed()
-
-
----
-
-
-### 📄 `handlers/social/parallel_agent.py`
-
-> handlers/social/parallel_agent.py
-
-
-#### 全域變數 / 模組常數
-
-| 名稱 | 型別 | 值（摘要） | 行號 |
-|---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L44 |
-| `_TOOL_ALIASES` | `dict[str, str]` | `{'PIXIV_SEARCH': 'PIXIV', 'PIXIV_TOOL': 'PIXIV', 'FIND_IMAGE': 'PIXIV', 'SEARCH_...` | L69 |
-| `_TOOL_DESC_TEMPLATE` | `—` | `'- **{name}**：{description}'` | L98 |
-| `_PARALLEL_PLANNER_SYSTEM_TEMPLATE` | `—` | `'[SYSTEM: PARALLEL TASK DISPATCH & CHAT SUPPRESSION ENGINE]\n你是一個高效率、極致冷靜的任務排程與對...` | L104 |
-| `_USER_MESSAGE_TEMPLATE` | `—` | `'使用者（{author}）說：「{content}」'` | L162 |
-
-
-#### Class `PlannedTask` ← `object`  (L51)
-
-> 規劃器輸出的單一工具任務。
-
-
-#### Class `ExecutionPlan` ← `object`  (L58)
-
-> 規劃器輸出的完整執行計畫。
-
-
-#### Class `ParallelAgentTool` ← `BaseTool`  (L244)
-
-> 高效能並行任務調度器，單次推論完成多工拆解並行發動。
-
-##### Methods
-
-###### `__init__`  (L247)
-
-```python
-def __init__(self, tool_registry: list[BaseTool]) -> None
-```
-
-> 初始化並行調度器。  \n>   \n>         Args:  \n>             tool_registry: 所有可用工具的列表。
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-| `tool_registry` | `list[BaseTool]` | `—` |
-
-###### `intent_name`  (L262)
-
-```python
-@property
-def intent_name(self) -> str
-```
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-
-###### `llm_description`  (L266)
-
-```python
-@property
-def llm_description(self) -> str
-```
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-
-###### `can_handle_by_regex`  (L269)
-
-```python
-def can_handle_by_regex(self, text: str) -> bool
-```
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-| `text` | `str` | `—` |
-
-###### `_build_tool_descriptions`  (L272)
-
-```python
-def _build_tool_descriptions(self) -> str
-```
-
-> 組裝工具描述清單（供 Planner Prompt 使用）。
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-
-###### `_build_system_prompt`  (L284)
-
-```python
-def _build_system_prompt(self) -> str
-```
-
-> 組裝極簡的 Planner 系統提示（專注結構化拆解與排程）。
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-
-###### `_call_planner_llm`  (L291)
-
-```python
-async def _call_planner_llm(self, brain: BotBrain, system_prompt: str, user_prompt: str, message_id: int) -> str
-```
-
-> 向 BotBrain 發送單次規劃推理任務。
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-| `brain` | `BotBrain` | `—` |
-| `system_prompt` | `str` | `—` |
-| `user_prompt` | `str` | `—` |
-| `message_id` | `int` | `—` |
-
-###### `_execute_single_task`  (L326)
-
-```python
-async def _execute_single_task(self, task: PlannedTask, bot: commands.Bot, message: discord.Message, vibe_snippet: str, full_context: str, images: list[str] | None = None) -> tuple[str, ToolResponseMode, str]
-```
-
-> 非同步執行單一工具任務。  \n>   \n>         Returns:  \n>             (canonical_tool_name, response_mode, observation_result)
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-| `task` | `PlannedTask` | `—` |
-| `bot` | `commands.Bot` | `—` |
-| `message` | `discord.Message` | `—` |
-| `vibe_snippet` | `str` | `—` |
-| `full_context` | `str` | `—` |
-| `images` | `list[str] | None` | `None` |
-
-###### `_should_early_terminate`  (L373)
-
-```python
-def _should_early_terminate(self, plan: ExecutionPlan, executed_results: list[tuple[str, ToolResponseMode, str]], user_query: str) -> bool
-```
-
-> 判定是否觸發行為自適應對話抑制（Action Early Termination）。  \n>   \n>         條件：  \n>           1. 全域開關 ACTION_EARLY_TERMINATION_ENABLED 為 True  \n>           2. 有執行工具任務且所有執行的工具皆為 DIRECT_UI  \n>           3. Planner 判定 needs_persona_reply 為 False  \n>           4. 使用者文字中未包含明確閒聊/觀點/心得關鍵字
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-| `plan` | `ExecutionPlan` | `—` |
-| `executed_results` | `list[tuple[str, ToolResponseMode, str]]` | `—` |
-| `user_query` | `str` | `—` |
-
-###### `_generate_final_response`  (L412)
-
-```python
-async def _generate_final_response(self, brain: BotBrain, user_query: str, channel_id: int | None, bot: commands.Bot, user_id: int, display_name: str, observations: list[tuple[str, str]], vibe_snippet: str = '', full_context: str = '', images: list[str] | None = None) -> tuple[str, str, str, str]
-```
-
-> 使用 PRIMARY_MODEL 合成最終給使用者的對話文本。
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-| `brain` | `BotBrain` | `—` |
-| `user_query` | `str` | `—` |
-| `channel_id` | `int | None` | `—` |
-| `bot` | `commands.Bot` | `—` |
-| `user_id` | `int` | `—` |
-| `display_name` | `str` | `—` |
-| `observations` | `list[tuple[str, str]]` | `—` |
-| `vibe_snippet` | `str` | `''` |
-| `full_context` | `str` | `''` |
-| `images` | `list[str] | None` | `None` |
-
-###### `execute`  (L509)
-
-```python
-async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str, **kwargs: object) -> ToolResult | str | None
-```
-
-> Parallel Agent 主執行入口。
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-| `bot` | `commands.Bot` | `—` |
-| `message` | `discord.Message` | `—` |
-| `user_query` | `str` | `—` |
-| `vibe_snippet` | `str` | `—` |
-| `full_context` | `str` | `—` |
-| `**kwargs` | `object` | `—` |
-
-
-#### Functions
-
-##### `parse_plan_json`  (L168)
-
-```python
-def parse_plan_json(raw: str, default_query: str) -> ExecutionPlan
-```
-
-> 從 LLM 原始輸出中解析 ExecutionPlan，具備多層容錯回退機制。  \n>   \n>     Args:  \n>         raw: LLM 原始文字輸出。  \n>         default_query: 解析失敗時的兜底查詢文字。  \n>   \n>     Returns:  \n>         ExecutionPlan 實例。
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `raw` | `str` | `—` |
-| `default_query` | `str` | `—` |
 
 
 ---
@@ -1601,7 +1946,7 @@ def parse_plan_json(raw: str, default_query: str) -> ExecutionPlan
 
 #### Functions
 
-##### `_load_soul_persona`  (L22)
+##### `_load_soul_persona`  (L21)
 
 ```python
 @functools.lru_cache(maxsize=4)
@@ -1614,7 +1959,7 @@ def _load_soul_persona(channel_id: int | None = None) -> str
 |---|---|---|
 | `channel_id` | `int | None` | `None` |
 
-##### `build_dynamic_persona`  (L44)
+##### `build_dynamic_persona`  (L43)
 
 ```python
 def build_dynamic_persona(current_text: str, intent_name: str, channel_id: int | None = None) -> tuple[str, str]
@@ -1693,215 +2038,6 @@ def cleanup_expired(self, uid: int) -> None
 ---
 
 
-### 📄 `handlers/social/react_agent.py`
-
-> handlers/social/react_agent.py
-
-
-#### 全域變數 / 模組常數
-
-| 名稱 | 型別 | 值（摘要） | 行號 |
-|---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L40 |
-| `_REACT_SYSTEM_TEMPLATE` | `—` | `'[SYSTEM: TASK PLANNING & TOOL DISPATCH ENGINE]\n你是一個冷靜、精準的任務規劃與工具調度引擎。你的任務是分析使用...` | L46 |
-| `_TOOL_ALIASES` | `dict[str, str]` | `{'PIXIV_SEARCH': 'PIXIV', 'PIXIV_TOOL': 'PIXIV', 'FIND_IMAGE': 'PIXIV', 'SEARCH_...` | L93 |
-| `_TOOL_DESC_TEMPLATE` | `—` | `'- **{name}**：{description}'` | L120 |
-| `_USER_MESSAGE_TEMPLATE` | `—` | `'使用者（{author}）說：「{content}」'` | L122 |
-| `_OBSERVATION_TEMPLATE` | `—` | `'<observation>\n工具 [{tool}] 執行完畢，結果如下：\n{result}\n</observation>'` | L124 |
-| `_REACT_CONTINUATION_TEMPLATE` | `—` | `'以下是目前的對話歷史與工具執行記錄。請根據這些資訊繼續推理，決定下一步或給出最終答案：\n\n{transcript}\n\n現在輪到你回覆：'` | L129 |
-
-
-#### Class `ReactAgentTool` ← `BaseTool`  (L195)
-
-> ReAct 多步驟 Agent，作為 @Tag 訊息的統一入口。
-
-    本工具本身不直接呼叫外部 API，而是協調其他工具（ImageSearchTool、
-    DrawTool、MusicTool 等）以完成需要多個步驟的任務。
-
-##### Methods
-
-###### `__init__`  (L202)
-
-```python
-def __init__(self, tool_registry: list[BaseTool]) -> None
-```
-
-> 初始化 Agent。  \n>   \n>         Args:  \n>             tool_registry: 所有可用工具的列表（排除 ReactAgentTool 本身）。
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-| `tool_registry` | `list[BaseTool]` | `—` |
-
-###### `intent_name`  (L217)
-
-```python
-@property
-def intent_name(self) -> str
-```
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-
-###### `llm_description`  (L221)
-
-```python
-@property
-def llm_description(self) -> str
-```
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-
-###### `can_handle_by_regex`  (L224)
-
-```python
-def can_handle_by_regex(self, text: str) -> bool
-```
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-| `text` | `str` | `—` |
-
-###### `_build_tool_descriptions`  (L227)
-
-```python
-def _build_tool_descriptions(self) -> str
-```
-
-> 組裝工具描述清單（供 Agent Prompt 使用）。
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-
-###### `_build_system_prompt`  (L242)
-
-```python
-def _build_system_prompt(self) -> str
-```
-
-> 組裝極簡的 ReAct Agent 系統提示（零人設干擾、專注邏輯調度）。
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-
-###### `_call_llm`  (L249)
-
-```python
-async def _call_llm(self, brain: BotBrain, system_prompt: str, user_prompt: str, message_id: int, step: int, model: str | None = None, temperature: float | None = None, images: list[str] | None = None) -> str
-```
-
-> 向 BotBrain 發送推理任務，等待並回傳結果。  \n>   \n>         Args:  \n>             brain: BotBrain Cog 實例。  \n>             system_prompt: Agent 系統提示。  \n>             user_prompt: 使用者提示（含對話歷史）。  \n>             message_id: 來源訊息 ID（用於 task_id）。  \n>             step: 當前步驟編號。  \n>             model: 指定使用之 LLM 模型名稱，未指定則使用 settings.REACT_MODEL。  \n>             temperature: 採樣溫度，ReAct 規劃階段預設 0.1。  \n>             images: 多模態圖片 Base64 列表（若有）。  \n>   \n>         Returns:  \n>             LLM 生成的文字。
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-| `brain` | `BotBrain` | `—` |
-| `system_prompt` | `str` | `—` |
-| `user_prompt` | `str` | `—` |
-| `message_id` | `int` | `—` |
-| `step` | `int` | `—` |
-| `model` | `str | None` | `None` |
-| `temperature` | `float | None` | `None` |
-| `images` | `list[str] | None` | `None` |
-
-###### `_generate_final_response`  (L303)
-
-```python
-async def _generate_final_response(self, brain: BotBrain, user_query: str, channel_id: int | None, bot: commands.Bot, user_id: int, display_name: str, observations: list[tuple[str, str]], vibe_snippet: str = '', full_context: str = '', draft_answer: str = '', images: list[str] | None = None) -> tuple[str, str, str, str]
-```
-
-> 使用 PRIMARY_MODEL（主力模型）合成最終給使用者的對話文本。  \n>   \n>         完整包含前文脈絡 (full_context)、頻道話題氛圍 (vibe_snippet)、  \n>         長期記憶 (memory_block) 與 15 歲台灣女高中生對話規則 (length_rule)。  \n>         回傳 (clean_speech, persona_thought, sys_prompt, user_prompt)。
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-| `brain` | `BotBrain` | `—` |
-| `user_query` | `str` | `—` |
-| `channel_id` | `int | None` | `—` |
-| `bot` | `commands.Bot` | `—` |
-| `user_id` | `int` | `—` |
-| `display_name` | `str` | `—` |
-| `observations` | `list[tuple[str, str]]` | `—` |
-| `vibe_snippet` | `str` | `''` |
-| `full_context` | `str` | `''` |
-| `draft_answer` | `str` | `''` |
-| `images` | `list[str] | None` | `None` |
-
-###### `_execute_tool`  (L394)
-
-```python
-async def _execute_tool(self, tool_name: str, action_input: str, bot: commands.Bot, message: discord.Message, vibe_snippet: str, full_context: str, images: list[str] | None = None) -> str
-```
-
-> 呼叫指定工具，以 silent=True 模式執行並收集結果。  \n>   \n>         Args:  \n>             tool_name: 工具名稱（大寫）。  \n>             action_input: 給工具的指令文字。  \n>             bot: Bot 實例。  \n>             message: 觸發訊息。  \n>             vibe_snippet: 氛圍摘要。  \n>             full_context: 完整上下文。  \n>             images: 多模態圖片列表（若有）。  \n>   \n>         Returns:  \n>             工具執行的觀察結果字串。
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-| `tool_name` | `str` | `—` |
-| `action_input` | `str` | `—` |
-| `bot` | `commands.Bot` | `—` |
-| `message` | `discord.Message` | `—` |
-| `vibe_snippet` | `str` | `—` |
-| `full_context` | `str` | `—` |
-| `images` | `list[str] | None` | `None` |
-
-###### `execute`  (L440)
-
-```python
-async def execute(self, bot: commands.Bot, message: discord.Message, user_query: str, vibe_snippet: str, full_context: str, **kwargs: object) -> ToolResult | str | None
-```
-
-> ReAct Agent 主迴圈。  \n>   \n>         Args:  \n>             bot: Discord Bot 實例。  \n>             message: 觸發的 Discord 訊息。  \n>             user_query: 使用者的原始文字。  \n>             vibe_snippet: 頻道近期氛圍摘要。  \n>             full_context: 含上下文的完整提示文本。  \n>             **kwargs: 包含 images (list[str]) 等擴充參數。
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `self` | `—` | `—` |
-| `bot` | `commands.Bot` | `—` |
-| `message` | `discord.Message` | `—` |
-| `user_query` | `str` | `—` |
-| `vibe_snippet` | `str` | `—` |
-| `full_context` | `str` | `—` |
-| `**kwargs` | `object` | `—` |
-
-
-#### Functions
-
-##### `_extract_xml_tag`  (L140)
-
-```python
-def _extract_xml_tag(text: str, tag: str) -> str | None
-```
-
-> 從文字中提取 <tag>content</tag>。
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `text` | `str` | `—` |
-| `tag` | `str` | `—` |
-
-##### `_parse_react_output`  (L148)
-
-```python
-def _parse_react_output(raw: str) -> dict[str, str]
-```
-
-> 解析 LLM 的 ReAct 格式輸出（支援 XML 標籤與標準文字 fallback）。  \n>   \n>     Returns:  \n>         dict with keys: thought (optional), action/action_input OR final_answer.  \n>         'type' key is 'action' | 'final'
-
-| 參數 | 型別 | 預設值 |
-|---|---|---|
-| `raw` | `str` | `—` |
-
-
----
-
-
 ### 📄 `handlers/social/registry.py`
 
 > handlers/social/registry.py
@@ -1950,6 +2086,136 @@ async def route_and_execute_tag(bot: commands.Bot, message: discord.Message) -> 
 |---|---|---|
 | `bot` | `commands.Bot` | `—` |
 | `message` | `discord.Message` | `—` |
+
+
+---
+
+
+### 📄 `handlers/social/streaming_thinking.py`
+
+> handlers/social/streaming_thinking.py
+
+
+#### 全域變數 / 模組常數
+
+| 名稱 | 型別 | 值（摘要） | 行號 |
+|---|---|---|---|
+| `logger` | `—` | `logging.getLogger(__name__)` | L29 |
+
+
+#### Class `LiveThinkingSession` ← `object`  (L32)
+
+> 管理單次對話請求的即時思考推演動態編輯生命週期。
+
+##### Methods
+
+###### `__init__`  (L35)
+
+```python
+def __init__(self, target: Any) -> None
+```
+
+> 初始化即時思考會話。  \n>   \n>         Args:  \n>             target: discord.Message 或 TextChannel 目標。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `target` | `Any` | `—` |
+
+###### `is_enabled`  (L56)
+
+```python
+@property
+def is_enabled(self) -> bool
+```
+
+> 是否啟用動態編輯思考流程。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `start`  (L60)
+
+```python
+async def start(self, initial_hint: str = '📋 意圖解析中') -> None
+```
+
+> 發送初始佔位思考訊息（零延遲即時反饋）。  \n>   \n>         Args:  \n>             initial_hint: 當前正在進行的動作簡述。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `initial_hint` | `str` | `'📋 意圖解析中'` |
+
+###### `push_step`  (L90)
+
+```python
+def push_step(self, step_type: str, text: str) -> None
+```
+
+> 以非同步背景任務 (Fire-and-Forget) 推送新思考/工具執行階段，主執行緒 0 等待。  \n>   \n>         Args:  \n>             step_type: 步驟類型 ('plan', 'action', 'obs', 'persona')。  \n>             text: 步驟描述內容。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `step_type` | `str` | `—` |
+| `text` | `str` | `—` |
+
+###### `on_stream_chunk`  (L111)
+
+```python
+async def on_stream_chunk(self, chunk: str) -> None
+```
+
+> 接收 LLM 串流 Token，即時萃取思考鏈並以防抖方式背景更新 Discord 訊息。  \n>   \n>         Args:  \n>             chunk: LLM 生成的即時 Token 片段。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `chunk` | `str` | `—` |
+
+###### `_debounced_edit_step`  (L134)
+
+```python
+async def _debounced_edit_step(self) -> None
+```
+
+> 非同步背景執行的節流編輯任務。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `_render_in_progress_block`  (L157)
+
+```python
+def _render_in_progress_block(self) -> str
+```
+
+> 組裝進行中的步驟 Markdown 區塊。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `finish`  (L194)
+
+```python
+async def finish(self, final_reply: str, thought_log: str = '', intent_name: str = 'CHAT', model: str = '', latency_ms: int = 0, prompt: str = '') -> list[discord.Message]
+```
+
+> 完成思考，將佔位訊息原地編輯為正式回覆。  \n>   \n>         Args:  \n>             final_reply: 最終回覆文字。  \n>             thought_log: 完整思維鏈。  \n>             intent_name: 意圖標籤。  \n>             model: 模型名稱。  \n>             latency_ms: 總耗時。  \n>             prompt: 使用者提問。  \n>   \n>         Returns:  \n>             list[discord.Message]: 發送或更新成功之 Discord 訊息列表。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `final_reply` | `str` | `—` |
+| `thought_log` | `str` | `''` |
+| `intent_name` | `str` | `'CHAT'` |
+| `model` | `str` | `''` |
+| `latency_ms` | `int` | `0` |
+| `prompt` | `str` | `''` |
 
 
 ---
@@ -3352,7 +3618,7 @@ async def fetch_context_script(channel: Any, before_message: discord.Message | N
 | `channel` | `Any` | `—` |
 | `before_message` | `discord.Message | None` | `None` |
 
-##### `fetch_recent_script`  (L180)
+##### `fetch_recent_script`  (L184)
 
 ```python
 async def fetch_recent_script(channel: Any, limit: int) -> str
@@ -3363,7 +3629,7 @@ async def fetch_recent_script(channel: Any, limit: int) -> str
 | `channel` | `Any` | `—` |
 | `limit` | `int` | `—` |
 
-##### `strip_markdown`  (L219)
+##### `strip_markdown`  (L223)
 
 ```python
 def strip_markdown(text: str) -> str
@@ -3375,7 +3641,7 @@ def strip_markdown(text: str) -> str
 |---|---|---|
 | `text` | `str` | `—` |
 
-##### `_process_micro_cot_extraction`  (L236)
+##### `_process_micro_cot_extraction`  (L240)
 
 ```python
 def _process_micro_cot_extraction(reply: str, prompt: str = '', intent: str = 'CHAT', model: str = '', system_prompt: str = '', user_prompt: str = '', latency_ms: int = 0) -> tuple[str, str]
@@ -3393,7 +3659,7 @@ def _process_micro_cot_extraction(reply: str, prompt: str = '', intent: str = 'C
 | `user_prompt` | `str` | `''` |
 | `latency_ms` | `int` | `0` |
 
-##### `_chunk_message`  (L264)
+##### `_chunk_message`  (L268)
 
 ```python
 def _chunk_message(text: str, max_length: int = 1900) -> list[str]
@@ -3406,7 +3672,7 @@ def _chunk_message(text: str, max_length: int = 1900) -> list[str]
 | `text` | `str` | `—` |
 | `max_length` | `int` | `1900` |
 
-##### `remove_hourglass_reaction`  (L286)
+##### `remove_hourglass_reaction`  (L290)
 
 ```python
 async def remove_hourglass_reaction(target: discord.Message | Any, bot_user: discord.User | discord.Member | discord.ClientUser | None = None) -> None
@@ -3419,7 +3685,23 @@ async def remove_hourglass_reaction(target: discord.Message | Any, bot_user: dis
 | `target` | `discord.Message | Any` | `—` |
 | `bot_user` | `discord.User | discord.Member | discord.ClientUser | None` | `None` |
 
-##### `build_debug_detail_embed`  (L314)
+##### `format_thinking_steps_block`  (L318)
+
+```python
+def format_thinking_steps_block(thought_log: str = '', intent_name: str = 'CHAT', model: str = '', latency_ms: int = 0, prompt: str = '') -> str
+```
+
+> 建構精美步驟化思考推演 Markdown 區塊 (方案 A 模式)。  \n>   \n>     Args:  \n>         thought_log: 原始思考日誌 (包含 Plan/Obs/Persona 或純 CoT)。  \n>         intent_name: 意圖標籤名稱。  \n>         model: 使用之模型名稱。  \n>         latency_ms: 總執行耗時（毫秒）。  \n>         prompt: 使用者原始輸入。  \n>   \n>     Returns:  \n>         str: Markdown 引用格式之思考與步驟區塊。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `thought_log` | `str` | `''` |
+| `intent_name` | `str` | `'CHAT'` |
+| `model` | `str` | `''` |
+| `latency_ms` | `int` | `0` |
+| `prompt` | `str` | `''` |
+
+##### `build_debug_detail_embed`  (L394)
 
 ```python
 def build_debug_detail_embed(final_reply: str, intent_name: str = 'CHAT', prompt: str = '', model: str = '', latency_ms: int = 0, thought_log: str = '', bot_user: Any = None) -> discord.Embed
@@ -3437,7 +3719,7 @@ def build_debug_detail_embed(final_reply: str, intent_name: str = 'CHAT', prompt
 | `thought_log` | `str` | `''` |
 | `bot_user` | `Any` | `None` |
 
-##### `simulate_typing_and_send`  (L377)
+##### `simulate_typing_and_send`  (L457)
 
 ```python
 async def simulate_typing_and_send(target: Any, reply: str, intent_name: str = 'CHAT', prompt: str = '', model: str = '', system_prompt: str = '', user_prompt: str = '', latency_ms: int = 0, thought_log: str = '') -> None
@@ -3455,7 +3737,7 @@ async def simulate_typing_and_send(target: Any, reply: str, intent_name: str = '
 | `latency_ms` | `int` | `0` |
 | `thought_log` | `str` | `''` |
 
-##### `simulate_typing_and_send_to_channel`  (L460)
+##### `simulate_typing_and_send_to_channel`  (L542)
 
 ```python
 async def simulate_typing_and_send_to_channel(channel: discord.TextChannel | Any, reply: str, intent_name: str = 'CHAT', prompt: str = '', model: str = '', system_prompt: str = '', user_prompt: str = '', latency_ms: int = 0, thought_log: str = '') -> None
@@ -3514,6 +3796,9 @@ async def setup(bot: commands.Bot) -> None
 |---|---|---|---|
 | `logger` | `—` | `logging.getLogger(__name__)` | L23 |
 | `_TZ_TW` | `—` | `timezone(timedelta(hours=8))` | L25 |
+| `_BUFFER_LOCK` | `—` | `threading.Lock()` | L44 |
+| `_LOG_BUFFER` | `list[tuple[str, dict]]` | `[]` | L45 |
+| `_BUFFER_MAX_SIZE` | `int` | `10` | L46 |
 
 
 #### Functions
@@ -3546,31 +3831,39 @@ def _processed_path(date_str: str) -> Path
 |---|---|---|
 | `date_str` | `str` | `—` |
 
-##### `append_chat_log`  (L45)
+##### `flush_chat_logs`  (L49)
+
+```python
+def flush_chat_logs() -> None
+```
+
+> 將緩衝區內所有未落盤的聊天記錄批次寫入對應日期的 JSONL 檔案中。
+
+##### `append_chat_log`  (L73)
 
 ```python
 def append_chat_log(message: discord.Message) -> None
 ```
 
-> 把一則訊息追加寫入今天的 JSONL 檔。  \n>     靜默處理所有錯誤，絕不影響主流程。
+> 把一則訊息加入記憶體緩衝區；若滿 _BUFFER_MAX_SIZE 筆則批次落盤。  \n>     靜默處理所有錯誤，絕不影響主流程。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `message` | `discord.Message` | `—` |
 
-##### `async_append_chat_log`  (L72)
+##### `async_append_chat_log`  (L106)
 
 ```python
 async def async_append_chat_log(message: discord.Message) -> None
 ```
 
-> 非同步版本的追加寫入，避免在 Discord on_message 事件迴圈中阻塞。
+> 非同步版本的追加寫入，於需要 Flush 時在 ThreadPool 中執行，避免阻塞事件迴圈。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `message` | `discord.Message` | `—` |
 
-##### `read_chat_log`  (L85)
+##### `read_chat_log`  (L139)
 
 ```python
 def read_chat_log(date_str: str) -> list[dict]
@@ -3582,7 +3875,7 @@ def read_chat_log(date_str: str) -> list[dict]
 |---|---|---|
 | `date_str` | `str` | `—` |
 
-##### `is_date_processed`  (L113)
+##### `is_date_processed`  (L168)
 
 ```python
 def is_date_processed(date_str: str) -> bool
@@ -3594,7 +3887,7 @@ def is_date_processed(date_str: str) -> bool
 |---|---|---|
 | `date_str` | `str` | `—` |
 
-##### `mark_date_processed`  (L118)
+##### `mark_date_processed`  (L173)
 
 ```python
 def mark_date_processed(date_str: str, stats: dict | None = None) -> None
@@ -3607,7 +3900,7 @@ def mark_date_processed(date_str: str, stats: dict | None = None) -> None
 | `date_str` | `str` | `—` |
 | `stats` | `dict | None` | `None` |
 
-##### `get_yesterday_str`  (L138)
+##### `get_yesterday_str`  (L193)
 
 ```python
 def get_yesterday_str() -> str
@@ -3626,16 +3919,16 @@ def get_yesterday_str() -> str
 
 | 名稱 | 型別 | 值（摘要） | 行號 |
 |---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L19 |
+| `logger` | `—` | `logging.getLogger(__name__)` | L20 |
 
 
-#### Class `MemoryManager` ← `commands.Cog`  (L22)
+#### Class `MemoryManager` ← `commands.Cog`  (L23)
 
 > 靈魂記錄者！追尋全局單一個體 UID，於日常背景中抓取反思屬性的深睡大腦層。
 
 ##### Methods
 
-###### `__init__`  (L25)
+###### `__init__`  (L26)
 
 ```python
 def __init__(self, bot: commands.Bot) -> None
@@ -3646,7 +3939,44 @@ def __init__(self, bot: commands.Bot) -> None
 | `self` | `—` | `—` |
 | `bot` | `commands.Bot` | `—` |
 
-###### `reload_store`  (L44)
+###### `cog_load`  (L49)
+
+```python
+async def cog_load(self) -> None
+```
+
+> Cog 載入時確保定時 Flush 迴圈已啟動。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `cog_unload`  (L54)
+
+```python
+async def cog_unload(self) -> None
+```
+
+> Cog 卸載或關機時，強制落盤好感度與聊天記錄。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `_flush_loop`  (L63)
+
+```python
+@tasks.loop(seconds=60.0)
+async def _flush_loop(self) -> None
+```
+
+> 週期性（每 60 秒）檢查並落盤好感度與聊天緩衝。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `reload_store`  (L71)
 
 ```python
 def reload_store(self) -> None
@@ -3658,7 +3988,7 @@ def reload_store(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `get_user_memory_snippet`  (L59)
+###### `get_user_memory_snippet`  (L86)
 
 ```python
 def get_user_memory_snippet(self, user_id: int) -> str
@@ -3671,7 +4001,20 @@ def get_user_memory_snippet(self, user_id: int) -> str
 | `self` | `—` | `—` |
 | `user_id` | `int` | `—` |
 
-###### `on_message`  (L106)
+###### `get_full_user_memory_snippet`  (L129)
+
+```python
+def get_full_user_memory_snippet(self, user_id: int) -> str
+```
+
+> 產生供管理者或使用者查看的完整使用者記憶清單（列出全部事實，不進行 Prompt 取樣截斷與相似度過濾）。  \n>   \n>         Args:  \n>             user_id: Discord 使用者 ID。  \n>   \n>         Returns:  \n>             格式化後的完整長期記憶字串。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `user_id` | `int` | `—` |
+
+###### `on_message`  (L169)
 
 ```python
 @commands.Cog.listener()
@@ -3683,7 +4026,7 @@ async def on_message(self, message: discord.Message) -> None
 | `self` | `—` | `—` |
 | `message` | `discord.Message` | `—` |
 
-###### `_run_reflection_extract`  (L145)
+###### `_run_reflection_extract`  (L208)
 
 ```python
 async def _run_reflection_extract(self, author: discord.Member | discord.User, texts: str) -> None
@@ -3835,14 +4178,15 @@ async def _run_digest(self, date_str: str, force: bool = False) -> dict | None
 ###### `__init__`  (L37)
 
 ```python
-def __init__(self) -> None
+def __init__(self, debounce_seconds: float = 30.0) -> None
 ```
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `self` | `—` | `—` |
+| `debounce_seconds` | `float` | `30.0` |
 
-###### `_load`  (L42)
+###### `_load`  (L45)
 
 ```python
 def _load(self) -> None
@@ -3852,17 +4196,57 @@ def _load(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `_save`  (L53)
+###### `_do_write_sync`  (L56)
 
 ```python
-def _save(self) -> None
+def _do_write_sync(self, store_copy: dict[str, dict[str, Any]]) -> None
 ```
+
+> 同步原子寫入磁碟。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `store_copy` | `dict[str, dict[str, Any]]` | `—` |
+
+###### `flush`  (L68)
+
+```python
+def flush(self, force: bool = False) -> None
+```
+
+> 強制或髒標記落盤。  \n>   \n>         Args:  \n>             force: 若為 True，即使 _dirty 為 False 也強制寫入磁碟。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `force` | `bool` | `False` |
+
+###### `_schedule_debounce`  (L87)
+
+```python
+def _schedule_debounce(self) -> None
+```
+
+> 排程延遲落盤任務（Debounce）。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `get_affinity`  (L74)
+###### `_save`  (L101)
+
+```python
+def _save(self) -> None
+```
+
+> 相容舊版直接存檔介面，觸發 flush。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+
+###### `get_affinity`  (L105)
 
 ```python
 def get_affinity(self, uid: int) -> float
@@ -3875,13 +4259,13 @@ def get_affinity(self, uid: int) -> float
 | `self` | `—` | `—` |
 | `uid` | `int` | `—` |
 
-###### `update_affinity`  (L79)
+###### `update_affinity`  (L110)
 
 ```python
 def update_affinity(self, uid: int, delta: int | float) -> None
 ```
 
-> 更新好感度（以 float 精度儲存，防止 0.5 被 int() 截斷）。  \n>   \n>         Args:  \n>             uid: Discord 使用者 ID。  \n>             delta: 好感度變化量（可為小數，如 0.5）。
+> 更新好感度（以 float 精度儲存，防止 0.5 被 int() 截斷）。  \n>   \n>         採用 Debounce 機制延遲落盤，避免每則訊息重複觸發全量寫入。  \n>   \n>         Args:  \n>             uid: Discord 使用者 ID。  \n>             delta: 好感度變化量（可為小數，如 0.5）。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
@@ -3889,7 +4273,7 @@ def update_affinity(self, uid: int, delta: int | float) -> None
 | `uid` | `int` | `—` |
 | `delta` | `int | float` | `—` |
 
-###### `get_affinity_tier`  (L101)
+###### `get_affinity_tier`  (L135)
 
 ```python
 def get_affinity_tier(self, uid: int) -> str
@@ -3902,7 +4286,7 @@ def get_affinity_tier(self, uid: int) -> str
 | `self` | `—` | `—` |
 | `uid` | `int` | `—` |
 
-###### `decay_all`  (L109)
+###### `decay_all`  (L143)
 
 ```python
 def decay_all(self) -> int
@@ -3914,7 +4298,7 @@ def decay_all(self) -> int
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `get_relationship_snippet`  (L133)
+###### `get_relationship_snippet`  (L167)
 
 ```python
 def get_relationship_snippet(self, uid: int) -> str
@@ -4014,32 +4398,32 @@ def main() -> None
 
 | 名稱 | 型別 | 值（摘要） | 行號 |
 |---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L10 |
-| `UserMemoryStore` | `—` | `dict[str, UserProfile]` | L37 |
-| `RelationshipMemoryStore` | `—` | `dict[str, list[RelationshipFact]]` | L40 |
-| `MAX_FACTS_IN_CONTEXT` | `int` | `getattr(settings, 'MEMORY_MAX_FACTS_IN_CONTEXT', 15)` | L43 |
-| `MAX_FACTS_PER_USER` | `int` | `getattr(settings, 'MEMORY_MAX_FACTS_PER_USER', 25)` | L45 |
-| `PERMANENT_FACT_THRESHOLD` | `int` | `getattr(settings, 'MEMORY_PERMANENT_FACT_THRESHOLD', 4)` | L47 |
-| `_ALIAS_BLACKLIST` | `set[str]` | `{'靠邀', '未知', '無住址資訊', '哈哈', '喔喔', '幹', '靠北', '哎呀', '笑死', '問號', '群友', '群友們', '某群友...` | L50 |
-| `_CATEGORY_MIGRATION` | `dict[str, str]` | `{'interest': 'preference', 'relationship': 'social', 'opinion': 'rule'}` | L59 |
-| `_VALID_CATEGORIES` | `set[str]` | `{'identity', 'preference', 'habit', 'social', 'rule', 'interest', 'relationship'...` | L65 |
-| `_META_PREFIX_PATTERN` | `re.Pattern[str]` | `re.compile('^(他說\|他表示\|他提到\|他認為\|他覺得\|他常說\|他有提到\|他稱\|發話者說\|發話者表示)[：:，,]?\\s*')` | L209 |
-| `_META_BRACKET_PATTERN` | `re.Pattern[str]` | `re.compile('[\\(（\\[【].*?[\\)）\\]】]')` | L212 |
-| `_META_TAIL_PATTERNS` | `list[re.Pattern[str]]` | `[re.compile('[，,]?\\s*這是.*?(特質\|習慣\|特徵\|核心).*?$'), re.compile('[，,]?\\s*(重複\|強烈).*?$...` | L213 |
+| `logger` | `—` | `logging.getLogger(__name__)` | L11 |
+| `UserMemoryStore` | `—` | `dict[str, UserProfile]` | L38 |
+| `RelationshipMemoryStore` | `—` | `dict[str, list[RelationshipFact]]` | L41 |
+| `MAX_FACTS_IN_CONTEXT` | `int` | `getattr(settings, 'MEMORY_MAX_FACTS_IN_CONTEXT', 15)` | L44 |
+| `MAX_FACTS_PER_USER` | `int` | `getattr(settings, 'MEMORY_MAX_FACTS_PER_USER', 25)` | L46 |
+| `PERMANENT_FACT_THRESHOLD` | `int` | `getattr(settings, 'MEMORY_PERMANENT_FACT_THRESHOLD', 4)` | L48 |
+| `_ALIAS_BLACKLIST` | `set[str]` | `{'靠邀', '未知', '無住址資訊', '哈哈', '喔喔', '幹', '靠北', '哎呀', '笑死', '問號', '群友', '群友們', '某群友...` | L51 |
+| `_CATEGORY_MIGRATION` | `dict[str, str]` | `{'interest': 'preference', 'relationship': 'social', 'opinion': 'rule'}` | L60 |
+| `_VALID_CATEGORIES` | `set[str]` | `{'identity', 'preference', 'habit', 'social', 'rule', 'interest', 'relationship'...` | L66 |
+| `_META_PREFIX_PATTERN` | `re.Pattern[str]` | `re.compile('^(他說\|他表示\|他提到\|他認為\|他覺得\|他常說\|他有提到\|他稱\|發話者說\|發話者表示)[：:，,]?\\s*')` | L210 |
+| `_META_BRACKET_PATTERN` | `re.Pattern[str]` | `re.compile('[\\(（\\[【].*?[\\)）\\]】]')` | L213 |
+| `_META_TAIL_PATTERNS` | `list[re.Pattern[str]]` | `[re.compile('[，,]?\\s*這是.*?(特質\|習慣\|特徵\|核心).*?$'), re.compile('[，,]?\\s*(重複\|強烈).*?$...` | L214 |
 
 
-#### Class `UserFact` ← `TypedDict`  (L16)
+#### Class `UserFact` ← `TypedDict`  (L17)
 
 
-#### Class `UserProfile` ← `TypedDict`  (L23)
+#### Class `UserProfile` ← `TypedDict`  (L24)
 
 
-#### Class `RelationshipFact` ← `TypedDict`  (L28)
+#### Class `RelationshipFact` ← `TypedDict`  (L29)
 
 
 #### Functions
 
-##### `_migrate_fact`  (L75)
+##### `_migrate_fact`  (L76)
 
 ```python
 def _migrate_fact(raw: Any) -> UserFact | None
@@ -4051,7 +4435,7 @@ def _migrate_fact(raw: Any) -> UserFact | None
 |---|---|---|
 | `raw` | `Any` | `—` |
 
-##### `make_fact`  (L111)
+##### `make_fact`  (L112)
 
 ```python
 def make_fact(fact_text: str, importance: int = 3, category: str = 'identity') -> UserFact
@@ -4065,7 +4449,7 @@ def make_fact(fact_text: str, importance: int = 3, category: str = 'identity') -
 | `importance` | `int` | `3` |
 | `category` | `str` | `'identity'` |
 
-##### `load_user_memory`  (L137)
+##### `load_user_memory`  (L138)
 
 ```python
 def load_user_memory(path: Path) -> UserMemoryStore
@@ -4077,7 +4461,7 @@ def load_user_memory(path: Path) -> UserMemoryStore
 |---|---|---|
 | `path` | `Path` | `—` |
 
-##### `save_user_memory`  (L179)
+##### `save_user_memory`  (L180)
 
 ```python
 def save_user_memory(store: UserMemoryStore, path: Path) -> None
@@ -4090,32 +4474,33 @@ def save_user_memory(store: UserMemoryStore, path: Path) -> None
 | `store` | `UserMemoryStore` | `—` |
 | `path` | `Path` | `—` |
 
-##### `_clean_fact_core`  (L220)
+##### `_clean_fact_core`  (L222)
 
 ```python
+@lru_cache(maxsize=2048)
 def _clean_fact_core(text: str) -> str
 ```
 
-> 去除 LLM 常見的後綴元評論、引號、贅詞前綴，萃取核心陳述。  \n>   \n>     Args:  \n>         text: 原始 fact 字串。  \n>   \n>     Returns:  \n>         清洗後的純核心語意字串。
+> 去除 LLM 常見的後綴元評論、引號、贅詞前綴，萃取核心陳述。  \n>   \n>     使用 LRU 快取避免對相同事實重複執行正規表達式清洗。  \n>   \n>     Args:  \n>         text: 原始 fact 字串。  \n>   \n>     Returns:  \n>         清洗後的純核心語意字串。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `text` | `str` | `—` |
 
-##### `calculate_fact_similarity`  (L238)
+##### `calculate_fact_similarity`  (L242)
 
 ```python
 def calculate_fact_similarity(s1: str, s2: str) -> float
 ```
 
-> 計算兩條事實文字的語意重疊度與字元相似度。  \n>   \n>     結合元評論去除、字串包含度、SequenceMatcher 與 2-gram Jaccard 比對。  \n>   \n>     Args:  \n>         s1: 第一條事實字串。  \n>         s2: 第二條事實字串。  \n>   \n>     Returns:  \n>         0.0 ~ 1.0 的相似度分數。
+> 計算兩條事實文字的語意重疊度與字元相似度。  \n>   \n>     結合 LRU 快取元評論去除、字串包含度快速檢查、2-gram Jaccard 剪枝  \n>     與 SequenceMatcher 序列比對。  \n>   \n>     Args:  \n>         s1: 第一條事實字串。  \n>         s2: 第二條事實字串。  \n>   \n>     Returns:  \n>         0.0 ~ 1.0 的相似度分數。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `s1` | `str` | `—` |
 | `s2` | `str` | `—` |
 
-##### `sanitize_aliases`  (L289)
+##### `sanitize_aliases`  (L303)
 
 ```python
 def sanitize_aliases(raw_aliases: list[str]) -> list[str]
@@ -4127,7 +4512,7 @@ def sanitize_aliases(raw_aliases: list[str]) -> list[str]
 |---|---|---|
 | `raw_aliases` | `list[str]` | `—` |
 
-##### `sanitize_and_merge_facts`  (L329)
+##### `sanitize_and_merge_facts`  (L343)
 
 ```python
 def sanitize_and_merge_facts(existing_facts: list[UserFact], new_raw_facts: list[Any], max_facts: int = MAX_FACTS_PER_USER, similarity_threshold: float = 0.65) -> tuple[list[UserFact], int]
@@ -4142,7 +4527,7 @@ def sanitize_and_merge_facts(existing_facts: list[UserFact], new_raw_facts: list
 | `max_facts` | `int` | `MAX_FACTS_PER_USER` |
 | `similarity_threshold` | `float` | `0.65` |
 
-##### `get_diverse_facts_for_context`  (L405)
+##### `get_diverse_facts_for_context`  (L419)
 
 ```python
 def get_diverse_facts_for_context(facts: list[UserFact], max_count: int = MAX_FACTS_IN_CONTEXT) -> list[UserFact]
@@ -4155,7 +4540,7 @@ def get_diverse_facts_for_context(facts: list[UserFact], max_count: int = MAX_FA
 | `facts` | `list[UserFact]` | `—` |
 | `max_count` | `int` | `MAX_FACTS_IN_CONTEXT` |
 
-##### `decay_memories`  (L479)
+##### `decay_memories`  (L493)
 
 ```python
 def decay_memories(store: UserMemoryStore, reference_time: datetime | None = None) -> int
@@ -4520,16 +4905,16 @@ async def setup(bot: commands.Bot)
 
 | 名稱 | 型別 | 值（摘要） | 行號 |
 |---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L15 |
+| `logger` | `—` | `logging.getLogger(__name__)` | L17 |
 
 
-#### Class `MusicHandler` ← `commands.Cog`  (L18)
+#### Class `MusicHandler` ← `commands.Cog`  (L20)
 
 > 音樂處理器，負責語音頻道連接、佇列管理、播放與時間軸控制。
 
 ##### Methods
 
-###### `__init__`  (L21)
+###### `__init__`  (L23)
 
 ```python
 def __init__(self, bot: commands.Bot) -> None
@@ -4542,7 +4927,7 @@ def __init__(self, bot: commands.Bot) -> None
 | `self` | `—` | `—` |
 | `bot` | `commands.Bot` | `—` |
 
-###### `_delete_song_message`  (L41)
+###### `_delete_song_message`  (L43)
 
 ```python
 async def _delete_song_message(self, guild_id: int) -> None
@@ -4555,7 +4940,7 @@ async def _delete_song_message(self, guild_id: int) -> None
 | `self` | `—` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `format_duration`  (L54)
+###### `format_duration`  (L56)
 
 ```python
 def format_duration(self, seconds: Any) -> str
@@ -4568,7 +4953,7 @@ def format_duration(self, seconds: Any) -> str
 | `self` | `—` | `—` |
 | `seconds` | `Any` | `—` |
 
-###### `format_time_axis`  (L76)
+###### `format_time_axis`  (L78)
 
 ```python
 def format_time_axis(self, elapsed_seconds: Any, total_seconds: Any, bar_length: int = 15) -> str
@@ -4583,7 +4968,7 @@ def format_time_axis(self, elapsed_seconds: Any, total_seconds: Any, bar_length:
 | `total_seconds` | `Any` | `—` |
 | `bar_length` | `int` | `15` |
 
-###### `get_elapsed_time`  (L103)
+###### `get_elapsed_time`  (L105)
 
 ```python
 def get_elapsed_time(self, guild_id: int) -> int
@@ -4596,7 +4981,7 @@ def get_elapsed_time(self, guild_id: int) -> int
 | `self` | `—` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `pause_playback`  (L126)
+###### `pause_playback`  (L128)
 
 ```python
 def pause_playback(self, guild_id: int) -> None
@@ -4609,7 +4994,7 @@ def pause_playback(self, guild_id: int) -> None
 | `self` | `—` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `resume_playback`  (L139)
+###### `resume_playback`  (L141)
 
 ```python
 def resume_playback(self, guild_id: int) -> None
@@ -4622,7 +5007,7 @@ def resume_playback(self, guild_id: int) -> None
 | `self` | `—` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `shorten_url`  (L149)
+###### `shorten_url`  (L151)
 
 ```python
 def shorten_url(self, url: str) -> str
@@ -4635,7 +5020,7 @@ def shorten_url(self, url: str) -> str
 | `self` | `—` | `—` |
 | `url` | `str` | `—` |
 
-###### `build_playing_embed`  (L167)
+###### `build_playing_embed`  (L169)
 
 ```python
 def build_playing_embed(self, guild_id: int) -> discord.Embed
@@ -4648,7 +5033,7 @@ def build_playing_embed(self, guild_id: int) -> discord.Embed
 | `self` | `—` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `build_queue_embed`  (L199)
+###### `build_queue_embed`  (L201)
 
 ```python
 def build_queue_embed(self, guild_id: int, page: int = 0, per_page: int = 10) -> discord.Embed
@@ -4663,7 +5048,7 @@ def build_queue_embed(self, guild_id: int, page: int = 0, per_page: int = 10) ->
 | `page` | `int` | `0` |
 | `per_page` | `int` | `10` |
 
-###### `send_queue_embed`  (L254)
+###### `send_queue_embed`  (L256)
 
 ```python
 async def send_queue_embed(self, channel: discord.abc.Messageable, guild_id: int) -> None
@@ -4677,7 +5062,7 @@ async def send_queue_embed(self, channel: discord.abc.Messageable, guild_id: int
 | `channel` | `discord.abc.Messageable` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `_start_progress_updater`  (L272)
+###### `_start_progress_updater`  (L274)
 
 ```python
 def _start_progress_updater(self, guild_id: int) -> None
@@ -4690,7 +5075,7 @@ def _start_progress_updater(self, guild_id: int) -> None
 | `self` | `—` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `_stop_progress_updater`  (L282)
+###### `_stop_progress_updater`  (L284)
 
 ```python
 def _stop_progress_updater(self, guild_id: int) -> None
@@ -4703,7 +5088,7 @@ def _stop_progress_updater(self, guild_id: int) -> None
 | `self` | `—` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `_progress_updater_loop`  (L292)
+###### `_progress_updater_loop`  (L294)
 
 ```python
 async def _progress_updater_loop(self, guild_id: int) -> None
@@ -4716,7 +5101,7 @@ async def _progress_updater_loop(self, guild_id: int) -> None
 | `self` | `—` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `jump_to`  (L325)
+###### `jump_to`  (L327)
 
 ```python
 def jump_to(self, guild_id: int, index: int) -> dict[str, Any] | None
@@ -4730,7 +5115,7 @@ def jump_to(self, guild_id: int, index: int) -> dict[str, Any] | None
 | `guild_id` | `int` | `—` |
 | `index` | `int` | `—` |
 
-###### `clear_queue`  (L344)
+###### `clear_queue`  (L346)
 
 ```python
 def clear_queue(self, guild_id: int) -> int
@@ -4743,7 +5128,7 @@ def clear_queue(self, guild_id: int) -> int
 | `self` | `—` | `—` |
 | `guild_id` | `int` | `—` |
 
-###### `headless_play`  (L362)
+###### `headless_play`  (L364)
 
 ```python
 async def headless_play(self, text_channel: discord.TextChannel, voice_channel: discord.VoiceChannel, query: str, insert_at_top: bool = False) -> None
@@ -4759,7 +5144,7 @@ async def headless_play(self, text_channel: discord.TextChannel, voice_channel: 
 | `query` | `str` | `—` |
 | `insert_at_top` | `bool` | `False` |
 
-###### `_play_next`  (L475)
+###### `_play_next`  (L477)
 
 ```python
 def _play_next(self, guild: discord.Guild, text_channel: discord.TextChannel) -> None
@@ -4773,23 +5158,23 @@ def _play_next(self, guild: discord.Guild, text_channel: discord.TextChannel) ->
 | `guild` | `discord.Guild` | `—` |
 | `text_channel` | `discord.TextChannel` | `—` |
 
-###### `play_command`  (L610)
+###### `play_command`  (L612)
 
 ```python
-@app_commands.command(name='play', description='🎵 音樂播放系統 — 選擇操作類型後填入對應內容')
-@app_commands.describe(play_type='選擇操作類型', context='補充內容（YouTube 網址 / 歌名 / 編號），部分操作不需填寫')
+@app_commands.command(name='play', description='🎵 音樂播放系統 — 無參數開啟留聲機主控面板，或直接選擇操作')
+@app_commands.describe(play_type='操作類型（可選，留空則開啟留聲機互動主控台）', context='補充內容（YouTube 網址 / 歌名 / 編號），部分操作不需填寫')
 @app_commands.choices(play_type=[app_commands.Choice(name='▶️  add    — 新增 YouTube 網址到佇列', value='add'), app_commands.Choice(name='🔍  search — 搜尋歌名並播放', value='search'), app_commands.Choice(name='📌  insert — 優先插播（搜尋或網址排到最前）', value='insert'), app_commands.Choice(name='📋  list   — 查看目前播放清單', value='list'), app_commands.Choice(name='⏭️  skip   — 跳過當前歌曲', value='skip'), app_commands.Choice(name='🎯  jump   — 優先播放指定編號的歌', value='jump'), app_commands.Choice(name='🗑️  remove — 刪除指定編號的歌', value='remove'), app_commands.Choice(name='🧹  clear  — 清空整個播放清單', value='clear')])
-async def play_command(self, interaction: discord.Interaction, play_type: str, context: str = '') -> None
+async def play_command(self, interaction: discord.Interaction, play_type: Optional[str] = None, context: Optional[str] = '') -> None
 ```
 
-> 處理 /play 斜線指令的分支操作。  \n>   \n>         Args:  \n>             interaction: Discord 互動事件。  \n>             play_type: 操作類型 (add, search, list, skip, jump, remove)。  \n>             context: 相關參數 (網址、關鍵字或歌曲編號)。
+> 處理 /play 斜線指令的分支操作與主控台發送。  \n>   \n>         Args:  \n>             interaction: Discord 互動事件。  \n>             play_type: 操作類型 (add, search, list, skip, jump, remove 等，留空開啟面板)。  \n>             context: 相關參數 (網址、關鍵字或歌曲編號)。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `self` | `—` | `—` |
 | `interaction` | `discord.Interaction` | `—` |
-| `play_type` | `str` | `—` |
-| `context` | `str` | `''` |
+| `play_type` | `Optional[str]` | `None` |
+| `context` | `Optional[str]` | `''` |
 
 
 ---
@@ -4815,16 +5200,45 @@ async def play_command(self, interaction: discord.Interaction, play_type: str, c
 
 ### 📄 `handlers/music/ui.py`
 
+> handlers/music/ui.py
 
-#### Class `MusicControlView` ← `discord.ui.View`  (L5)
 
-> 音樂播放時的控制按鈕面板。
+#### 全域變數 / 模組常數
 
-    包含暫停/播放、跳過歌曲、隨機打亂、循環切換以及查看播放清單分頁面板。
+| 名稱 | 型別 | 值（摘要） | 行號 |
+|---|---|---|---|
+| `logger` | `—` | `logging.getLogger(__name__)` | L14 |
+
+
+#### Class `SongInputModal` ← `ui.Modal`  (L21)
+
+> 彈出式點歌與 YouTube 網址輸入表單。
 
 ##### Methods
 
-###### `__init__`  (L11)
+###### `on_submit`  (L40)
+
+```python
+async def on_submit(self, interaction: discord.Interaction) -> None
+```
+
+> 處理點歌提交事件。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `interaction` | `discord.Interaction` | `—` |
+
+
+#### Class `MusicControlView` ← `discord.ui.View`  (L57)
+
+> 音樂播放時的控制按鈕面板。
+
+    包含點歌、暫停/播放、跳過歌曲、隨機打亂、循環切換、停止清空以及查看播放清單分頁面板。
+
+##### Methods
+
+###### `__init__`  (L63)
 
 ```python
 def __init__(self) -> None
@@ -4836,10 +5250,25 @@ def __init__(self) -> None
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `pause_resume_button`  (L16)
+###### `add_song_button`  (L68)
 
 ```python
-@discord.ui.button(label='⏯️ 暫停/播放', style=discord.ButtonStyle.secondary, custom_id='pause_resume_btn')
+@discord.ui.button(label='➕ 點歌/貼網址', style=discord.ButtonStyle.success, custom_id='add_song_btn', row=0)
+async def add_song_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None
+```
+
+> 彈出點歌對話框。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `interaction` | `discord.Interaction` | `—` |
+| `button` | `discord.ui.Button` | `—` |
+
+###### `pause_resume_button`  (L73)
+
+```python
+@discord.ui.button(label='⏯️ 暫停/播放', style=discord.ButtonStyle.secondary, custom_id='pause_resume_btn', row=0)
 async def pause_resume_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None
 ```
 
@@ -4851,10 +5280,10 @@ async def pause_resume_button(self, interaction: discord.Interaction, button: di
 | `interaction` | `discord.Interaction` | `—` |
 | `button` | `discord.ui.Button` | `—` |
 
-###### `skip_button`  (L51)
+###### `skip_button`  (L108)
 
 ```python
-@discord.ui.button(label='⏭️ 跳過此曲', style=discord.ButtonStyle.blurple, custom_id='skip_song_btn')
+@discord.ui.button(label='⏭️ 跳過此曲', style=discord.ButtonStyle.blurple, custom_id='skip_song_btn', row=0)
 async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None
 ```
 
@@ -4866,10 +5295,25 @@ async def skip_button(self, interaction: discord.Interaction, button: discord.ui
 | `interaction` | `discord.Interaction` | `—` |
 | `button` | `discord.ui.Button` | `—` |
 
-###### `shuffle_button`  (L66)
+###### `stop_button`  (L123)
 
 ```python
-@discord.ui.button(label='🔀 隨機', style=discord.ButtonStyle.secondary, custom_id='shuffle_btn')
+@discord.ui.button(label='⏹️ 停止/清空', style=discord.ButtonStyle.danger, custom_id='stop_song_btn', row=0)
+async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None
+```
+
+> 停止播放並清空佇列。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `interaction` | `discord.Interaction` | `—` |
+| `button` | `discord.ui.Button` | `—` |
+
+###### `shuffle_button`  (L138)
+
+```python
+@discord.ui.button(label='🔀 隨機', style=discord.ButtonStyle.secondary, custom_id='shuffle_btn', row=1)
 async def shuffle_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None
 ```
 
@@ -4881,10 +5325,10 @@ async def shuffle_button(self, interaction: discord.Interaction, button: discord
 | `interaction` | `discord.Interaction` | `—` |
 | `button` | `discord.ui.Button` | `—` |
 
-###### `loop_button`  (L83)
+###### `loop_button`  (L155)
 
 ```python
-@discord.ui.button(label='🔁 循環', style=discord.ButtonStyle.secondary, custom_id='loop_btn')
+@discord.ui.button(label='🔁 循環', style=discord.ButtonStyle.secondary, custom_id='loop_btn', row=1)
 async def loop_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None
 ```
 
@@ -4896,10 +5340,10 @@ async def loop_button(self, interaction: discord.Interaction, button: discord.ui
 | `interaction` | `discord.Interaction` | `—` |
 | `button` | `discord.ui.Button` | `—` |
 
-###### `view_queue_button`  (L106)
+###### `view_queue_button`  (L178)
 
 ```python
-@discord.ui.button(label='📋 播放清單', style=discord.ButtonStyle.secondary, custom_id='view_queue_btn')
+@discord.ui.button(label='📋 播放清單', style=discord.ButtonStyle.secondary, custom_id='view_queue_btn', row=1)
 async def view_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None
 ```
 
@@ -4912,24 +5356,19 @@ async def view_queue_button(self, interaction: discord.Interaction, button: disc
 | `button` | `discord.ui.Button` | `—` |
 
 
-#### Class `MusicQueueView` ← `discord.ui.View`  (L124)
+#### Class `MusicQueueView` ← `discord.ui.View`  (L200)
 
 > 音樂播放清單的分頁與管理介面。
 
-    Attributes:
-        guild_id: Discord 伺服器 ID。
-        page: 當前顯示的頁碼 (0-indexed)。
-        per_page: 每頁顯示的歌曲筆數。
-
 ##### Methods
 
-###### `__init__`  (L133)
+###### `__init__`  (L203)
 
 ```python
 def __init__(self, guild_id: int, page: int = 0, per_page: int = 10) -> None
 ```
 
-> 初始化播放清單分頁檢視介面。  \n>   \n>         Args:  \n>             guild_id: Discord 伺服器 ID。  \n>             page: 初始頁碼 (預設為 0)。
+> 初始化播放清單分頁檢視介面。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
@@ -4938,20 +5377,20 @@ def __init__(self, guild_id: int, page: int = 0, per_page: int = 10) -> None
 | `page` | `int` | `0` |
 | `per_page` | `int` | `10` |
 
-###### `update_button_states`  (L146)
+###### `update_button_states`  (L211)
 
 ```python
 def update_button_states(self, total_pages: int) -> None
 ```
 
-> 依據頁碼與總頁數更新翻頁按鈕的啟用狀態。  \n>   \n>         Args:  \n>             total_pages: 播放清單的總頁數。
+> 依據頁碼與總頁數更新翻頁按鈕的啟用狀態。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `self` | `—` | `—` |
 | `total_pages` | `int` | `—` |
 
-###### `prev_button`  (L160)
+###### `prev_button`  (L221)
 
 ```python
 @discord.ui.button(label='⬅️ 上一頁', style=discord.ButtonStyle.secondary, custom_id='queue_prev_btn')
@@ -4966,7 +5405,7 @@ async def prev_button(self, interaction: discord.Interaction, button: discord.ui
 | `interaction` | `discord.Interaction` | `—` |
 | `button` | `discord.ui.Button` | `—` |
 
-###### `next_button`  (L174)
+###### `next_button`  (L235)
 
 ```python
 @discord.ui.button(label='➡️ 下一頁', style=discord.ButtonStyle.secondary, custom_id='queue_next_btn')
@@ -4981,7 +5420,7 @@ async def next_button(self, interaction: discord.Interaction, button: discord.ui
 | `interaction` | `discord.Interaction` | `—` |
 | `button` | `discord.ui.Button` | `—` |
 
-###### `refresh_button`  (L188)
+###### `refresh_button`  (L249)
 
 ```python
 @discord.ui.button(label='🔄 重新整理', style=discord.ButtonStyle.primary, custom_id='queue_refresh_btn')
@@ -4996,7 +5435,7 @@ async def refresh_button(self, interaction: discord.Interaction, button: discord
 | `interaction` | `discord.Interaction` | `—` |
 | `button` | `discord.ui.Button` | `—` |
 
-###### `on_timeout`  (L201)
+###### `on_timeout`  (L262)
 
 ```python
 async def on_timeout(self) -> None
@@ -5369,14 +5808,14 @@ async def setup(bot: commands.Bot) -> None
 
 | 名稱 | 型別 | 值（摘要） | 行號 |
 |---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L10 |
+| `logger` | `—` | `logging.getLogger(__name__)` | L15 |
 
 
-#### Class `ConfigModal` ← `discord.ui.Modal`  (L12)
+#### Class `ConfigModal` ← `discord.ui.Modal`  (L17)
 
 ##### Methods
 
-###### `__init__`  (L20)
+###### `__init__`  (L25)
 
 ```python
 def __init__(self, key: str, current_value: str)
@@ -5388,7 +5827,7 @@ def __init__(self, key: str, current_value: str)
 | `key` | `str` | `—` |
 | `current_value` | `str` | `—` |
 
-###### `on_submit`  (L25)
+###### `on_submit`  (L30)
 
 ```python
 async def on_submit(self, interaction: discord.Interaction)
@@ -5400,11 +5839,11 @@ async def on_submit(self, interaction: discord.Interaction)
 | `interaction` | `discord.Interaction` | `—` |
 
 
-#### Class `ConfigSelect` ← `discord.ui.Select`  (L37)
+#### Class `ConfigSelect` ← `discord.ui.Select`  (L42)
 
 ##### Methods
 
-###### `__init__`  (L38)
+###### `__init__`  (L43)
 
 ```python
 def __init__(self)
@@ -5414,7 +5853,7 @@ def __init__(self)
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `callback`  (L49)
+###### `callback`  (L54)
 
 ```python
 async def callback(self, interaction: discord.Interaction)
@@ -5426,11 +5865,11 @@ async def callback(self, interaction: discord.Interaction)
 | `interaction` | `discord.Interaction` | `—` |
 
 
-#### Class `ConfigView` ← `discord.ui.View`  (L54)
+#### Class `ConfigView` ← `discord.ui.View`  (L59)
 
 ##### Methods
 
-###### `__init__`  (L55)
+###### `__init__`  (L60)
 
 ```python
 def __init__(self)
@@ -5441,11 +5880,11 @@ def __init__(self)
 | `self` | `—` | `—` |
 
 
-#### Class `MemoryControlView` ← `discord.ui.View`  (L59)
+#### Class `MemoryControlView` ← `discord.ui.View`  (L64)
 
 ##### Methods
 
-###### `__init__`  (L60)
+###### `__init__`  (L65)
 
 ```python
 def __init__(self, target_user_id: int)
@@ -5456,7 +5895,7 @@ def __init__(self, target_user_id: int)
 | `self` | `—` | `—` |
 | `target_user_id` | `int` | `—` |
 
-###### `correct_button`  (L65)
+###### `correct_button`  (L70)
 
 ```python
 @discord.ui.button(label='✅ 沒錯，很準', style=discord.ButtonStyle.success)
@@ -5469,7 +5908,7 @@ async def correct_button(self, interaction: discord.Interaction, button: discord
 | `interaction` | `discord.Interaction` | `—` |
 | `button` | `discord.ui.Button` | `—` |
 
-###### `incorrect_button`  (L72)
+###### `incorrect_button`  (L77)
 
 ```python
 @discord.ui.button(label='❌ 記錯了，清除記憶', style=discord.ButtonStyle.danger)
@@ -5483,13 +5922,13 @@ async def incorrect_button(self, interaction: discord.Interaction, button: disco
 | `button` | `discord.ui.Button` | `—` |
 
 
-#### Class `AdminCog` ← `commands.Cog`  (L88)
+#### Class `AdminCog` ← `commands.Cog`  (L93)
 
 > 提供伺服器管理、記憶維護、氛圍操作與除錯指令。
 
 ##### Methods
 
-###### `__init__`  (L91)
+###### `__init__`  (L96)
 
 ```python
 def __init__(self, bot: commands.Bot) -> None
@@ -5500,7 +5939,7 @@ def __init__(self, bot: commands.Bot) -> None
 | `self` | `—` | `—` |
 | `bot` | `commands.Bot` | `—` |
 
-###### `_is_admin`  (L94)
+###### `_is_admin`  (L99)
 
 ```python
 def _is_admin(self, interaction: discord.Interaction) -> bool
@@ -5511,7 +5950,7 @@ def _is_admin(self, interaction: discord.Interaction) -> bool
 | `self` | `—` | `—` |
 | `interaction` | `discord.Interaction` | `—` |
 
-###### `_is_super_admin`  (L101)
+###### `_is_super_admin`  (L106)
 
 ```python
 def _is_super_admin(self, interaction: discord.Interaction) -> bool
@@ -5522,7 +5961,7 @@ def _is_super_admin(self, interaction: discord.Interaction) -> bool
 | `self` | `—` | `—` |
 | `interaction` | `discord.Interaction` | `—` |
 
-###### `vibe_command`  (L116)
+###### `vibe_command`  (L121)
 
 ```python
 @app_commands.command(name='vibe', description='💬 檢視或清除頻道即時話題氛圍')
@@ -5538,7 +5977,7 @@ async def vibe_command(self, interaction: discord.Interaction, action: app_comma
 | `action` | `app_commands.Choice[str]` | `—` |
 | `channel` | `discord.TextChannel | None` | `None` |
 
-###### `memory_command`  (L162)
+###### `memory_command`  (L167)
 
 ```python
 @app_commands.command(name='memory', description='🧠 檢視或清除成員的長期記憶')
@@ -5554,7 +5993,7 @@ async def memory_command(self, interaction: discord.Interaction, action: app_com
 | `action` | `app_commands.Choice[str]` | `—` |
 | `user` | `discord.Member` | `—` |
 
-###### `admin_command`  (L205)
+###### `admin_command`  (L218)
 
 ```python
 @app_commands.command(name='admin', description='⚙️ 系統維護、指令同步與熱重載管理')
@@ -5570,23 +6009,51 @@ async def admin_command(self, interaction: discord.Interaction, action: app_comm
 | `action` | `app_commands.Choice[str]` | `—` |
 | `target` | `str | None` | `None` |
 
-###### `debug_command`  (L302)
+###### `debug_command`  (L319)
 
 ```python
-@app_commands.command(name='debug', description='🐞 系統除錯模式設定')
-@app_commands.describe(action='選擇欲調整的除錯功能', enable='True = 開啟卡片式回覆；False = 恢復一般文字對話')
-@app_commands.choices(action=[app_commands.Choice(name='📋 詳細卡片模式 (detail) — 顯示 CoT 思考過程、執行耗時、模型標籤', value='detail')])
-async def debug_command(self, interaction: discord.Interaction, action: app_commands.Choice[str], enable: bool) -> None
+@app_commands.command(name='debug', description='🐞 系統除錯模式設定、狀態檢視與完整 Prompt 注入檢視')
+@app_commands.describe(action='選擇欲調整或執行的除錯功能 (status: 狀態總覽 | detail: 步驟化思考欄 | live: 即時動態編輯思考 | tag: 模擬匯出 Prompt)', enable='True = 開啟功能；False = 關閉功能 (僅 action 為 detail 或 live 時有效)', context='輸入想模擬 @雪莉 的對話內容 (僅 action 為 tag 時有效)')
+@app_commands.choices(action=[app_commands.Choice(name='📊 檢視當前除錯與推演狀態 (status) — 一覽所有除錯開關、模型與推演配置', value='status'), app_commands.Choice(name='💡 步驟化思考推演欄 (detail) — 顯示步驟化思考、執行耗時、模型與工具調用', value='detail'), app_commands.Choice(name='⚡ 即時動態編輯思考 (live) — 原地動態編輯更新思考進度，0 等待', value='live'), app_commands.Choice(name='🏷️ 完整 Prompt 注入檢視 (tag) — 模擬 @雪莉 並產出完整注入的 System/User Prompt', value='tag')])
+async def debug_command(self, interaction: discord.Interaction, action: app_commands.Choice[str] | None = None, enable: bool | None = None, context: str | None = None) -> None
 ```
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `self` | `—` | `—` |
 | `interaction` | `discord.Interaction` | `—` |
-| `action` | `app_commands.Choice[str]` | `—` |
-| `enable` | `bool` | `—` |
+| `action` | `app_commands.Choice[str] | None` | `None` |
+| `enable` | `bool | None` | `None` |
+| `context` | `str | None` | `None` |
 
-###### `stats_command`  (L319)
+###### `_handle_debug_status`  (L353)
+
+```python
+async def _handle_debug_status(self, interaction: discord.Interaction) -> None
+```
+
+> 顯示除錯模式、思考推演與模型調度之即時配置狀態總覽。  \n>   \n>         Args:  \n>             interaction: Discord 互動事件實例。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `interaction` | `discord.Interaction` | `—` |
+
+###### `_handle_debug_tag`  (L426)
+
+```python
+async def _handle_debug_tag(self, interaction: discord.Interaction, context: str | None) -> None
+```
+
+> 模擬 @雪莉 流程，執行並匯出完整 Prompt、中間排程與推演報告。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `interaction` | `discord.Interaction` | `—` |
+| `context` | `str | None` | `—` |
+
+###### `stats_command`  (L636)
 
 ```python
 @app_commands.command(name='stats', description='顯示系統詳細統計儀表板 (公開)')
@@ -5785,31 +6252,31 @@ async def setup(bot: commands.Bot) -> None
 
 | 名稱 | 型別 | 值（摘要） | 行號 |
 |---|---|---|---|
-| `logger` | `—` | `logging.getLogger(__name__)` | L24 |
-| `_INTENT_CHOICES` | `—` | `[app_commands.Choice(name=f'{t.intent_name} ({t.llm_description[:40]}{('…' if le...` | L27 |
+| `logger` | `—` | `logging.getLogger(__name__)` | L21 |
+| `ADMIN_ONLY_INTENTS` | `set[str]` | `{'ADMIN', 'RELOAD', 'SYNC', 'SYSTEM_SYNC', 'MEMORY_CLEAR', 'VIBE_CLEAR', 'DEBUG'...` | L23 |
+| `_INTENT_CHOICES` | `—` | `[app_commands.Choice(name=f'{t.intent_name} ({t.llm_description[:35]}{('…' if le...` | L46 |
 
 
-#### Class `_FakeMessage` ← `object`  (L34)
+#### Class `_FakeMessage` ← `object`  (L56)
 
 > 模擬 discord.Message 的最小包裝，供 tool.execute() 使用。
-    將 reply() 委派給 interaction.followup.send()。
 
 ##### Methods
 
-###### `guild`  (L47)
+###### `guild`  (L66)
 
 ```python
 @property
 def guild(self) -> discord.Guild
 ```
 
-> 委派至 channel.guild，許多 tool 會存取此屬性。
+> 委派至 channel.guild。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `self` | `—` | `—` |
 
-###### `reply`  (L51)
+###### `reply`  (L70)
 
 ```python
 async def reply(self, content: str | None = None, embed: discord.Embed | None = None, mention_author: bool = False) -> Any
@@ -5824,13 +6291,13 @@ async def reply(self, content: str | None = None, embed: discord.Embed | None = 
 | `embed` | `discord.Embed | None` | `None` |
 | `mention_author` | `bool` | `False` |
 
-###### `add_reaction`  (L64)
+###### `add_reaction`  (L89)
 
 ```python
 async def add_reaction(self, emoji: str) -> None
 ```
 
-> 工具可能嘗試添加反應，靜默忽略（interaction 不支援）。
+> 忽略反應。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
@@ -5838,13 +6305,13 @@ async def add_reaction(self, emoji: str) -> None
 | `emoji` | `str` | `—` |
 
 
-#### Class `ExecutorCog` ← `commands.Cog`  (L69)
+#### Class `PromptTestModal` ← `discord.ui.Modal`  (L98)
 
-> 提供 /execute 強制意圖測試指令。
+> 彈出式 Prompt 測試表單。
 
 ##### Methods
 
-###### `__init__`  (L72)
+###### `__init__`  (L118)
 
 ```python
 def __init__(self, bot: commands.Bot) -> None
@@ -5855,23 +6322,173 @@ def __init__(self, bot: commands.Bot) -> None
 | `self` | `—` | `—` |
 | `bot` | `commands.Bot` | `—` |
 
-###### `execute_intent`  (L84)
+###### `on_submit`  (L122)
 
 ```python
-@app_commands.command(name='execute', description='強制指定意圖類型執行 Prompt（繞過分類器，測試用）')
-@app_commands.describe(intent='要強制執行的意圖類型', content='要傳入的 Prompt 內容')
-@app_commands.choices(intent=_INTENT_CHOICES)
-async def execute_intent(self, interaction: discord.Interaction, intent: str, content: str) -> None
+async def on_submit(self, interaction: discord.Interaction) -> None
 ```
 
-> 根據使用者選擇的 intent，直接調用對應 Tool 執行 content。  \n>         完全繞過 route_and_execute_tag() 的 LLM 分類流程。
+> 執行指定的 Prompt。
 
 | 參數 | 型別 | 預設值 |
 |---|---|---|
 | `self` | `—` | `—` |
 | `interaction` | `discord.Interaction` | `—` |
-| `intent` | `str` | `—` |
-| `content` | `str` | `—` |
+
+
+#### Class `CommandHubCategorySelect` ← `discord.ui.Select`  (L175)
+
+> 功能領域分類切換選單。
+
+##### Methods
+
+###### `__init__`  (L178)
+
+```python
+def __init__(self, parent_view: CommandHubView) -> None
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `parent_view` | `CommandHubView` | `—` |
+
+###### `callback`  (L243)
+
+```python
+async def callback(self, interaction: discord.Interaction) -> None
+```
+
+> 選取分類後切換主面板顯示。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `interaction` | `discord.Interaction` | `—` |
+
+
+#### Class `CommandHubView` ← `discord.ui.View`  (L251)
+
+> 雪莉全能互動測試中樞 View。
+
+##### Methods
+
+###### `__init__`  (L254)
+
+```python
+def __init__(self, bot: commands.Bot) -> None
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `bot` | `commands.Bot` | `—` |
+
+###### `build_preview_embed`  (L260)
+
+```python
+def build_preview_embed(self, category: str) -> discord.Embed
+```
+
+> 根據選定分類產生預覽說明 Embed。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `category` | `str` | `—` |
+
+###### `btn_open_module`  (L336)
+
+```python
+@discord.ui.button(label='🚀 開啟該模組主控台', style=discord.ButtonStyle.success, row=1)
+async def btn_open_module(self, interaction: discord.Interaction, button: discord.ui.Button) -> None
+```
+
+> 根據當前分類動態開啟對應模組主控台。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `interaction` | `discord.Interaction` | `—` |
+| `button` | `discord.ui.Button` | `—` |
+
+###### `btn_prompt_test`  (L408)
+
+```python
+@discord.ui.button(label='🧪 測試 Prompt 執行', style=discord.ButtonStyle.primary, row=1)
+async def btn_prompt_test(self, interaction: discord.Interaction, button: discord.ui.Button) -> None
+```
+
+> 彈出 Prompt 直通測試表單。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `interaction` | `discord.Interaction` | `—` |
+| `button` | `discord.ui.Button` | `—` |
+
+
+#### Class `ExecutorCog` ← `commands.Cog`  (L417)
+
+> 提供 /execute 互動測試中樞與強制意圖測試指令。
+
+##### Methods
+
+###### `__init__`  (L420)
+
+```python
+def __init__(self, bot: commands.Bot) -> None
+```
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `bot` | `commands.Bot` | `—` |
+
+###### `execute_intent`  (L432)
+
+```python
+@app_commands.command(name='execute', description='🎛️ 開啟雪莉全能互動測試中樞 (Command Hub Preview) 或強制執行 Prompt')
+@app_commands.describe(intent='可選：要直接強制執行的意圖類型 (若留空則開啟互動測試中樞)', content='可選：要傳入執行的 Prompt 內容')
+@app_commands.choices(intent=_INTENT_CHOICES)
+async def execute_intent(self, interaction: discord.Interaction, intent: Optional[str] = None, content: Optional[str] = None) -> None
+```
+
+> 若無傳入 intent 則開啟互動測試中樞；若有傳入則直接執行 Tool。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `self` | `—` | `—` |
+| `interaction` | `discord.Interaction` | `—` |
+| `intent` | `Optional[str]` | `None` |
+| `content` | `Optional[str]` | `None` |
+
+
+#### Functions
+
+##### `is_admin_user`  (L34)
+
+```python
+def is_admin_user(interaction: discord.Interaction) -> bool
+```
+
+> 判斷使用者是否具備管理員權限。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `interaction` | `discord.Interaction` | `—` |
+
+##### `setup`  (L495)
+
+```python
+async def setup(bot: commands.Bot) -> None
+```
+
+> 掛載 ExecutorCog。
+
+| 參數 | 型別 | 預設值 |
+|---|---|---|
+| `bot` | `commands.Bot` | `—` |
 
 
 ---

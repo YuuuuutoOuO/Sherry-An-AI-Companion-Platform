@@ -71,10 +71,27 @@ class SocialChat(commands.Cog):
                     name=f"interject-eval-{channel_id}",
                 )
 
-        # --- Tag 意圖路由 (Intent Router) ---
+        # --- Tag 意圖路由 (Intent Router via SherryCore) ---
         if self.bot.user in message.mentions:
             logger.info("social_chat: bot mentioned by %s in #%s.", message.author.display_name, message.channel.name)
-            await route_and_execute_tag(self.bot, message)
+            core: Any = getattr(self.bot, "core", None)
+            if core:
+                from core.contracts import SherryRequest
+                from handlers.social.observability import new_trace_id
+
+                req = SherryRequest(
+                    trace_id=new_trace_id("chat"),
+                    source_type="chat_message",
+                    user_id=message.author.id,
+                    user_name=message.author.display_name,
+                    guild_id=message.guild.id if message.guild else 0,
+                    channel_id=message.channel.id,
+                    raw_content=message.clean_content,
+                    message_ref=message,
+                )
+                await core.handle_request(req)
+            else:
+                await route_and_execute_tag(self.bot, message)
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:

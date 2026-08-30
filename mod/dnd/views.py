@@ -283,7 +283,7 @@ class DndStoryView(ui.View):
         char = characters.get(uid)
 
         if not char:
-            await interaction.response.send_message("❌ 你還沒有冒險者角色！請使用 `/dnd_join` 創角。", ephemeral=True)
+            await interaction.response.send_message("❌ 你還沒有冒險者角色！請使用 `/dnd` 面板創角。", ephemeral=True)
             return
 
         items = char.inventory.items
@@ -297,4 +297,278 @@ class DndStoryView(ui.View):
             description="\n".join(item_descs),
             color=discord.Color.orange(),
         )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class DndCreateModal(ui.Modal, title="⚔️ 創建 D&D 冒險者角色卡"):
+    """D&D 創角彈出表單。"""
+
+    name_input: Any = ui.TextInput(
+        label="冒險者名字",
+        placeholder="例如 亞瑟、莉莉絲、格羅姆",
+        min_length=1,
+        max_length=20,
+        required=True,
+    )
+    race_input: Any = ui.TextInput(
+        label="種族 (人類/精靈/矮人/半身人/半獸人)",
+        placeholder="人類 (+全屬性) / 精靈 (+敏捷) / 矮人 (+體質) / 半獸人 (+力量)",
+        default="人類",
+        min_length=2,
+        max_length=20,
+        required=True,
+    )
+    class_input: Any = ui.TextInput(
+        label="職業 (戰士/法師/遊俠/盜賊/牧師)",
+        placeholder="戰士 (近戰) / 法師 (法術) / 遊俠 (遠程) / 盜賊 (敏捷) / 牧師 (治療)",
+        default="戰士",
+        min_length=2,
+        max_length=20,
+        required=True,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        """創角表單送出。"""
+        name = str(self.name_input.value).strip()
+        race = str(self.race_input.value).strip()
+        char_class = str(self.class_input.value).strip()
+
+        char = create_character(
+            user_id=interaction.user.id,
+            name=name,
+            race=race,
+            character_class=char_class,
+        )
+
+        embed = discord.Embed(
+            title=f"⚔️ 冒險者誕生：{char.name}",
+            description=f"歡迎來到艾瑟蘭大陸！你成功創建了 **{char.race} {char.character_class}**。",
+            color=discord.Color.gold(),
+        )
+        embed.add_field(name="❤️ 生命值 (HP)", value=f"{char.hp_current} / {char.hp_max}", inline=True)
+        embed.add_field(name="🛡️ 防禦等級 (AC)", value=f"{char.ac}", inline=True)
+        embed.add_field(name="⭐ 等級", value=f"Lv.{char.level} (XP: {char.experience})", inline=True)
+        stats_str = (
+            f"💪 力量: {char.stats.strength} (+{char.stats.modifier('strength')})\n"
+            f"🏃 敏捷: {char.stats.dexterity} (+{char.stats.modifier('dexterity')})\n"
+            f"🛡️ 體質: {char.stats.constitution} (+{char.stats.modifier('constitution')})\n"
+            f"🧠 智力: {char.stats.intelligence} (+{char.stats.modifier('intelligence')})\n"
+            f"👁️ 感知: {char.stats.wisdom} (+{char.stats.modifier('wisdom')})\n"
+            f"✨ 魅力: {char.stats.charisma} (+{char.stats.modifier('charisma')})"
+        )
+        embed.add_field(name="📊 核心屬性", value=stats_str, inline=False)
+        embed.set_footer(text="提示：可於 /dnd 面板中點擊 [✍️ 冒險行動] 向地下城主提出行動！")
+
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+
+class DndRollModal(ui.Modal, title="🎲 進行 D&D 擲骰判定"):
+    """D&D 擲骰彈出表單。"""
+
+    dice_input: Any = ui.TextInput(
+        label="骰子規格 (例如 d20, 2d6, 1d8)",
+        default="d20",
+        min_length=2,
+        max_length=15,
+        required=True,
+    )
+    modifier_input: Any = ui.TextInput(
+        label="修正數值 (+/-數字)",
+        default="0",
+        min_length=1,
+        max_length=6,
+        required=False,
+    )
+    mode_input: Any = ui.TextInput(
+        label="判定模式 (normal / advantage / disadvantage)",
+        placeholder="normal (一般) / advantage (優勢) / disadvantage (劣勢)",
+        default="normal",
+        min_length=4,
+        max_length=20,
+        required=False,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        """擲骰計算。"""
+        dice = self.dice_input.value.strip().lower()
+        mode_val = self.mode_input.value.strip().lower()
+        try:
+            mod = int(self.modifier_input.value.strip())
+        except ValueError:
+            mod = 0
+
+        match = re.match(r"^(\d*)d(\d+)$", dice)
+        if not match:
+            await interaction.response.send_message("❌ 擲骰格式錯誤！請使用如 `d20` 或 `2d6` 格式。", ephemeral=True)
+            return
+
+        count = int(match.group(1)) if match.group(1) else 1
+        sides = int(match.group(2))
+
+        from mod.dnd.dice import advantage_roll, disadvantage_roll, roll_dice
+        if "adv" in mode_val and "dis" not in mode_val:
+            d1, d2, chosen = advantage_roll(sides)
+            total = chosen + mod
+            desc = f"🎲 優勢擲骰 [{dice}]: 第一次 `{d1}`，第二次 `{d2}` → 取高 `{chosen}` + 修正 `{mod:+d}` = **{total}**"
+        elif "dis" in mode_val:
+            d1, d2, chosen = disadvantage_roll(sides)
+            total = chosen + mod
+            desc = f"🎲 劣勢擲骰 [{dice}]: 第一次 `{d1}`，第二次 `{d2}` → 取低 `{chosen}` + 修正 `{mod:+d}` = **{total}**"
+        else:
+            rolls = roll_dice(count, sides)
+            raw_sum = sum(rolls)
+            total = raw_sum + mod
+            rolls_str = ", ".join(str(r) for r in rolls)
+            desc = f"🎲 擲骰 [{count}d{sides}]: ({rolls_str}) = `{raw_sum}` + 修正 `{mod:+d}` = **{total}**"
+
+        embed = discord.Embed(
+            title="🎲 擲骰結果",
+            description=desc,
+            color=discord.Color.blue(),
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=False)
+
+
+class DndMainDashboardView(ui.View):
+    """D&D 跑團冒險主控面板 View。"""
+
+    def __init__(self, bot: discord.Client) -> None:
+        super().__init__(timeout=300)
+        self.bot = bot
+
+    def build_dashboard_embed(self, user_id: int) -> discord.Embed:
+        """建立 D&D 主控面板 Embed。"""
+        from mod.dnd.storage import load_world_setting, save_world_state
+        setting = load_world_setting()
+        world = load_world_state()
+        characters = load_characters()
+        char = characters.get(user_id)
+
+        embed = discord.Embed(
+            title=f"🐉 D&D 冒險中樞：{setting.get('world_name', '艾瑟蘭大陸')}",
+            description=f"紀元：**{setting.get('era', '裂隙紀元')}** | 當前時間：`{world.game_time.to_string()}`",
+            color=discord.Color.dark_red(),
+        )
+
+        if char:
+            loc = world.locations.get(char.location_id)
+            loc_name = loc.name if loc else char.location_id
+            embed.add_field(
+                name=f"👤 冒險者：{char.name} (Lv.{char.level} {char.character_class})",
+                value=(
+                    f"• **生命值**: ❤️ {char.hp_current}/{char.hp_max} | **防禦**: 🛡️ {char.ac}\n"
+                    f"• **當前位置**: 📍 {loc_name} | **金幣**: 🪙 {char.inventory.gold}"
+                ),
+                inline=False,
+            )
+        else:
+            embed.add_field(
+                name="👤 尚未創建角色",
+                value="點擊下方 **[ 👤 創建角色 ]** 按鈕建立你的專屬冒險者！",
+                inline=False,
+            )
+
+        embed.set_footer(text="點擊按鈕可直接行動、擲骰、檢視背包或切換跑團對話模式！")
+        return embed
+
+    @ui.button(label="✍️ 冒險行動", style=discord.ButtonStyle.primary, row=0)
+    async def btn_action(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        """開啟行動輸入彈窗。"""
+        await interaction.response.send_modal(CustomActionModal(self.bot))
+
+    @ui.button(label="🎲 擲骰判定", style=discord.ButtonStyle.primary, row=0)
+    async def btn_roll(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        """開啟擲骰彈窗。"""
+        await interaction.response.send_modal(DndRollModal())
+
+    @ui.button(label="👤 創建角色", style=discord.ButtonStyle.success, row=0)
+    async def btn_create(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        """開啟創角彈窗。"""
+        await interaction.response.send_modal(DndCreateModal())
+
+    @ui.button(label="📊 角色卡", style=discord.ButtonStyle.secondary, row=1)
+    async def btn_status(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        """顯示角色卡。"""
+        characters = load_characters()
+        char = characters.get(interaction.user.id)
+        if not char:
+            await interaction.response.send_message("❌ 你還沒有創建角色！請先點擊 [ 👤 創建角色 ] 創角。", ephemeral=True)
+            return
+
+        world = load_world_state()
+        loc_name = world.locations.get(char.location_id, None)
+        loc_display = loc_name.name if loc_name else char.location_id
+
+        embed = discord.Embed(
+            title=f"📜 角色卡：{char.name}",
+            description=f"**{char.race} {char.character_class}** | 當前位置：📍 {loc_display}",
+            color=discord.Color.green(),
+        )
+        embed.add_field(name="❤️ 生命值 (HP)", value=f"{char.hp_current} / {char.hp_max}", inline=True)
+        embed.add_field(name="🛡️ 防禦等級 (AC)", value=f"{char.ac}", inline=True)
+        embed.add_field(name="⭐ 等級 / 經驗", value=f"Lv.{char.level} ({char.experience} XP)", inline=True)
+
+        stats_str = (
+            f"💪 力量: {char.stats.strength} (+{char.stats.modifier('strength')})\n"
+            f"🏃 敏捷: {char.stats.dexterity} (+{char.stats.modifier('dexterity')})\n"
+            f"🛡️ 體質: {char.stats.constitution} (+{char.stats.modifier('constitution')})\n"
+            f"🧠 智力: {char.stats.intelligence} (+{char.stats.modifier('intelligence')})\n"
+            f"👁️ 感知: {char.stats.wisdom} (+{char.stats.modifier('wisdom')})\n"
+            f"✨ 魅力: {char.stats.charisma} (+{char.stats.modifier('charisma')})"
+        )
+        embed.add_field(name="📊 核心屬性", value=stats_str, inline=False)
+        embed.add_field(name="💰 錢包", value=f"🪙 {char.inventory.gold} 金幣 | 🥈 {char.inventory.silver} 銀幣", inline=False)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @ui.button(label="🎒 背包清單", style=discord.ButtonStyle.secondary, row=1)
+    async def btn_inventory(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        """查看背包。"""
+        characters = load_characters()
+        char = characters.get(interaction.user.id)
+        if not char:
+            await interaction.response.send_message("❌ 你還沒有創建角色！", ephemeral=True)
+            return
+
+        embed = discord.Embed(title=f"🎒 {char.name} 的冒險背包", color=discord.Color.orange())
+        if not char.inventory.items:
+            embed.description = "背包空空如也。"
+        else:
+            item_lines = [f"• **{it.name}** ({it.item_type})" + (" [⚔️ 裝備中]" if it.equipped else "") for it in char.inventory.items]
+            embed.description = "\n".join(item_lines)
+        embed.set_footer(text=f"金幣: {char.inventory.gold} | 銀幣: {char.inventory.silver}")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @ui.button(label="🏰 切換 Session", style=discord.ButtonStyle.secondary, row=1)
+    async def btn_toggle_session(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        """切換頻道跑團模式。"""
+        from mod.dnd.storage import save_world_state
+        world = load_world_state()
+        cid = interaction.channel_id
+        if not cid:
+            await interaction.response.send_message("❌ 無法取得頻道 ID。", ephemeral=True)
+            return
+
+        if cid in world.active_channels:
+            world.active_channels.remove(cid)
+            save_world_state(world)
+            await interaction.response.send_message("🕊️ 已關閉本頻道的 D&D 跑團模式（恢復一般聊天）。", ephemeral=True)
+        else:
+            world.active_channels.append(cid)
+            save_world_state(world)
+            await interaction.response.send_message("🏰 已開啟本頻道的 D&D 跑團模式！現在本頻道的發言皆會由 DM 進行判定。", ephemeral=True)
+
+    @ui.button(label="🌍 世界情報", style=discord.ButtonStyle.secondary, row=1)
+    async def btn_world(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        """查看世界狀態。"""
+        from mod.dnd.storage import load_world_setting
+        setting = load_world_setting()
+        world = load_world_state()
+        embed = discord.Embed(
+            title=f"🌍 世界狀態：{setting.get('world_name', '艾瑟蘭大陸')}",
+            description=f"紀元：**{setting.get('era', '裂隙紀元')}**",
+            color=discord.Color.teal(),
+        )
+        embed.add_field(name="⏰ 遊戲時間", value=world.game_time.to_string(), inline=False)
+        embed.add_field(name="⏳ 累計 Tick", value=f"{world.current_tick} ticks", inline=True)
+        embed.add_field(name="🏰 啟用頻道數", value=f"{len(world.active_channels)} 個", inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)

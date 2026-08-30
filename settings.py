@@ -161,8 +161,8 @@ OLLAMA_TIMEOUT: int = int(os.getenv("OLLAMA_TIMEOUT", str(LLM_TIMEOUT)))
 # ---------------------------------------------------------------------------
 # 代理人調度與多工架構設定 (Agent Dispatcher Settings)
 # ---------------------------------------------------------------------------
-# 任務調度模式：PARALLEL (高效能單次並行調度，預設) | REACT (經典多步驟 ReAct 迴圈) | CLASSIC (傳統單意圖快路徑)
-AGENT_DISPATCH_MODE: str = os.getenv("AGENT_DISPATCH_MODE", "PARALLEL").upper()
+# 任務調度模式：INTEGRATED (單階段整合自主調度，預設推薦) | PARALLEL (雙階段並行) | REACT (多步驟 ReAct)
+AGENT_DISPATCH_MODE: str = os.getenv("AGENT_DISPATCH_MODE", "INTEGRATED").upper()
 
 # 行為自適應對話抑制開關：若為 True，當發動的工具全為 DIRECT_UI (如點歌/搜圖/畫圖) 且使用者無聊天需求時，動作完成即刻結束，不產生多餘廢話文字
 ACTION_EARLY_TERMINATION_ENABLED: bool = os.getenv("ACTION_EARLY_TERMINATION_ENABLED", "True").lower() in ("true", "1", "yes")
@@ -361,6 +361,9 @@ MICRO_COT_ENABLED: bool = True
 # Discord 對話卡片式偵錯模式（顯示 Intent、CoT 思考過程、耗時毫秒、模型名稱等，與 WebUI 對齊）
 DEBUG_DETAIL: bool = False
 
+# 即時動態編輯思考推演流程（以 message.edit 原地背景更新思考與執行進度）
+LIVE_THINKING_EDIT: bool = True
+
 
 # ---------------------------------------------------------------------------
 # Daily Chat Log + Nightly Memory Digest
@@ -411,6 +414,8 @@ DANBOORU_POSTS_API_URL: str = "https://danbooru.donmai.us/posts.json"
 WORLD_LOG_DIR: Path = DATA_DIR / "world_history"
 WORLD_MEMORY_PATH: Path = DATA_DIR / "world_memory.json"
 BOT_LOG_PATH: Path = DATA_DIR / "bot.log"
+WEB_UI_LOG_PATH: Path = DATA_DIR / "web_ui.log"
+
 
 # ---------------------------------------------------------------------------
 # Memory System & Digest Thresholds
@@ -457,13 +462,13 @@ STOCK_REPLY_TIMEOUT: float = 60.0
 SCHEDULE_PARSE_TIMEOUT: float = 20.0
 DRAW_RAW_TIMEOUT: float = 30.0
 DRAW_EXPAND_TIMEOUT: float = 10.0
-COMPOUND_PARSER_TIMEOUT: float = 10.0
 INTERJECT_SCORE_TIMEOUT: float = 30.0
 INTERJECT_REPLY_TIMEOUT: float = 60.0
 YOUTUBE_EXPLORER_TIMEOUT: float = 20.0
 NIGHTLY_DIGEST_TIMEOUT: float = 120.0
 HEALTH_CHECK_TIMEOUT: float = 5.0
 DISCORD_UI_VIEW_TIMEOUT: int = 300
+ROAST_REPLY_TIMEOUT: float = float(os.getenv("ROAST_REPLY_TIMEOUT", "30.0"))
 
 
 # ---------------------------------------------------------------------------

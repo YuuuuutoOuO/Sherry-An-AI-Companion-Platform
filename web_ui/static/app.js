@@ -395,25 +395,62 @@ function renderLogs(entries) {
 function buildLogHTML(log, event) {
   const ts = log.ts || log.timestamp || '—';
   const badgeClass = {
-    chat_reply:        'badge-chat',
-    react_agent_done:  'badge-chat',
-    interject:         'badge-interject',
-    error:             'badge-error',
+    chat_reply:            'badge-chat',
+    react_agent_done:      'badge-chat',
+    command_exec:          'badge-command',
+    component_interaction: 'badge-command',
+    modal_submit:          'badge-command',
+    tool_exec:             'badge-tool',
+    inference_done:        'badge-inference',
+    interject:             'badge-interject',
+    error:                 'badge-error',
   }[event] || 'badge-default';
+
   const badgeLabel = {
-    chat_reply:        log.intent || 'CHAT',
-    react_agent_done:  log.intent || 'REACT',
-    interject:         'INTERJECT',
-    error:             'ERROR',
+    chat_reply:            log.intent || 'CHAT',
+    react_agent_done:      log.intent || 'REACT',
+    command_exec:          log.intent || 'COMMAND',
+    component_interaction: log.intent || 'COMPONENT',
+    modal_submit:          log.intent || 'MODAL',
+    tool_exec:             log.intent || 'TOOL',
+    inference_done:        log.intent || 'LLM',
+    interject:             'INTERJECT',
+    error:                 'ERROR',
   }[event] || event.toUpperCase();
 
   let body = '';
-  if (event === 'chat_reply' || event === 'react_agent_done') {
+  if (event === 'command_exec' || event === 'component_interaction' || event === 'modal_submit') {
+    const u = log.user ? `👤 ${escHtml(log.user)}` : '';
+    const ch = log.channel_id ? ` • 💬 #${log.channel_id}` : '';
+    const lat = log.latency_ms ? ` • ⚡ ${log.latency_ms} ms` : '';
+    const tid = log.trace_id ? ` • 🔗 <code>${escHtml(log.trace_id)}</code>` : '';
+    body += `<div class="log-user-text">${u}${ch}${lat}${tid}</div>`;
+    if (log.raw_input) body += `<div class="log-reply-text" style="color: #38bdf8; font-family: monospace;">⌨️ ${escHtml(log.raw_input)}</div>`;
+    if (log.extra?.options && Object.keys(log.extra.options).length > 0) {
+      body += `<div class="log-intent">⚙️ 參數: ${escHtml(JSON.stringify(log.extra.options))}</div>`;
+    }
+  } else if (event === 'tool_exec') {
+    const u = log.user ? `👤 ${escHtml(log.user)}` : '';
+    const lat = log.latency_ms ? ` • ⏱️ 耗時 ${log.latency_ms} ms` : '';
+    const tid = log.trace_id ? ` • 🔗 <code>${escHtml(log.trace_id)}</code>` : '';
+    body += `<div class="log-user-text">${u}${lat}${tid}</div>`;
+    if (log.raw_input) body += `<div class="log-intent">📥 參數: ${escHtml(log.raw_input)}</div>`;
+    const obs = log.extra?.observation || log.reply_preview || '';
+    if (obs) body += `<div class="log-reply-text" style="color: #fde047;">📤 回傳: ${escHtml(obs)}</div>`;
+  } else if (event === 'inference_done') {
+    const lat = log.latency_ms ? ` • ⚡ 推論 ${log.latency_ms} ms` : '';
+    const qLat = log.extra?.queue_latency_ms ? ` (排隊 ${log.extra.queue_latency_ms} ms)` : '';
+    const tid = log.trace_id ? ` • 🔗 <code>${escHtml(log.trace_id)}</code>` : '';
+    body += `<div class="log-user-text">🤖 ${escHtml(log.model_used || 'LLM')}${lat}${qLat}${tid}</div>`;
+    if (log.raw_input) body += `<div class="log-intent">📝 Prompt: ${escHtml(log.raw_input)}</div>`;
+    if (log.reply_preview) body += `<div class="log-reply-text">✨ 生成: ${escHtml(log.reply_preview)}</div>`;
+  } else if (event === 'chat_reply' || event === 'react_agent_done') {
     body += `<div class="log-user-text">👤 ${escHtml(log.raw_input || '')}</div>`;
     const latStr = log.latency_ms ? ` • ⚡ 耗時 ${log.latency_ms} ms` : '';
     const modelStr = log.model_used ? ` • 🤖 ${escHtml(log.model_used)}` : '';
     const toolsStr = (log.tools_invoked && log.tools_invoked.length) ? ` • 🛠️ [${log.tools_invoked.join(', ')}]` : '';
-    if (log.intent) body += `<div class="log-intent">Intent: ${escHtml(log.intent)}${latStr}${modelStr}${toolsStr}</div>`;
+    const tidStr = log.trace_id ? ` • 🔗 <code>${escHtml(log.trace_id)}</code>` : '';
+    if (log.intent) body += `<div class="log-intent">Intent: ${escHtml(log.intent)}${latStr}${modelStr}${toolsStr}${tidStr}</div>`;
     if (log.reply_preview) body += `<div class="log-reply-text">🤖 ${escHtml(log.reply_preview)}</div>`;
     if (log.cot_thought) {
       const formattedThought = escHtml(log.cot_thought).replace(/\n/g, '<br>');

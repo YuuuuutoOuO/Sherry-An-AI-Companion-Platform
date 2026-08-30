@@ -58,12 +58,12 @@ SETTINGS_META: dict[str, dict] = {
     },
     "AGENT_DISPATCH_MODE": {
         "label": "代理人調度模式 (Agent Dispatch Mode)",
-        "description": "選擇訊息解析與工具調度核心：PARALLEL（高效能單次推論並行調度，秒級響應，推薦）、REACT（多步驟思考迭代迴圈）、CLASSIC（傳統單意圖快路徑）。",
+        "description": "選擇訊息解析與工具調度核心：INTEGRATED（單階段整合自主調度，日常閒聊秒回，推薦）、PARALLEL（雙階段並行調度）、REACT（多步驟思考迭代迴圈）。",
         "type": "select",
         "options": [
-            {"value": "PARALLEL", "label": "🚀 高效能並行調度 (Parallel) - 推薦"},
+            {"value": "INTEGRATED", "label": "⚡ 單階段整合自主調度 (Integrated) - 推薦"},
+            {"value": "PARALLEL", "label": "🚀 雙階段高效能並行 (Parallel)"},
             {"value": "REACT", "label": "🔄 經典多步驟 ReAct (Sequential)"},
-            {"value": "CLASSIC", "label": "⚡ 傳統單意圖快路徑 (Classic)"},
         ],
         "category": "模型設定",
     },
@@ -944,14 +944,6 @@ SETTINGS_META: dict[str, dict] = {
         "min": 1,
         "max": 30,
         "step": 0.5,
-        "category": "系統與網路",
-    },
-    "COMPOUND_PARSER_TIMEOUT": {
-        "label": "複合意圖解析逾時（秒）",
-        "description": "解析使用者複雜多句對話語境意圖的上限秒數。",
-        "type": "int",
-        "min": 3,
-        "max": 60,
         "category": "系統與網路",
     },
     "DEFAULT_HTTP_TIMEOUT": {

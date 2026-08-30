@@ -33,7 +33,7 @@ from mod.dnd.storage import (
 )
 from mod.dnd.world_sim import WorldSimEngine
 
-from mod.dnd.views import DndStoryView
+from mod.dnd.views import DndStoryView, DndMainDashboardView
 
 logger = logging.getLogger(__name__)
 
@@ -263,11 +263,23 @@ class DndCog(commands.Cog):
             model=config.DEFAULT_MODEL or getattr(settings, "PRIMARY_MODEL", "lms:gemma-4"),
             task_id=f"dnd-session-{message.author.id}-{int(message.created_at.timestamp())}",
         )
-        await brain.enqueue_task(task)
+    @app_commands.command(name="dnd", description="🐉 開啟 D&D 跑團冒險全功能互動主控面板")
+    async def dnd_dashboard(self, interaction: discord.Interaction) -> None:
+        """開啟全合一 D&D 跑團主控面板。"""
+        view = DndMainDashboardView(self.bot)
+        embed = view.build_dashboard_embed(interaction.user.id)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     # ---------------------------------------------------------------------------
-    # /dnd Subcommand Group
+    # /dnd Subcommand Group (相容舊指令)
     # ---------------------------------------------------------------------------
+
+    @dnd_group.command(name="panel", description="🐉 開啟 D&D 跑團冒險主控面板")
+    async def dnd_panel_subcommand(self, interaction: discord.Interaction) -> None:
+        """開啟 D&D 跑團主控面板。"""
+        view = DndMainDashboardView(self.bot)
+        embed = view.build_dashboard_embed(interaction.user.id)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
     @dnd_group.command(name="join", description="🎲 創建你的 D&D 冒險者角色卡")
     @app_commands.choices(

@@ -82,38 +82,63 @@ class LivestreamCog(commands.Cog):  # type: ignore[misc]
             return []
 
     @app_commands.command(  # type: ignore[misc]
-        name="play_video",
-        description="播放本機影片或 YouTube 至直播螢幕 UI（/play_video [action] [video_name] [episode]）",
+        name="stream",
+        description="🎬 雪莉直播螢幕控制中樞（播放本機影片/YouTube、停止播放、檢視狀態）",
     )
     @app_commands.describe(  # type: ignore[misc]
-        action="播放來源類型 (file: 本機影片庫, youtube: YouTube 串流)",
-        video_name="影片名稱 (本機檔案將自動產生選單，YouTube 則輸入網址)",
-        episode="開始播放集數 (數字，預設第 1 集，僅本機影片適用)",
+        action="操作類型 (play: 播放影片/YouTube, stop: 停止播放, status: 查看狀態與清單)",
+        video_name="影片名稱 (本機影片自動補全，YouTube 則貼上網址)",
+        episode="開始播放集數 (僅本機影片適用，預設第 1 集)",
     )
     @app_commands.choices(  # type: ignore[misc]
         action=[
-            app_commands.Choice(name="本機影片 (file)", value="file"),
-            app_commands.Choice(name="YouTube 串流 (youtube)", value="youtube"),
+            app_commands.Choice(name="▶️ 播放影片 (play)", value="play"),
+            app_commands.Choice(name="⏹️ 停止播放 (stop)", value="stop"),
+            app_commands.Choice(name="📊 檢視狀態與清單 (status)", value="status"),
         ]
     )
     @app_commands.autocomplete(video_name=video_name_autocomplete)  # type: ignore[misc]
-    async def play_video(
+    async def stream_command(
+        self,
+        interaction: discord.Interaction,
+        action: Optional[app_commands.Choice[str]] = None,
+        video_name: Optional[str] = None,
+        episode: Optional[int] = 1,
+    ) -> None:
+        """Unified slash command handler for /stream."""
+        if action is None:
+            from mod.livestream.ui import StreamControlView
+            view = StreamControlView(self)
+            embed = view.build_dashboard_embed()
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            return
+
+        act = action.value
+        if act == "stop":
+            await self._handle_stop(interaction)
+        elif act == "status":
+            await self._handle_status(interaction)
+        else:
+            if not video_name:
+                await interaction.response.send_message("❌ 請提供影片名稱或 YouTube 網址！", ephemeral=True)
+                return
+            await self._handle_play(
+                interaction=interaction,
+                action=app_commands.Choice(name="play", value="file"),
+                video_name=video_name,
+                episode=episode,
+            )
+
+    async def _handle_play(
         self,
         interaction: discord.Interaction,
         action: app_commands.Choice[str],
         video_name: str,
         episode: Optional[int] = 1,
     ) -> None:
-        """Slash command handler for /play_video.
-
-        Args:
-            interaction: Discord interaction context.
-            action: Source action choice ('file' or 'youtube').
-            video_name: Selected series name or YouTube URL.
-            episode: 1-based start episode index (defaults to 1).
-        """
+        """Core play logic."""
         logger.info(
-            "Received /play_video command from user %s (%s) [action=%s, video_name=%s, episode=%s]",
+            "Received play video request from user %s (%s) [action=%s, video_name=%s, episode=%s]",
             interaction.user.name,
             interaction.user.id,
             action.value,
@@ -183,10 +208,10 @@ class LivestreamCog(commands.Cog):  # type: ignore[misc]
             embed.set_footer(text="提示：請用另一個 DC 帳號開啟直播螢幕視窗並進行螢幕分享。")
 
             await interaction.followup.send(embed=embed)
-            logger.info("Successfully started playback for /play_video by %s: %s", requester_name, clean_input)
+            logger.info("Successfully started playback for livestream by %s: %s", requester_name, clean_input)
 
         except ValueError as val_err:
-            logger.warning("Validation error in /play_video: %s", val_err)
+            logger.warning("Validation error in livestream play: %s", val_err)
             embed_err = discord.Embed(
                 title="⚠️ 播放參數錯誤",
                 description=str(val_err),
@@ -195,7 +220,7 @@ class LivestreamCog(commands.Cog):  # type: ignore[misc]
             await interaction.followup.send(embed=embed_err)
 
         except Exception as exc:
-            logger.error("Unexpected error in /play_video: %s", exc, exc_info=True)
+            logger.error("Unexpected error in livestream play: %s", exc, exc_info=True)
             embed_err = discord.Embed(
                 title="❌ 播放失敗",
                 description="播放處理過程中發生未預期的錯誤，請檢查名稱或稍後再試。",
@@ -203,17 +228,9 @@ class LivestreamCog(commands.Cog):  # type: ignore[misc]
             )
             await interaction.followup.send(embed=embed_err)
 
-    @app_commands.command(  # type: ignore[misc]
-        name="stream_stop",
-        description="停止直播螢幕影片播放並切換回雪莉待機畫面",
-    )
-    async def stream_stop(self, interaction: discord.Interaction) -> None:
-        """Slash command handler for /stream_stop.
-
-        Args:
-            interaction: Discord interaction context.
-        """
-        logger.info("Received /stream_stop command from user %s", interaction.user.name)
+    async def _handle_stop(self, interaction: discord.Interaction) -> None:
+        """Core stop logic."""
+        logger.info("Received livestream stop request from user %s", interaction.user.name)
         await interaction.response.defer(thinking=True)
 
         try:
@@ -225,19 +242,11 @@ class LivestreamCog(commands.Cog):  # type: ignore[misc]
             )
             await interaction.followup.send(embed=embed)
         except Exception as exc:
-            logger.error("Error in /stream_stop: %s", exc, exc_info=True)
+            logger.error("Error in livestream stop: %s", exc, exc_info=True)
             await interaction.followup.send(content="❌ 停止直播畫面時發生錯誤。")
 
-    @app_commands.command(  # type: ignore[misc]
-        name="stream_status",
-        description="查看雪莉直播螢幕目前的播放狀態與本機可用影片 (Port 8764)",
-    )
-    async def stream_status(self, interaction: discord.Interaction) -> None:
-        """Slash command handler for /stream_status.
-
-        Args:
-            interaction: Discord interaction context.
-        """
+    async def _handle_status(self, interaction: discord.Interaction) -> None:
+        """Core status logic."""
         state = self.service.get_current_state()
         stream_url = self._get_stream_ui_url()
         available_series = self.service.get_available_series()
@@ -275,6 +284,31 @@ class LivestreamCog(commands.Cog):  # type: ignore[misc]
         embed.set_footer(text=f"專屬串流 UI 位址: {stream_url}")
         await interaction.response.send_message(embed=embed)
 
+    @app_commands.command(  # type: ignore[misc]
+        name="play_video",
+        description="播放本機影片或 YouTube 至直播螢幕 UI（/play_video [action] [video_name] [episode]）",
+    )
+    @app_commands.describe(  # type: ignore[misc]
+        action="播放來源類型 (file: 本機影片庫, youtube: YouTube 串流)",
+        video_name="影片名稱 (本機檔案將自動產生選單，YouTube 則輸入網址)",
+        episode="開始播放集數 (數字，預設第 1 集，僅本機影片適用)",
+    )
+    @app_commands.choices(  # type: ignore[misc]
+        action=[
+            app_commands.Choice(name="本機影片 (file)", value="file"),
+            app_commands.Choice(name="YouTube 串流 (youtube)", value="youtube"),
+        ]
+    )
+    @app_commands.autocomplete(video_name=video_name_autocomplete)  # type: ignore[misc]
+    async def play_video(
+        self,
+        interaction: discord.Interaction,
+        action: app_commands.Choice[str],
+        video_name: str,
+        episode: Optional[int] = 1,
+    ) -> None:
+        """Slash command handler for /play_video."""
+        await self._handle_play(interaction, action, video_name, episode)
 
 async def setup(bot: commands.Bot) -> None:
     """Extension setup entrypoint called by bot.load_extension.

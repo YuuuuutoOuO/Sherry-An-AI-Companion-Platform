@@ -283,9 +283,9 @@ class MarketCog(commands.Cog, name="Market & PTCG"):
     # =========================================================================
     # 股票指令 — /market 整合指令 (Choice 選單模式)
     # =========================================================================
-    @app_commands.command(name="market", description="📈 股票追蹤、清單管理與即時技術指標晨報")
+    @app_commands.command(name="market", description="📈 股票追蹤、清單管理與即時技術指標晨報（無參數開啟主控台）")
     @app_commands.describe(
-        action="選擇執行的動作",
+        action="選擇執行的動作（可選，留空則開啟股票互動主控台）",
         list_type="清單類型 (僅在 add / remove 時需要)",
         ticker="股票代號 (僅在 add / remove 時需要，例如 NVDA 或 2330.TW)",
     )
@@ -303,10 +303,17 @@ class MarketCog(commands.Cog, name="Market & PTCG"):
     async def slash_market(
         self,
         interaction: discord.Interaction,
-        action: app_commands.Choice[str],
+        action: app_commands.Choice[str] | None = None,
         list_type: app_commands.Choice[str] | None = None,
         ticker: str | None = None,
     ) -> None:
+        if action is None:
+            from mod.market_plugin.ui import MarketControlView
+            view = MarketControlView(self)
+            embed = view.build_dashboard_embed()
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            return
+
         act = action.value
         if act == "raw":
             await interaction.response.send_message("📊 正在抓取最新技術指標，請稍候...", ephemeral=False)
@@ -420,9 +427,9 @@ class MarketCog(commands.Cog, name="Market & PTCG"):
     # =========================================================================
     # PTCG 卡片指令 — /card 整合指令 (Choice 選單模式)
     # =========================================================================
-    @app_commands.command(name="card", description="🃏 PTCG 卡片價格追蹤與即時行情")
+    @app_commands.command(name="card", description="🃏 PTCG 卡片價格追蹤與即時行情（無參數開啟主控台）")
     @app_commands.describe(
-        action="選擇執行的動作",
+        action="選擇執行的動作（可選，留空則開啟卡價互動主控台）",
         name="卡片自訂名稱 (僅在 add / remove 時需要)",
         url="SNKRDUNK 卡片頁面網址 (僅在 add 時需要)",
     )
@@ -435,10 +442,17 @@ class MarketCog(commands.Cog, name="Market & PTCG"):
     async def slash_card(
         self,
         interaction: discord.Interaction,
-        action: app_commands.Choice[str],
+        action: app_commands.Choice[str] | None = None,
         name: str | None = None,
         url: str | None = None,
     ) -> None:
+        if action is None:
+            from mod.market_plugin.ui import CardControlView
+            view = CardControlView(self)
+            embed = view.build_dashboard_embed()
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            return
+
         act = action.value
         if act == "add":
             if not name or not url:
