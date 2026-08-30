@@ -144,10 +144,11 @@ async def _handle_events_stream() -> Response | tuple[Response, int] | Any:
             while True:
                 event = await queue.get()
                 yield f"data: {json.dumps(_serialize_event(event), ensure_ascii=False)}\n\n"
-        except asyncio.CancelledError:
-            raise
+        except (asyncio.CancelledError, GeneratorExit):
+            pass
         finally:
             await broadcaster.unsubscribe(queue)
+
 
     response = Response(
         event_generator(),

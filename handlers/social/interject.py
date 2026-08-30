@@ -9,7 +9,7 @@ import discord
 from discord.ext import commands
 
 import settings
-from handlers.bot_brain import BotBrain, InferenceTask
+from handlers.bot_brain.models import InferenceTask
 from handlers.social.utils import fetch_recent_script, append_thinking_log, simulate_typing_and_send_to_channel, SAFETY_FOOTER
 
 # ✨ 掛載雪莉的全自動換裝魔法庫與動態人格套件引擎

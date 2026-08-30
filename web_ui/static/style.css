@@ -1040,6 +1040,9 @@ html, body {
 }
 
 .badge-chat      { background: var(--cyan-dim); color: var(--sherry-blue); }
+.badge-command   { background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); }
+.badge-tool      { background: rgba(234, 179, 8, 0.2); color: #eab308; border: 1px solid rgba(234, 179, 8, 0.4); }
+.badge-inference { background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4); }
 .badge-interject { background: var(--purple-dim); color: var(--purple); }
 .badge-error     { background: rgba(244, 63, 94, 0.2); color: var(--red); }
 .badge-default   { background: rgba(143, 160, 184, 0.15); color: var(--text-muted); }

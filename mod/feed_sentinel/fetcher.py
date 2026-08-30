@@ -144,7 +144,7 @@ async def fetch_github_ai_trending(session: aiohttp.ClientSession) -> list[FeedI
     items: list[FeedItem] = []
     url = (
         "https://api.github.com/search/repositories?"
-        "q=topic:llm+OR+topic:generative-ai+stars:>100"
+        "q=topic:llm+stars:>300"
         "&sort=updated&order=desc&per_page=5"
     )
 

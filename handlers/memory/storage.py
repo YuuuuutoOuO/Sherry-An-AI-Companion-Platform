@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import difflib
+from functools import lru_cache
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, TypedDict
@@ -217,8 +218,11 @@ _META_TAIL_PATTERNS: list[re.Pattern[str]] = [
 ]
 
 
+@lru_cache(maxsize=2048)
 def _clean_fact_core(text: str) -> str:
     """去除 LLM 常見的後綴元評論、引號、贅詞前綴，萃取核心陳述。
+
+    使用 LRU 快取避免對相同事實重複執行正規表達式清洗。
 
     Args:
         text: 原始 fact 字串。
@@ -238,7 +242,8 @@ def _clean_fact_core(text: str) -> str:
 def calculate_fact_similarity(s1: str, s2: str) -> float:
     """計算兩條事實文字的語意重疊度與字元相似度。
 
-    結合元評論去除、字串包含度、SequenceMatcher 與 2-gram Jaccard 比對。
+    結合 LRU 快取元評論去除、字串包含度快速檢查、2-gram Jaccard 剪枝
+    與 SequenceMatcher 序列比對。
 
     Args:
         s1: 第一條事實字串。
@@ -262,20 +267,29 @@ def calculate_fact_similarity(s1: str, s2: str) -> float:
         if ratio >= 0.4:
             return 0.85
 
-    # 2. SequenceMatcher 序列比對
-    seq_ratio = difflib.SequenceMatcher(None, c1, c2).ratio()
-
-    # 3. 2-gram Jaccard 相似度（針對中文關鍵字重疊，如「吃大便」）
+    # 2. 2-gram Jaccard 相似度（針對中文關鍵字重疊，如「吃大便」）
     def _get_ngrams(text: str, n: int = 2) -> set[str]:
         return {text[i:i + n] for i in range(len(text) - n + 1)} if len(text) >= n else {text}
 
     grams1 = _get_ngrams(c1, 2)
     grams2 = _get_ngrams(c2, 2)
     intersection = grams1 & grams2
+
+    # 剪枝 1：若 2-gram 完全無交集且字串長度足夠（>=4 字），無任何共用雙字詞，短路跳過 SequenceMatcher
+    if not intersection and min_len >= 4:
+        return 0.0
+
+    # 剪枝 2：長度懸殊且交集為空
+    if (min_len / max_len < 0.35) and not intersection:
+        return 0.0
+
     union = grams1 | grams2
     jaccard = len(intersection) / len(union) if union else 0.0
 
-    # 若核心短語（>= 3 字元）完全共享，給予加權
+    # 3. SequenceMatcher 序列比對（在有潛在相似度時執行）
+    seq_ratio = difflib.SequenceMatcher(None, c1, c2).ratio()
+
+    # 若核心短語（>= 2 字元）完全共享，給予加權
     for g in grams1:
         if len(g) >= 2 and g in grams2 and min_len <= 8 and seq_ratio >= 0.4:
             return max(seq_ratio, 0.68)

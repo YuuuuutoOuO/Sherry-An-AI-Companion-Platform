@@ -38,17 +38,44 @@ def _processed_path(date_str: str) -> Path:
     return settings.CHAT_LOG_DIR / f"{date_str}.jsonl.processed"
 
 
-# ---------------------------------------------------------------------------
-# 寫入
-# ---------------------------------------------------------------------------
+import threading
+import time
+
+_BUFFER_LOCK = threading.Lock()
+_LOG_BUFFER: list[tuple[str, dict]] = []
+_BUFFER_MAX_SIZE: int = 10
+
+
+def flush_chat_logs() -> None:
+    """將緩衝區內所有未落盤的聊天記錄批次寫入對應日期的 JSONL 檔案中。"""
+    with _BUFFER_LOCK:
+        if not _LOG_BUFFER:
+            return
+        to_flush = list(_LOG_BUFFER)
+        _LOG_BUFFER.clear()
+
+    # 依日期分組（處理跨午夜的訊息）
+    grouped: dict[str, list[str]] = {}
+    for date_str, entry in to_flush:
+        line = json.dumps(entry, ensure_ascii=False) + "\n"
+        grouped.setdefault(date_str, []).append(line)
+
+    try:
+        settings.CHAT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        for date_str, lines in grouped.items():
+            path = _log_path(date_str)
+            with path.open("a", encoding="utf-8") as f:
+                f.writelines(lines)
+    except Exception as exc:
+        logger.debug("chat_logger flush: 寫入失敗: %s", exc)
+
 
 def append_chat_log(message: discord.Message) -> None:
     """
-    把一則訊息追加寫入今天的 JSONL 檔。
+    把一則訊息加入記憶體緩衝區；若滿 _BUFFER_MAX_SIZE 筆則批次落盤。
     靜默處理所有錯誤，絕不影響主流程。
     """
     try:
-        settings.CHAT_LOG_DIR.mkdir(parents=True, exist_ok=True)
         content = message.clean_content.strip()
         if not content:
             return
@@ -62,18 +89,45 @@ def append_chat_log(message: discord.Message) -> None:
             "display_name": message.author.display_name,
             "content": content_safe,
         }
-        path = _log_path(_today_str())
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        date_str = _today_str()
+
+        should_flush = False
+        with _BUFFER_LOCK:
+            _LOG_BUFFER.append((date_str, entry))
+            if len(_LOG_BUFFER) >= _BUFFER_MAX_SIZE:
+                should_flush = True
+
+        if should_flush:
+            flush_chat_logs()
     except Exception as exc:
-        logger.debug("chat_logger: 寫入失敗: %s", exc)
+        logger.debug("chat_logger: 加入緩衝失敗: %s", exc)
 
 
 async def async_append_chat_log(message: discord.Message) -> None:
-    """非同步版本的追加寫入，避免在 Discord on_message 事件迴圈中阻塞。"""
-    import asyncio
+    """非同步版本的追加寫入，於需要 Flush 時在 ThreadPool 中執行，避免阻塞事件迴圈。"""
     try:
-        await asyncio.to_thread(append_chat_log, message)
+        content = message.clean_content.strip()
+        if not content:
+            return
+
+        content_safe = re.sub(r"@\S+", "[某群友]", content)
+        entry = {
+            "ts": datetime.now(_TZ_TW).isoformat(),
+            "user_id": str(message.author.id),
+            "display_name": message.author.display_name,
+            "content": content_safe,
+        }
+        date_str = _today_str()
+
+        should_flush = False
+        with _BUFFER_LOCK:
+            _LOG_BUFFER.append((date_str, entry))
+            if len(_LOG_BUFFER) >= _BUFFER_MAX_SIZE:
+                should_flush = True
+
+        if should_flush:
+            import asyncio
+            await asyncio.to_thread(flush_chat_logs)
     except Exception as exc:
         logger.debug("chat_logger async: 寫入失敗: %s", exc)
 
@@ -87,6 +141,7 @@ def read_chat_log(date_str: str) -> list[dict]:
     讀取指定日期的所有訊息記錄。
     回傳 list[dict]，順序為寫入順序（時間正序）。
     """
+    flush_chat_logs()
     path = _log_path(date_str)
     if not path.exists():
         return []

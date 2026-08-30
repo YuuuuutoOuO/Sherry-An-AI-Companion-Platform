@@ -24,6 +24,7 @@ import settings
 from handlers.bot_brain import BotBrain, InferenceTask
 from handlers.roast.manager import roast_manager
 from handlers.roast.models import RoastRule
+from handlers.roast.utils import clean_roast_reply, extract_fallback_roast
 from handlers.social.persona import build_dynamic_persona
 from handlers.social.utils import SAFETY_FOOTER, append_thinking_log, simulate_typing_and_send_to_channel
 
@@ -195,10 +196,11 @@ class RoastCog(commands.Cog, name="RoastCog"):
             f"群友「{message.author.display_name}」剛剛發了這句話：「{message.content}」。\n"
             f"此發言觸發了吐槽關鍵字「{rule.keyword}」！\n"
             f"【核心吐槽指引】：「{rule.reply_guide}」\n\n"
-            "🎯 【吐槽生成三大核心法則】（極為重要！）：\n"
-            "1. 🔗 深度結合對方發言情境：妳必須敏銳抓住對方句子裡的具體人事物、動作或場景（例如對方提到的特定人名、食物、事情或動作），將「核心吐槽指引」自然融合進去進行精準反駁！絕對禁止忽視對方說的內容只講生硬的罐頭台詞。\n"
+            "🎯 【吐槽生成四大核心法則】（極為重要！）：\n"
+            "1. 🔗 深度結合對方發言情境：妳必須敏銳抓住對方句子裡的具體人事物、動作或場景（例如對方提到的特定人名、食物、事情或動作），將「核心吐槽指引」的語氣與觀點自然融合進去進行精準反駁！絕對禁止忽視對方說的內容只講生硬的罐頭台詞。\n"
             f"2. 🍊 傲嬌毒舌名偵探人設：{roast_flavor} 一針見血地戳破對方的幻想或錯誤！\n"
             "3. ⚡ 俐落生動短句：長度約 15 ~ 55 字，必須是妳直接說出口的生動對白，絕對禁止在最外層包裹「」或 \"\" 引號，禁止任何機器人客套話！\n"
+            "4. 🚫 嚴禁複製指引標籤：【核心吐槽指引】是提供給妳的思維邏輯與參考指引，請將其內化為妳的傲嬌口吻。若指引中包含方括號條件（例如 [若提及雪莉:...]）或提示詞，請依據群友發言情境判定符合的條件並轉化為自然的日常說話對白，**絕對禁止**把方括號標籤或提示詞原樣輸出！\n"
         ) + SAFETY_FOOTER
 
         reply_text: str = ""
@@ -221,16 +223,19 @@ class RoastCog(commands.Cog, name="RoastCog"):
             await brain.enqueue_task(task)
 
             try:
-                raw_reply = await asyncio.wait_for(reply_future, timeout=8.0)
-                cleaned = raw_reply.strip().strip('"').strip("「").strip("」").strip()
+                raw_reply = await asyncio.wait_for(
+                    reply_future,
+                    timeout=getattr(settings, "ROAST_REPLY_TIMEOUT", 30.0),
+                )
+                cleaned = clean_roast_reply(raw_reply)
                 if cleaned:
                     reply_text = cleaned
             except (asyncio.TimeoutError, Exception) as exc:
-                logger.warning("Roast LLM inference timed out or failed: %s; using guide fallback", exc)
+                logger.warning("Roast LLM inference timed out or failed: %s; using safe guide fallback", exc)
 
-        # 若 LLM 未回傳或失敗，採用回覆導引作為兜底輸出
+        # 若 LLM 未回傳或失敗，採用安全提取的兜底台詞（絕不暴露 Prompt / 方括號指令）
         if not reply_text:
-            reply_text = rule.reply_guide
+            reply_text = extract_fallback_roast(rule.reply_guide, user_content=message.content)
 
         # 記錄除錯與思考日誌
         append_thinking_log({

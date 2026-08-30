@@ -1,9 +1,14 @@
+import asyncio
+from datetime import datetime, timezone
+import io
+import json
 import logging
-from typing import Any
+import time
+from typing import Any, Literal
+
 import discord
 from discord import app_commands
 from discord.ext import commands
-import json
 
 import settings
 
@@ -171,12 +176,20 @@ class AdminCog(commands.Cog):
             return
 
         if action.value == "show":
-            snippet = mem_mgr.get_user_memory_snippet(user.id)
+            if hasattr(mem_mgr, "get_full_user_memory_snippet"):
+                snippet = mem_mgr.get_full_user_memory_snippet(user.id)
+            else:
+                snippet = mem_mgr.get_user_memory_snippet(user.id)
+
             if not snippet:
                 await interaction.response.send_message(f"{user.mention} 尚無任何長期記憶。", ephemeral=True)
             else:
                 view = MemoryControlView(target_user_id=user.id)
-                await interaction.response.send_message(f"**{user.display_name} 長期記憶:**\n```\n{snippet}\n```", view=view, ephemeral=True)
+                msg_content = f"**{user.display_name} 長期記憶:**\n```\n{snippet}\n```"
+                if len(msg_content) > 1950:
+                    available = 1950 - len(f"**{user.display_name} 長期記憶:**\n```\n\n...(篇幅過長截斷)\n```")
+                    msg_content = f"**{user.display_name} 長期記憶:**\n```\n{snippet[:available]}\n...(篇幅過長截斷)\n```"
+                await interaction.response.send_message(msg_content, view=view, ephemeral=True)
         elif action.value == "clear":
             if not self._is_super_admin(interaction):
                 await interaction.response.send_message("權限不足！只有最高管理員能刪除使用者記憶。", ephemeral=True)
@@ -291,28 +304,332 @@ class AdminCog(commands.Cog):
             await interaction.followup.send(res_text)
 
     # ── /debug ─────────────────────────────────────────────────
-    @app_commands.command(name="debug", description="🐞 系統除錯模式設定")
+    @app_commands.command(name="debug", description="🐞 系統除錯模式設定、狀態檢視與完整 Prompt 注入檢視")
     @app_commands.describe(
-        action="選擇欲調整的除錯功能",
-        enable="True = 開啟卡片式回覆；False = 恢復一般文字對話",
+        action="選擇欲調整或執行的除錯功能 (status: 狀態總覽 | detail: 步驟化思考欄 | live: 即時動態編輯思考 | tag: 模擬匯出 Prompt)",
+        enable="True = 開啟功能；False = 關閉功能 (僅 action 為 detail 或 live 時有效)",
+        context="輸入想模擬 @雪莉 的對話內容 (僅 action 為 tag 時有效)",
     )
     @app_commands.choices(action=[
-        app_commands.Choice(name="📋 詳細卡片模式 (detail) — 顯示 CoT 思考過程、執行耗時、模型標籤", value="detail"),
+        app_commands.Choice(name="📊 檢視當前除錯與推演狀態 (status) — 一覽所有除錯開關、模型與推演配置", value="status"),
+        app_commands.Choice(name="💡 步驟化思考推演欄 (detail) — 顯示步驟化思考、執行耗時、模型與工具調用", value="detail"),
+        app_commands.Choice(name="⚡ 即時動態編輯思考 (live) — 原地動態編輯更新思考進度，0 等待", value="live"),
+        app_commands.Choice(name="🏷️ 完整 Prompt 注入檢視 (tag) — 模擬 @雪莉 並產出完整注入的 System/User Prompt", value="tag"),
     ])
     async def debug_command(
         self,
         interaction: discord.Interaction,
-        action: app_commands.Choice[str],
-        enable: bool,
+        action: app_commands.Choice[str] | None = None,
+        enable: bool | None = None,
+        context: str | None = None,
     ) -> None:
-        if action.value == "detail":
+        action_val = action.value if action else "status"
+
+        if action_val == "status":
+            await self._handle_debug_status(interaction)
+        elif action_val == "detail":
+            if enable is None:
+                enable = not getattr(settings, "DEBUG_DETAIL", False)
             settings.DEBUG_DETAIL = enable
             settings.update_setting("DEBUG_DETAIL", enable)
-            state_text = "已開啟 ✅ (回覆將展示 CoT 思考過程、執行耗時、模型與意圖標籤)" if enable else "已關閉 ❌ (恢復標準對話模式)"
+            state_text = "已開啟 ✅ (完成後同時保留步驟化思考推演欄與回覆)" if enable else "已關閉 ❌ (完成後覆寫為純淨回覆，生成期間仍保留動態思考推演)"
             await interaction.response.send_message(
-                f"🐞 **[Debug 模式設定]** 詳細卡片回覆模式{state_text}",
+                f"🐞 **[Debug 模式設定]** 步驟化思考推演欄{state_text}",
                 ephemeral=True,
             )
+        elif action_val == "live":
+            if enable is None:
+                enable = not getattr(settings, "LIVE_THINKING_EDIT", False)
+            settings.LIVE_THINKING_EDIT = enable
+            settings.update_setting("LIVE_THINKING_EDIT", enable)
+            state_text = "已開啟 🚀 (雪莉將在 Discord 原地動態更新思考推演進度)" if enable else "已關閉 ❌ (恢復完成後一次性發送)"
+            await interaction.response.send_message(
+                f"⚡ **[即時思考推演設定]** 動態編輯模式{state_text}",
+                ephemeral=True,
+            )
+        elif action_val == "tag":
+            await self._handle_debug_tag(interaction, context)
+
+    async def _handle_debug_status(self, interaction: discord.Interaction) -> None:
+        """顯示除錯模式、思考推演與模型調度之即時配置狀態總覽。
+
+        Args:
+            interaction: Discord 互動事件實例。
+        """
+        debug_detail = getattr(settings, "DEBUG_DETAIL", False)
+        live_thinking = getattr(settings, "LIVE_THINKING_EDIT", True)
+        micro_cot = getattr(settings, "MICRO_COT_ENABLED", True)
+        early_term = getattr(settings, "ACTION_EARLY_TERMINATION_ENABLED", True)
+        dispatch_mode = getattr(settings, "AGENT_DISPATCH_MODE", "INTEGRATED").upper()
+        primary_model = getattr(settings, "PRIMARY_MODEL", "未設定")
+        planner_model = getattr(settings, "PARALLEL_PLANNER_MODEL", getattr(settings, "CLASSIFIER_MODEL", "未設定"))
+        react_model = getattr(settings, "REACT_MODEL", getattr(settings, "CLASSIFIER_MODEL", "未設定"))
+        vision_model = getattr(settings, "VISION_MODEL", "") or "（原生端到端多模態）"
+        temp = getattr(settings, "LLM_TEMPERATURE", 0.85)
+        step_timeout = getattr(
+            settings,
+            "PARALLEL_STEP_TIMEOUT" if dispatch_mode == "PARALLEL" else "REACT_STEP_TIMEOUT",
+            60.0,
+        )
+
+        embed = discord.Embed(
+            title="🐞 雪莉系統除錯與思考推演狀態總覽",
+            color=0x2ECC71 if (debug_detail or live_thinking) else 0x95A5A6,
+            timestamp=datetime.now(timezone.utc),
+        )
+
+        detail_desc = (
+            "已開啟 ✅ (完成後保留步驟推演與回覆)"
+            if debug_detail
+            else "已關閉 ❌ (完成後覆寫為純淨回覆，生成期間仍有動態推演)"
+        )
+        live_desc = "已開啟 🚀 (Discord 原地動態更新思考推演進度)" if live_thinking else "已關閉 ❌ (完成後一次性發送)"
+        cot_desc = "已開啟 ✅ (輸出 `<thought>` 內心推理)" if micro_cot else "已關閉 ❌"
+        early_desc = "已開啟 ⚡ (純動作工具極速短路)" if early_term else "已關閉 ❌"
+
+        embed.add_field(
+            name="🛠️ 除錯與思考推演模式",
+            value=(
+                f"• **💡 步驟化思考推演欄 (detail)**: {detail_desc}\n"
+                f"• **⚡ 即時動態編輯推演 (live)**: {live_desc}\n"
+                f"• **🧠 微思維鏈心智推理 (Micro-CoT)**: {cot_desc}\n"
+                f"• **⏩ 動作工具極速短路**: {early_desc}"
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="🤖 調度架構與模型配置",
+            value=(
+                f"• **調度模式 (AGENT_DISPATCH_MODE)**: `{dispatch_mode}`\n"
+                f"• **主力生成模型 (PRIMARY_MODEL)**: `{primary_model}`\n"
+                f"• **規劃/推理模型 ({'PLANNER' if dispatch_mode == 'PARALLEL' else 'REACT'}_MODEL)**: `{planner_model if dispatch_mode == 'PARALLEL' else react_model}`\n"
+                f"• **視覺解析模型 (VISION_MODEL)**: `{vision_model}`"
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="⚙️ 推演運行參數",
+            value=(
+                f"• **單步推演超時**: `{step_timeout}s`\n"
+                f"• **採樣溫度 (Temperature)**: `{temp}`\n"
+                f"• **最大輸出 Token**: `{getattr(settings, 'LLM_MAX_OUTPUT_TOKENS', 2048)}`\n"
+                f"• **日誌等級 (DISCORD_LOG_LEVEL)**: `{getattr(settings, 'DISCORD_LOG_LEVEL', 'WARNING')}`"
+            ),
+            inline=False,
+        )
+
+        embed.set_footer(text="可使用 /debug action:<detail|live> enable:<True|False> 隨時調整開關")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _handle_debug_tag(
+        self,
+        interaction: discord.Interaction,
+        context: str | None,
+    ) -> None:
+        """模擬 @雪莉 流程，執行並匯出完整 Prompt、中間排程與推演報告。"""
+        if not context or not context.strip():
+            await interaction.response.send_message(
+                "❌ 請在 `context` 參數中輸入要測試的 Prompt 內容！\n例如：`/debug action:tag context:妳覺得這案子該怎麼查？`",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=False, thinking=True)
+
+        user_query = context.strip()
+        channel = interaction.channel
+        user = interaction.user
+        channel_id = getattr(channel, "id", 0)
+        display_name = getattr(user, "display_name", "使用者")
+        user_id = getattr(user, "id", 0)
+
+        brain_cog = self.bot.get_cog("BotBrain")
+        if not brain_cog:
+            await interaction.followup.send("❌ BotBrain 未就緒，無法執行推論。")
+            return
+        brain: Any = brain_cog
+
+        start_time = time.time()
+
+        # 1. 擷取真實頻道上下文
+        from handlers.social.utils import fetch_context_script
+        from handlers.social.memory_builder import build_user_memory_block
+        from handlers.social.persona import build_dynamic_persona
+
+        context_script = await fetch_context_script(channel, None) if channel else ""
+        trigger_line = f"🎯 【當下必須回應的目標】：[{display_name}] 正在對妳說：「{user_query}」"
+        full_context = f"{context_script}\n\n{trigger_line}" if context_script else trigger_line
+
+        # 2. 擷取頻道話題氛圍與長期記憶
+        vibe_mgr: Any = self.bot.get_cog("VibeManager")
+        vibe_snippet = vibe_mgr.get_top_topics_snippet(channel_id) if vibe_mgr else ""
+        memory_block = build_user_memory_block(self.bot, user_id, display_name)
+
+        # 3. 擷取動態人設與 Lorebook 觸發小抄
+        recent_text = (full_context[-1500:] + "\n" + user_query) if full_context else user_query
+        head_persona, tail_lore = build_dynamic_persona(recent_text, "CHAT", channel_id=channel_id)
+
+        # 4. 初始化 DispatchAgentTool
+        from handlers.social.registry import TOOL_LIST
+        from handlers.social.dispatch_agent import (
+            DispatchAgentTool,
+            _PARALLEL_PLANNER_SYSTEM_TEMPLATE,
+            _USER_MESSAGE_TEMPLATE,
+            _parse_plan_json,
+        )
+
+        dispatch_mode = getattr(settings, "AGENT_DISPATCH_MODE", "INTEGRATED").upper()
+        agent_mode: Literal["INTEGRATED", "PARALLEL", "REACT"] = (
+            "REACT" if dispatch_mode == "REACT" else ("PARALLEL" if dispatch_mode == "PARALLEL" else "INTEGRATED")
+        )
+        agent = DispatchAgentTool(TOOL_LIST, mode=agent_mode)
+
+        planner_model = getattr(settings, "PARALLEL_PLANNER_MODEL", settings.CLASSIFIER_MODEL)
+        planner_timeout = getattr(settings, "PARALLEL_STEP_TIMEOUT", 60.0)
+
+        try:
+            # 5. 執行 Planner
+            system_prompt = _PARALLEL_PLANNER_SYSTEM_TEMPLATE.format(
+                tool_descriptions=agent._build_tool_descriptions()
+            )
+            planner_user_msg = _USER_MESSAGE_TEMPLATE.format(author=display_name, content=user_query)
+
+            planner_raw = await agent._call_llm(
+                brain, system_prompt, planner_user_msg,
+                task_id=f"debug-plan-{interaction.id}",
+                model=planner_model,
+                temperature=0.1,
+                timeout=planner_timeout,
+            )
+            plan = _parse_plan_json(planner_raw, user_query)
+
+            # 6. 執行規劃工具（若有）
+            max_tasks = getattr(settings, "PARALLEL_MAX_TASKS", 5)
+            seen_keys: set[tuple[str, str]] = set()
+            deduped = []
+            for t in plan.tasks[:max_tasks]:
+                key = (t.tool.upper(), t.input.strip())
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    deduped.append(t)
+
+            from handlers.executor.cog import _FakeMessage
+            fake_msg = _FakeMessage(
+                channel=channel,  # type: ignore[arg-type]
+                author=user,      # type: ignore[arg-type]
+                clean_content=user_query,
+                id=interaction.id,
+                _interaction=interaction,
+            )
+
+            executed_results = []
+            if deduped:
+                executed_results = list(await asyncio.gather(*[
+                    agent._parallel_execute_single_task(t, self.bot, fake_msg, vibe_snippet, full_context, images=None)  # type: ignore[arg-type]
+                    for t in deduped
+                ]))
+
+            obs_pairs = [(name, obs) for name, _, obs in executed_results]
+
+            # 7. 生成最終回覆與捕捉 Prompt
+            final_speech, persona_thought, sys_prompt, user_prompt = await agent._generate_final_response(
+                brain=brain, user_query=user_query, channel_id=channel_id,
+                bot=self.bot, user_id=user_id, display_name=display_name,
+                observations=obs_pairs, vibe_snippet=vibe_snippet,
+                full_context=full_context, images=None,
+            )
+
+            elapsed_ms = int((time.time() - start_time) * 1000)
+
+            # 8. 組裝 Markdown 除錯報告
+            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            planned_tasks_text = "\n".join([f"- **工具**: `{t.tool}` | **參數**: `{t.input}`" for t in plan.tasks]) or "- (無規劃任何工具)"
+            tool_obs_text = "\n".join([f"- **[{name}]**:\n```\n{obs}\n```" for name, obs in obs_pairs]) or "- (未調用任何工具回傳)"
+
+            report_md = (
+                f"# 🐞 雪莉除錯流程分析報告 (Sherry Full Prompt & Pipeline Dump)\n\n"
+                f"- **測試時間**: {now_str} (UTC)\n"
+                f"- **觸發使用者**: {display_name} (`{user_id}`)\n"
+                f"- **所在頻道**: #{getattr(channel, 'name', '未知頻道')} (`{channel_id}`)\n"
+                f"- **原始輸入 (Context)**: {user_query}\n"
+                f"- **調度模式**: `{dispatch_mode}`\n"
+                f"- **執行耗時**: `{elapsed_ms} ms`\n"
+                f"- **使用模型**: `{planner_model} -> {settings.PRIMARY_MODEL}`\n\n"
+                f"---\n\n"
+                f"## 1. 📜 擷取到的頻道對話上下文 (Chat History Context)\n"
+                f"{context_script if context_script else '*(當前頻道無近期對話歷史紀錄，或時間間隔超過 15 分鐘已重置)*'}\n\n"
+                f"---\n\n"
+                f"## 2. 🎯 當前鎖定之回應目標 (Trigger Target)\n"
+                f"{trigger_line}\n\n"
+                f"---\n\n"
+                f"## 3. 💭 頻道話題氛圍 (Channel Vibe)\n"
+                f"{vibe_snippet if vibe_snippet else '*(無近期活躍話題氛圍)*'}\n\n"
+                f"---\n\n"
+                f"## 4. 🧠 注入之使用者長期記憶 (User Memory)\n"
+                f"{memory_block if memory_block else '*(無特定使用者個人記憶紀錄)*'}\n\n"
+                f"---\n\n"
+                f"## 5. 📖 觸發之 Lorebook 知識小抄 (Triggered Lorebook)\n"
+                f"{tail_lore if tail_lore else '*(未觸發任何 Lorebook 關鍵字小抄)*'}\n\n"
+                f"---\n\n"
+                f"## 6. 🛠️ 任務規劃與排程 (Planner & Observations)\n"
+                f"- **排程模型**: `{planner_model}`\n"
+                f"- **Planner 思考 (Thought)**:\n```text\n{plan.thought or '(無思考)'}\n```\n"
+                f"- **規劃任務清單**:\n{planned_tasks_text}\n"
+                f"- **工具執行結果**:\n{tool_obs_text}\n\n"
+                f"---\n\n"
+                f"## 7. 📥 完整注入之 System Prompt (系統提示詞)\n"
+                f"```text\n{sys_prompt}\n```\n\n"
+                f"---\n\n"
+                f"## 8. 👤 完整注入之 User Prompt (使用者提示詞)\n```text\n{user_prompt}\n```\n\n"
+                f"---\n\n"
+                f"## 9. 💭 模型生成之思考推演 (CoT Thought)\n```text\n{persona_thought or '(無內部思考)'}\n```\n\n"
+                f"---\n\n"
+                f"## 10. 🐱 雪莉最終回覆內容 (Final Speech)\n{final_speech}\n"
+            )
+
+            # 9. 建立 Discord Embed 與 File 附檔
+            embed = discord.Embed(
+                title="🐞 [Debug Tag] 完整 Prompt 與推演流程檢視",
+                color=0x3498DB,
+                timestamp=datetime.now(timezone.utc),
+            )
+            embed.add_field(name="👤 測試提問", value=f"> {user_query[:300]}", inline=False)
+            embed.add_field(
+                name="⚡ 執行資訊",
+                value=f"• **模型**: `{planner_model} -> {settings.PRIMARY_MODEL}`\n• **耗時**: `{elapsed_ms} ms`\n• **調度模式**: `{dispatch_mode}`\n• **調用工具數**: `{len(obs_pairs)}`",
+                inline=False,
+            )
+            ctx_display = context_script[:300] + "..." if len(context_script) > 300 else (context_script if context_script else "(無近期對話歷史紀錄)")
+            embed.add_field(name="📜 頻道對話上下文", value=f"```{ctx_display}```", inline=False)
+            embed.add_field(
+                name="🧠 記憶與話題",
+                value=f"• **話題**: {vibe_snippet[:80] or '(無)'}\n• **記憶**: {memory_block[:80] or '(無)'}",
+                inline=False,
+            )
+            if persona_thought:
+                embed.add_field(
+                    name="🧠 思考推演 (CoT 預覽)",
+                    value=f"```{persona_thought[:400]}```" if len(persona_thought) <= 400 else f"```{persona_thought[:400]}...```",
+                    inline=False,
+                )
+            embed.add_field(
+                name="🐱 雪莉回覆預覽",
+                value=final_speech[:500] if len(final_speech) <= 500 else final_speech[:500] + "...",
+                inline=False,
+            )
+            embed.set_footer(text=f"完整 10 大區塊分析與 Prompt 已匯出至下方 .md 附檔 • 耗時 {elapsed_ms} ms")
+
+            file = discord.File(
+                fp=io.BytesIO(report_md.encode("utf-8")),
+                filename=f"sherry_debug_prompt_{interaction.id}.md",
+            )
+
+            await interaction.followup.send(embed=embed, file=file)
+        except Exception as e:
+            logger.error("debug tag error: %s", e, exc_info=True)
+            await interaction.followup.send(f"❌ 執行 `/debug action:tag` 時發生錯誤：{e}")
 
     # ── /stats ─────────────────────────────────────────────────
     @app_commands.command(name="stats", description="顯示系統詳細統計儀表板 (公開)")

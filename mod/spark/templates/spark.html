@@ -1,0 +1,103 @@
+<!-- ===== SPARK PUSH SYSTEM VIEW (DYNAMIC MOD) ===== -->
+<div class="view hidden" id="view-spark">
+    <!-- Top Banner -->
+    <div class="view-banner view-banner--purple" style="background: linear-gradient(135deg, rgba(147, 51, 234, 0.15), rgba(79, 70, 229, 0.15)); border: 1px solid rgba(168, 85, 247, 0.2); border-radius: 12px; padding: 20px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+        <div>
+            <h2 class="view-banner-title" style="margin: 0; font-size: 1.5rem; font-weight: 700; color: #f3f4f6; display: flex; align-items: center; gap: 8px;">
+                <span>📡</span> Spark 泛用條件推播主控台
+            </h2>
+            <p class="view-banner-sub" style="margin: 6px 0 0 0; font-size: 0.9rem; color: #9ca3af;">
+                泛用排程與條件推播通知系統（支援即時價格監控、定時任務、RSS/YouTube 訂閱與天氣預警）。
+            </p>
+        </div>
+        <div style="display: flex; gap: 10px;">
+            <button onclick="SparkApp.loadTriggers()" class="btn-secondary" style="padding: 8px 16px; border-radius: 8px; cursor: pointer;">
+                🔄 重新整理
+            </button>
+            <button onclick="SparkApp.openAddModal()" class="btn-primary" style="padding: 8px 16px; border-radius: 8px; cursor: pointer; background: #8b5cf6; color: white; border: none; font-weight: 600;">
+                ➕ 新增推播
+            </button>
+        </div>
+    </div>
+
+    <!-- Stats Row -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px;">
+        <div class="stat-card" style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 15px;">
+            <div style="font-size: 0.85rem; color: #94a3b8;">總推播任務</div>
+            <div id="spark-stat-total" style="font-size: 1.8rem; font-weight: 700; color: #f8fafc; margin-top: 4px;">0</div>
+        </div>
+        <div class="stat-card" style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 15px;">
+            <div style="font-size: 0.85rem; color: #94a3b8;">運行中 (Active)</div>
+            <div id="spark-stat-active" style="font-size: 1.8rem; font-weight: 700; color: #4ade80; margin-top: 4px;">0</div>
+        </div>
+        <div class="stat-card" style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 15px;">
+            <div style="font-size: 0.85rem; color: #94a3b8;">已暫停 (Paused)</div>
+            <div id="spark-stat-paused" style="font-size: 1.8rem; font-weight: 700; color: #fbbf24; margin-top: 4px;">0</div>
+        </div>
+        <div class="stat-card" style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 15px;">
+            <div style="font-size: 0.85rem; color: #94a3b8;">巡檢頻率</div>
+            <div style="font-size: 1.8rem; font-weight: 700; color: #38bdf8; margin-top: 4px;">1 分鐘</div>
+        </div>
+    </div>
+
+    <!-- Filter Tabs -->
+    <div style="display: flex; gap: 10px; margin-bottom: 15px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 10px;">
+        <button class="spark-tab active" onclick="SparkApp.setFilter('')" style="background: rgba(139, 92, 246, 0.2); color: #c4b5fd; border: 1px solid #8b5cf6; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.9rem;">全部</button>
+        <button class="spark-tab" onclick="SparkApp.setFilter('price')" style="background: rgba(30, 41, 59, 0.7); color: #94a3b8; border: 1px solid rgba(255,255,255,0.08); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.9rem;">💰 價格警報</button>
+        <button class="spark-tab" onclick="SparkApp.setFilter('schedule')" style="background: rgba(30, 41, 59, 0.7); color: #94a3b8; border: 1px solid rgba(255,255,255,0.08); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.9rem;">⏰ 定時排程</button>
+        <button class="spark-tab" onclick="SparkApp.setFilter('rss')" style="background: rgba(30, 41, 59, 0.7); color: #94a3b8; border: 1px solid rgba(255,255,255,0.08); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.9rem;">📰 RSS 訂閱</button>
+        <button class="spark-tab" onclick="SparkApp.setFilter('weather')" style="background: rgba(30, 41, 59, 0.7); color: #94a3b8; border: 1px solid rgba(255,255,255,0.08); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.9rem;">🌤️ 天氣預警</button>
+    </div>
+
+    <!-- Triggers List Container -->
+    <div id="spark-triggers-container" style="display: flex; flex-direction: column; gap: 12px;">
+        <div style="text-align: center; padding: 40px; color: #94a3b8;">正在載入 Spark 觸發器...</div>
+    </div>
+
+    <!-- Add Trigger Modal (Hidden by default) -->
+    <div id="spark-add-modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
+        <div style="background: #1e293b; border: 1px solid rgba(255,255,255,0.15); border-radius: 12px; width: 500px; max-width: 90vw; padding: 24px; color: #f8fafc;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h3 style="margin: 0; font-size: 1.25rem;">➕ 新增推播任務</h3>
+                <button onclick="SparkApp.closeAddModal()" style="background: none; border: none; color: #94a3b8; font-size: 1.5rem; cursor: pointer;">&times;</button>
+            </div>
+            
+            <form id="spark-add-form" onsubmit="SparkApp.submitAddTrigger(event)">
+                <div style="margin-bottom: 12px;">
+                    <label style="display: block; font-size: 0.85rem; color: #94a3b8; margin-bottom: 4px;">推播類型</label>
+                    <select id="spark-form-type" onchange="SparkApp.onTypeChange()" style="width: 100%; padding: 8px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc;">
+                        <option value="price">💰 價格警報 (股票/加密貨幣)</option>
+                        <option value="schedule">⏰ 定時排程 (間隔/特定時間)</option>
+                        <option value="rss">📰 RSS / YouTube 訂閱更新</option>
+                        <option value="weather">🌤️ 天氣預警 (降雨/高溫/低溫)</option>
+                    </select>
+                </div>
+
+                <div style="margin-bottom: 12px;">
+                    <label style="display: block; font-size: 0.85rem; color: #94a3b8; margin-bottom: 4px;">推播目標頻道 ID</label>
+                    <input id="spark-form-channel" type="number" required placeholder="例如: 123456789012345678" style="width: 100%; padding: 8px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc;" />
+                </div>
+
+                <!-- Dynamic Type Specific Fields -->
+                <div id="spark-form-dynamic-fields" style="background: rgba(15, 23, 42, 0.6); padding: 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid rgba(255,255,255,0.05);">
+                    <!-- Injected by JS based on selected type -->
+                </div>
+
+                <div style="margin-bottom: 12px;">
+                    <label style="display: block; font-size: 0.85rem; color: #94a3b8; margin-bottom: 4px;">自訂附加訊息 (選填)</label>
+                    <input id="spark-form-message" type="text" placeholder="推播時一併標記或提醒文字" style="width: 100%; padding: 8px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc;" />
+                </div>
+
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; font-size: 0.85rem; color: #94a3b8; margin-bottom: 4px;">冷卻時間 (秒)</label>
+                    <input id="spark-form-cooldown" type="number" value="3600" style="width: 100%; padding: 8px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc;" />
+                </div>
+
+                <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                    <button type="button" onclick="SparkApp.closeAddModal()" class="btn-secondary" style="padding: 8px 16px; border-radius: 6px; cursor: pointer;">取消</button>
+                    <button type="submit" class="btn-primary" style="padding: 8px 16px; border-radius: 6px; background: #8b5cf6; color: white; border: none; font-weight: 600; cursor: pointer;">確認建立</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>

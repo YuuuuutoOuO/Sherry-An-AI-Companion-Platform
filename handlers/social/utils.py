@@ -91,6 +91,11 @@ async def fetch_context_script(channel: Any, before_message: discord.Message | N
     guild = getattr(channel, "guild", None)
     me = getattr(guild, "me", None)
     me_id = getattr(me, "id", None)
+    if me_id is None:
+        state = getattr(channel, "_state", None)
+        user = getattr(state, "user", None)
+        if user:
+            me_id = getattr(user, "id", None)
 
     raw: list[discord.Message] = []
     async for msg in channel.history(limit=settings.CONTEXT_HISTORY_LIMIT, before=before_message, oldest_first=False):
@@ -105,14 +110,13 @@ async def fetch_context_script(channel: Any, before_message: discord.Message | N
         truncated.append(raw[i])
     truncated.reverse()
     
-    recent_count = 5
+    recent_count = 10
     older_msgs = truncated[:-recent_count] if len(truncated) > recent_count else []
     recent_msgs = truncated[-recent_count:]
 
-    # 🔪 找出雪莉「最近 3 則」發言，這些保留全文；更早的才做截斷
-    # ✅ [修復] 原本只保留最新 1 則（content[:15]），長對話中雪莉幾乎看不到自己剛說過的話
-    # 現在改為最近 3 則全文保留，更早的才進行省略，大幅提升多輪連貫性
-    BOT_FULL_PRESERVE_COUNT = 3
+    # 🔪 找出雪莉「最近 4 則」發言，這些保留全文；更早的才做截斷
+    # ✅ [修復] 最近 4 則全文保留，更早的才進行省略，大幅提升多輪對話連貫性
+    BOT_FULL_PRESERVE_COUNT = 4
     recent_bot_msg_ids: set[int] = set()
     for msg in reversed(truncated):
         if me_id is not None and msg.author.id == me_id:
@@ -311,6 +315,82 @@ async def remove_hourglass_reaction(
         logger.debug("utils: failed to remove hourglass reaction: %s", e)
 
 
+def format_thinking_steps_block(
+    thought_log: str = "",
+    intent_name: str = "CHAT",
+    model: str = "",
+    latency_ms: int = 0,
+    prompt: str = "",
+) -> str:
+    """建構精美步驟化思考推演 Markdown 區塊 (方案 A 模式)。
+
+    Args:
+        thought_log: 原始思考日誌 (包含 Plan/Obs/Persona 或純 CoT)。
+        intent_name: 意圖標籤名稱。
+        model: 使用之模型名稱。
+        latency_ms: 總執行耗時（毫秒）。
+        prompt: 使用者原始輸入。
+
+    Returns:
+        str: Markdown 引用格式之思考與步驟區塊。
+    """
+    used_model = model or getattr(settings, "PRIMARY_MODEL", "unknown")
+    header_lines = [
+        "> 💡 **雪莉思維推演與執行步驟 (Thinking Process)**",
+        f"> ⚡ **模型**: `{used_model}` • **總耗時**: `{latency_ms} ms` • **意圖**: `{intent_name}`",
+    ]
+
+    steps: list[str] = []
+    raw_thought = (thought_log or "").strip()
+
+    if raw_thought:
+        # 嘗試解析結構化【...】區塊
+        section_pattern = re.compile(r"【([^】]+)】\s*\n?([\s\S]*?)(?=(?:【[^】]+】|\Z))")
+        matches = section_pattern.findall(raw_thought)
+
+        if matches:
+            step_idx = 1
+            for title, content in matches:
+                title_clean = title.strip()
+                content_clean = content.strip()
+                if not content_clean:
+                    continue
+
+                if len(content_clean) > 200:
+                    summary = content_clean[:200].replace("\n", " ➔ ") + "..."
+                else:
+                    summary = content_clean.replace("\n", " ➔ ")
+
+                num_emoji = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"][min(step_idx - 1, 5)]
+                if any(k in title_clean for k in ("任務", "排程", "調度", "Plan", "規劃")):
+                    steps.append(f"> {num_emoji} 📋 **意圖拆解 [Plan]**：{summary}")
+                    step_idx += 1
+                elif any(k in title_clean for k in ("工具", "數據", "回傳", "Obs", "觀測")):
+                    steps.append(f"> {num_emoji} 🛠️ **工具與觀測 [Action & Obs]**：{summary}")
+                    step_idx += 1
+                elif any(k in title_clean for k in ("內心", "心智", "角色", "Persona", "思考")):
+                    steps.append(f"> {num_emoji} 💭 **角色心智 [Persona]**：{summary}")
+                    step_idx += 1
+                else:
+                    steps.append(f"> {num_emoji} 🔍 **{title_clean}**：{summary}")
+                    step_idx += 1
+
+        if not steps:
+            # 純 CoT 思維鏈展示
+            cot_summary = raw_thought.replace("\n", " ")
+            if len(cot_summary) > 250:
+                cot_summary = cot_summary[:250] + "..."
+            steps.append(f"> 1️⃣ 🧠 **思維鏈推演 [CoT]**：{cot_summary}")
+    else:
+        steps.append("> 1️⃣ ⚡ **直接生成 [Direct]**：無需額外工具排程，由主力模型直接回應")
+
+    final_step_num = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"][min(len(steps), 5)]
+    steps.append(f"> {final_step_num} ✨ **完成輸出 [Done]**：已生成回覆")
+
+    all_lines = header_lines + steps
+    return "\n".join(all_lines)
+
+
 def build_debug_detail_embed(
     final_reply: str,
     intent_name: str = "CHAT",
@@ -413,21 +493,23 @@ async def simulate_typing_and_send(
     try:
         sent_msg = None
         if getattr(settings, "DEBUG_DETAIL", False):
-            client = getattr(channel, "_state", None)
-            bot_user = getattr(client, "user", None)
-            embed = build_debug_detail_embed(
-                final_reply=final_reply,
+            # 方案 A：現代簡約步驟化 Markdown 思考欄
+            steps_block = format_thinking_steps_block(
+                thought_log=final_thought,
                 intent_name=intent_name,
-                prompt=prompt,
                 model=model,
                 latency_ms=latency_ms,
-                thought_log=final_thought,
-                bot_user=bot_user,
+                prompt=prompt,
             )
-            if is_message:
-                sent_msg = await target.reply(embed=embed, mention_author=False)
-            else:
-                sent_msg = await channel.send(embed=embed)
+            combined_reply = f"{steps_block}\n\n{final_reply}"
+            chunks = _chunk_message(combined_reply, max_length=1900)
+            for idx, chunk in enumerate(chunks):
+                if idx == 0 and is_message:
+                    sent_msg = await target.reply(chunk, mention_author=False)
+                else:
+                    current_sent = await channel.send(chunk)
+                    if idx == 0:
+                        sent_msg = current_sent
         else:
             chunks = _chunk_message(final_reply, max_length=1900)
             for idx, chunk in enumerate(chunks):

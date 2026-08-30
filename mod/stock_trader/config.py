@@ -65,7 +65,11 @@ TRADE_ANNOUNCE_CHANNEL_ID: int | None = 1534924821844983858
 # 策略推理模型設定
 # ---------------------------------------------------------------------------
 def get_default_model() -> str:
-    """取得美股交易模組預設模型。"""
+    """取得美股交易模組預設模型（即時動態同步全域 PRIMARY_MODEL 設定）。"""
+    stock_env = os.getenv("STOCK_TRADER_MODEL", "").strip()
+    if stock_env:
+        return stock_env
+
     try:
         import settings
         val = getattr(settings, "PRIMARY_MODEL", None)
@@ -74,12 +78,13 @@ def get_default_model() -> str:
     except Exception:
         pass
     return os.getenv(
-        "STOCK_TRADER_MODEL",
-        os.getenv("PRIMARY_MODEL", f"freetoken:{os.getenv('LLM_MODEL_NAME', 'mistralai/Mixtral-8x7B-Instruct-v0.1')}"),
+        "PRIMARY_MODEL",
+        f"freetoken:{os.getenv('LLM_MODEL_NAME', 'mistralai/Mixtral-8x7B-Instruct-v0.1')}",
     )
 
-DEFAULT_MODEL: str = get_default_model()
 
-
-
-
+def __getattr__(name: str) -> object:
+    """動態屬性存取，確保 DEFAULT_MODEL 永遠即時取得當前最新的主力模型。"""
+    if name == "DEFAULT_MODEL":
+        return get_default_model()
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

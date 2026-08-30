@@ -3,7 +3,7 @@ import logging
 import re
 from typing import Any
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 import settings
 from handlers.memory.storage import (
@@ -15,6 +15,7 @@ from handlers.memory.storage import (
 )
 from handlers.bot_brain import BotBrain, InferenceTask
 from handlers.memory.relationship import RelationshipManager
+from handlers.memory.chat_logger import flush_chat_logs
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +34,36 @@ class MemoryManager(commands.Cog):
         # 追蹤每日首次對話（用於好感度加權）
         self._daily_first_conversation: dict[int, str] = {}
 
+        try:
+            import asyncio
+            asyncio.get_running_loop()
+            self._flush_loop.start()
+        except RuntimeError:
+            pass
+
         logger.info(
             "MemoryManager: [專有特質紀錄大殿已上線] - 共裝載 %d 個被刻上靈魂印記的人物。",
             len(self._store),
         )
+
+    async def cog_load(self) -> None:
+        """Cog 載入時確保定時 Flush 迴圈已啟動。"""
+        if not self._flush_loop.is_running():
+            self._flush_loop.start()
+
+    async def cog_unload(self) -> None:
+        """Cog 卸載或關機時，強制落盤好感度與聊天記錄。"""
+        if self._flush_loop.is_running():
+            self._flush_loop.cancel()
+        self.relations.flush(force=True)
+        flush_chat_logs()
+        logger.info("MemoryManager: [關機落盤完成] 好感度與聊天緩衝已安全落盤。")
+
+    @tasks.loop(seconds=60.0)
+    async def _flush_loop(self) -> None:
+        """週期性（每 60 秒）檢查並落盤好感度與聊天緩衝。"""
+        self.relations.flush()
+        flush_chat_logs()
 
     # ==========================
     # 🔄 記憶庫重載（供 NightlyDigest 完成後同步 RAM）
@@ -91,6 +118,42 @@ class MemoryManager(commands.Cog):
             other_text = "\n".join([f"- {f['fact']}" for f in other_facts])
             parts.append(
                 f"📖 這個靈魂長存於你記憶區最重要的知識點歸納 (深沉過往：可結合你目前發生的話題引用吐槽):\n{other_text}"
+            )
+
+        snippet = (
+            f"📌 這個人類曾登錄使用過的暱稱或代稱含有：{known_aliases}\n"
+            + "\n\n".join(parts)
+        )
+        return snippet
+
+    def get_full_user_memory_snippet(self, user_id: int) -> str:
+        """產生供管理者或使用者查看的完整使用者記憶清單（列出全部事實，不進行 Prompt 取樣截斷與相似度過濾）。
+
+        Args:
+            user_id: Discord 使用者 ID。
+
+        Returns:
+            格式化後的完整長期記憶字串。
+        """
+        profile = self._store.get(str(user_id))
+        if not profile or not profile.get("facts"):
+            return ""
+
+        clean_aliases = sanitize_aliases(profile.get("aliases", []))
+        known_aliases = "、".join(clean_aliases) if clean_aliases else "查無特定曾用別稱"
+
+        all_facts = profile.get("facts", [])
+        rule_facts = [f for f in all_facts if f.get("category") == "rule"]
+        other_facts = [f for f in all_facts if f.get("category") != "rule"]
+
+        parts: list[str] = []
+        if rule_facts:
+            rule_text = "\n".join([f"  ⚠️ {f['fact']}" for f in rule_facts])
+            parts.append(f"🔒 【與這個人說話時必須遵守的規則】：\n{rule_text}")
+        if other_facts:
+            other_text = "\n".join([f"- {f['fact']}" for f in other_facts])
+            parts.append(
+                f"📖 這個靈魂長存於你記憶區的全部知識點歸納 (共 {len(other_facts)} 條):\n{other_text}"
             )
 
         snippet = (

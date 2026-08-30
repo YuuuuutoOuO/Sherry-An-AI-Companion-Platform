@@ -486,7 +486,7 @@ class TradeStrategist:
                         system_prompt="",
                         user_prompt=prompt,
                         callback=_on_complete,
-                        model=cfg.DEFAULT_MODEL,
+                        model=cfg.get_default_model(),
                         task_id="stock_trader_eval",
                     )
                     await brain.enqueue_task(task)
@@ -496,9 +496,9 @@ class TradeStrategist:
                 except Exception as e:
                     logger.warning("[stock_trader] BotBrain 佇列呼叫失敗，切換直連備援模式: %s", e)
 
-        # 2. 直連推論：依次嘗試 cfg.DEFAULT_MODEL -> PRIMARY_MODEL -> QUICK_MODEL -> 本地常用 Ollama 模型
+        # 2. 直連推論：依次嘗試 cfg.get_default_model() -> PRIMARY_MODEL -> QUICK_MODEL -> 本地常用 Ollama 模型
         models_to_try = [
-            cfg.DEFAULT_MODEL,
+            cfg.get_default_model(),
             getattr(settings, "PRIMARY_MODEL", None),
             getattr(settings, "QUICK_MODEL", None),
             getattr(settings, "NOMORAL_MODEL", None),

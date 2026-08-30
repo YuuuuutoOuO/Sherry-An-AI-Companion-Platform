@@ -1,15 +1,13 @@
 @echo off
-:: ============================================================
-:: Sherry Bot Restart Launcher
-:: 由 Web UI「重啟雪莉」按鈕呼叫
-:: 確保在 conda 環境下乾淨地重新啟動 main.py
-:: ============================================================
-set PYTHON=C:\Users\corps\.conda\envs\discord_bot\python.exe
+setlocal
+chcp 65001 > nul
 set BOT_DIR=%~dp0
-
-:: 等待舊進程關閉
-timeout /t 2 /nobreak > nul
-
-:: 切換到 Bot 目錄並啟動
 cd /d "%BOT_DIR%"
-start "SherryBot" "%PYTHON%" main.py
+
+if not exist "%BOT_DIR%data" mkdir "%BOT_DIR%data"
+echo restart > "%BOT_DIR%data\shutdown.signal"
+
+ping -n 3 127.0.0.1 > nul
+
+call start_sherry_tabs.bat
+endlocal

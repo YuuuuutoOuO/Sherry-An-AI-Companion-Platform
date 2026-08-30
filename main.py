@@ -30,19 +30,50 @@ settings.THINKING_LOG_DIR.mkdir(parents=True, exist_ok=True)
 settings.CHAT_LOG_DIR.mkdir(parents=True, exist_ok=True)
 settings.VIDEO_DIR.mkdir(parents=True, exist_ok=True)
 
+import os
+import sys
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+if sys.platform == "win32":
+    os.system("title 🤖 雪莉主核心 (Sherry Core)")
+
+# 記錄主程序 PID 供終端監控分頁同步關閉
+try:
+    (settings.DATA_DIR / "sherry.pid").write_text(str(os.getpid()), encoding="utf-8")
+except Exception:
+    pass
+
+
+from handlers.social.observability import (
+    TraceIdFilter,
+    get_trace_id,
+    log_command,
+    log_error,
+    make_timer,
+    new_trace_id,
+    set_trace_id,
+)
+
 # ---------------------------------------------------------------------------
 # Logging setup (must happen before any other import that logs)
 # ---------------------------------------------------------------------------
+_stream_handler = logging.StreamHandler(sys.stdout)
+_file_handler = logging.FileHandler(settings.BOT_LOG_PATH, encoding="utf-8")
+_trace_filter = TraceIdFilter()
+_stream_handler.addFilter(_trace_filter)
+_file_handler.addFilter(_trace_filter)
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    format="%(asctime)s [%(levelname)s] [%(trace_id)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(settings.BOT_LOG_PATH, encoding="utf-8"),
-    ],
+    handlers=[_stream_handler, _file_handler],
 )
 logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Core Cog extension paths (relative dotted module paths)
@@ -125,6 +156,8 @@ async def main() -> None:
         pass
 
     bot = build_bot()
+    from core import SherryCore
+    bot.core = SherryCore(bot)  # type: ignore[attr-defined]
 
     async with bot:
         for ext in EXTENSIONS:
@@ -221,11 +254,200 @@ async def main() -> None:
                 logger.error(f"Failed to start Web UI: {e}")
 
         @bot.event
+        async def on_interaction(interaction: discord.Interaction) -> None:
+            """全域攔截 Discord 互動事件（斜線指令、按鈕、選單、表單）並記錄生命週期與 Trace ID。"""
+            itype = interaction.type
+            user_str = f"{interaction.user.display_name} ({interaction.user.name})"
+            user_id = interaction.user.id
+            guild_name = interaction.guild.name if interaction.guild else "DM"
+            guild_id = interaction.guild.id if interaction.guild else 0
+            channel_name = getattr(interaction.channel, "name", "DM") if interaction.channel else "Unknown"
+            channel_id = interaction.channel_id or 0
+
+            # 1. 斜線指令 (Application Command)
+            if itype == discord.InteractionType.application_command:
+                tid = new_trace_id("cmd")
+                set_trace_id(tid)
+                data = interaction.data or {}
+                cmd_name = data.get("name", "unknown")
+
+                # 萃取參數選項（支援子指令結構）
+                options_dict: dict[str, Any] = {}
+
+                def _extract_options(opts: list[dict[str, Any]]) -> None:
+                    for opt in opts:
+                        if "value" in opt:
+                            options_dict[opt.get("name", "")] = opt.get("value")
+                        elif "options" in opt:
+                            sub_name = opt.get("name", "")
+                            options_dict["_subcommand"] = sub_name
+                            _extract_options(opt.get("options", []))
+
+                if "options" in data and isinstance(data["options"], list):
+                    _extract_options(data["options"])
+
+                logger.info(
+                    "[SlashCommand] User: %s (%s) | Guild: %s | Channel: #%s | Command: /%s | Options: %s",
+                    user_str,
+                    user_id,
+                    guild_name,
+                    channel_name,
+                    cmd_name,
+                    options_dict,
+                )
+                log_command(
+                    command_type="slash",
+                    command_name=cmd_name,
+                    user=user_str,
+                    user_id=user_id,
+                    guild_name=guild_name,
+                    guild_id=guild_id,
+                    channel_name=channel_name,
+                    channel_id=channel_id,
+                    options=options_dict,
+                    status="invoked",
+                    trace_id=tid,
+                )
+
+            # 2. 按鈕與選單元件 (Message Component)
+            elif itype == discord.InteractionType.component:
+                tid = new_trace_id("btn")
+                set_trace_id(tid)
+                data = interaction.data or {}
+                custom_id = data.get("custom_id", "unknown")
+                comp_type = data.get("component_type", 0)
+                values = data.get("values", [])
+
+                comp_kind = "select" if values or comp_type in (3, 5, 6, 7, 8) else "button"
+                logger.info(
+                    "[Component] Kind: %s | Custom ID: %s | User: %s | Channel: #%s | Values: %s",
+                    comp_kind,
+                    custom_id,
+                    user_str,
+                    channel_name,
+                    values,
+                )
+                log_command(
+                    command_type=comp_kind,
+                    command_name=custom_id,
+                    user=user_str,
+                    user_id=user_id,
+                    guild_name=guild_name,
+                    guild_id=guild_id,
+                    channel_name=channel_name,
+                    channel_id=channel_id,
+                    options={"values": values} if values else None,
+                    status="invoked",
+                    trace_id=tid,
+                )
+
+            # 3. 表單提交 (Modal Submit)
+            elif itype == discord.InteractionType.modal_submit:
+                tid = new_trace_id("modal")
+                set_trace_id(tid)
+                data = interaction.data or {}
+                custom_id = data.get("custom_id", "unknown")
+                logger.info(
+                    "[Modal] Custom ID: %s | User: %s | Channel: #%s",
+                    custom_id,
+                    user_str,
+                    channel_name,
+                )
+                log_command(
+                    command_type="modal",
+                    command_name=custom_id,
+                    user=user_str,
+                    user_id=user_id,
+                    guild_name=guild_name,
+                    guild_id=guild_id,
+                    channel_name=channel_name,
+                    channel_id=channel_id,
+                    status="submitted",
+                    trace_id=tid,
+                )
+
+        # 註冊 CommandTree 全域錯誤捕捉器
+        @bot.tree.error
+        async def on_app_command_error(
+            interaction: discord.Interaction,
+            error: discord.app_commands.AppCommandError,
+        ) -> None:
+            """全域捕捉並記錄斜線指令異常，防止靜默崩潰。"""
+            cmd_name = getattr(interaction.command, "name", "unknown")
+            tid = get_trace_id() or new_trace_id("err")
+            logger.error("Slash command /%s failed with error: %s", cmd_name, error, exc_info=True)
+            log_error(
+                event="command_error",
+                trace_id=tid,
+                error_type=type(error).__name__,
+                message=str(error),
+                extra={
+                    "command": cmd_name,
+                    "user": str(interaction.user),
+                    "guild_id": interaction.guild_id or 0,
+                    "channel_id": interaction.channel_id or 0,
+                },
+            )
+            # 友善回應用戶
+            try:
+                err_text = f"❌ 執行指令 `/{cmd_name}` 時發生錯誤：{error}"
+                if interaction.response.is_done():
+                    await interaction.followup.send(err_text, ephemeral=True)
+                else:
+                    await interaction.response.send_message(err_text, ephemeral=True)
+            except Exception as e:
+                logger.debug("Failed to send error response to interaction: %s", e)
+
+        # 註冊前綴指令監聽
+        @bot.event
+        async def on_command(ctx: commands.Context) -> None:
+            tid = new_trace_id("prefix")
+            set_trace_id(tid)
+            setattr(ctx, "_start_timer", make_timer())
+            cmd_name = ctx.command.name if ctx.command else "unknown"
+            logger.info(
+                "[PrefixCommand Invoked] User: %s (%s) | Channel: #%s | Command: !%s",
+                ctx.author.display_name,
+                ctx.author.id,
+                getattr(ctx.channel, "name", "DM"),
+                cmd_name,
+            )
+
+        @bot.event
+        async def on_command_completion(ctx: commands.Context) -> None:
+            timer = getattr(ctx, "_start_timer", None)
+            latency_ms = timer() if timer else 0
+            cmd_name = ctx.command.name if ctx.command else "unknown"
+            logger.info("[PrefixCommand Completed] !%s in %d ms", cmd_name, latency_ms)
+            log_command(
+                command_type="prefix",
+                command_name=cmd_name,
+                user=f"{ctx.author.display_name} ({ctx.author.name})",
+                user_id=ctx.author.id,
+                guild_name=ctx.guild.name if ctx.guild else "DM",
+                guild_id=ctx.guild.id if ctx.guild else 0,
+                channel_name=getattr(ctx.channel, "name", "DM") if ctx.channel else "Unknown",
+                channel_id=ctx.channel.id if ctx.channel else 0,
+                latency_ms=latency_ms,
+                status="success",
+            )
+
+        @bot.event
         async def on_command_error(ctx: commands.Context, error: Exception) -> None:
             # 忽略找不到前綴指令的錯誤（群組成員打 !xxx 不影響 slash commands）
             if isinstance(error, commands.CommandNotFound):
                 return
-            logger.error("Command error in %s: %s", ctx.command, error)
+            logger.error("Command error in %s: %s", ctx.command, error, exc_info=True)
+            log_error(
+                event="prefix_command_error",
+                error_type=type(error).__name__,
+                message=str(error),
+                extra={
+                    "command": str(ctx.command),
+                    "user": f"{ctx.author.display_name} ({ctx.author.name})",
+                    "channel_id": ctx.channel.id if ctx.channel else 0,
+                },
+            )
 
         await bot.start(settings.DISCORD_BOT_TOKEN)
 

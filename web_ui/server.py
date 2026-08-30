@@ -873,6 +873,10 @@ async def restart_bot() -> Response | tuple[Response, int]:
     def _do_restart() -> None:
         import sys
         logger = logging.getLogger(__name__)
+        try:
+            (settings.DATA_DIR / "shutdown.signal").write_text(f"restart:{time.time()}", encoding="utf-8")
+        except Exception:
+            pass
         if sys.platform == "win32":
             logger.info("Launching restart_sherry.bat ...")
             bat = os.path.join(os.getcwd(), "restart_sherry.bat")
@@ -927,6 +931,10 @@ async def stop_bot() -> Response | tuple[Response, int]:
     def _do_stop() -> None:
         logger = logging.getLogger(__name__)
         logger.info("Stopping Sherry bot per admin request...")
+        try:
+            (settings.DATA_DIR / "shutdown.signal").write_text(f"stop:{time.time()}", encoding="utf-8")
+        except Exception:
+            pass
         logging.shutdown()
         os._exit(0)  # 立即終止 Python 程序與 Web UI
 
@@ -948,6 +956,10 @@ async def update_and_restart() -> Response | tuple[Response, int] | Any:
     def _do_update() -> None:
         import sys
         logger = logging.getLogger(__name__)
+        try:
+            (settings.DATA_DIR / "shutdown.signal").write_text(f"update:{time.time()}", encoding="utf-8")
+        except Exception:
+            pass
         if sys.platform == "win32":
             logger.info("Launching update_and_restart.bat (git pull + restart)...")
             bat = os.path.join(os.getcwd(), "update_and_restart.bat")
@@ -974,6 +986,7 @@ async def update_and_restart() -> Response | tuple[Response, int] | Any:
                 logger.error("Failed to launch update_and_restart.sh: %s", e)
         logging.shutdown()
         os._exit(0)  # 立即由 OS 釋放 Socket，避免 Python GC 出現 SSL Transport 錯誤
+
 
     asyncio.get_running_loop().call_later(0.8, _do_update)
     return jsonify({
@@ -1834,7 +1847,8 @@ async def test_roast_preview() -> tuple[Response, int] | Response:
         })
 
     # Try LLM generation if bot brain available
-    roast_reply = selected_rule.reply_guide
+    from handlers.roast.utils import clean_roast_reply, extract_fallback_roast
+    roast_reply = extract_fallback_roast(selected_rule.reply_guide, user_content=message_text)
     if _bot_instance:
         brain = _bot_instance.get_cog("BotBrain")
         if brain:
@@ -1850,10 +1864,11 @@ async def test_roast_preview() -> tuple[Response, int] | Response:
                 f"使用者發言：「{message_text}」\n"
                 f"觸發關鍵字「{selected_rule.keyword}」\n"
                 f"【核心吐槽指引】：「{selected_rule.reply_guide}」\n\n"
-                "🎯 【吐槽生成三大核心法則】（極為重要！）：\n"
-                "1. 🔗 深度結合對方發言情境：妳必須敏銳抓住對方句子裡的具體人事物、動作或場景，將「核心吐槽指引」自然融合進去進行精準反駁！絕對禁止忽視對方說的內容只講生硬的罐頭台詞。\n"
+                "🎯 【吐槽生成四大核心法則】（極為重要！）：\n"
+                "1. 🔗 深度結合對方發言情境：妳必須敏銳抓住對方句子裡的具體人事物、動作或場景，將「核心吐槽指引」的語氣與觀點自然融合進去進行精準反駁！絕對禁止忽視對方說的內容只講生硬的罐頭台詞。\n"
                 "2. 🍊 傲嬌毒舌名偵探人設：語氣自信、傲嬌且犀利，一針見血地戳破對方的幻想或吐槽對方的行為！\n"
                 "3. ⚡ 俐落生動短句：長度約 15 ~ 55 字，必須是妳直接說出口的生動對白，絕對禁止在最外層包裹「」或 \"\" 引號，禁止任何機器人客套話！\n"
+                "4. 🚫 嚴禁複製指引標籤：【核心吐槽指引】是提供給妳的思維邏輯與參考指引，請將其內化為妳的傲嬌口吻。若指引中包含方括號條件（例如 [若提及雪莉:...]）或提示詞，請依據使用者發言情境判定符合的條件並轉化為自然的日常說話對白，**絕對禁止**把方括號標籤或提示詞原樣輸出！\n"
             ) + SAFETY_FOOTER
 
             future = _bot_instance.loop.create_future()
@@ -1872,8 +1887,11 @@ async def test_roast_preview() -> tuple[Response, int] | Response:
             )
             await brain.enqueue_task(task)
             try:
-                raw = await asyncio.wait_for(future, timeout=6.0)
-                cleaned = raw.strip().strip('"').strip("「").strip("」").strip()
+                raw = await asyncio.wait_for(
+                    future,
+                    timeout=getattr(settings, "ROAST_REPLY_TIMEOUT", 30.0),
+                )
+                cleaned = clean_roast_reply(raw)
                 if cleaned:
                     roast_reply = cleaned
             except Exception:
@@ -1974,12 +1992,38 @@ async def start_server_async(bot: Any = None) -> None:
         if not ssl_certfile or not ssl_keyfile:
             ssl_certfile, ssl_keyfile = _ensure_self_signed_cert()
 
+    # 確保 Web UI 專屬 Log 目錄存在
+    settings.WEB_UI_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    # 設定 Uvicorn / Quart 存取日誌分流至 data/web_ui.log，不干擾主視窗控制台
+    web_log_handler = logging.FileHandler(settings.WEB_UI_LOG_PATH, encoding="utf-8")
+    web_log_handler.setLevel(logging.INFO)
+    web_log_handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S")
+    )
+
+    # 存取日誌 (uvicorn.access)：清掉預設 console handler，只寫入 web_ui.log
+    access_logger = logging.getLogger("uvicorn.access")
+    access_logger.handlers = [web_log_handler]
+    access_logger.propagate = False
+
+    # 其餘 Web 相關 logger：附加一份到 web_ui.log（不重複掛同一 handler，
+    # 避免同檔號誌被寫入兩次；也不動 propagate，保留主視窗可見性）
+    for logger_name in ["uvicorn.error", "quart.app", "quart.serving", "web_ui.server"]:
+        web_logger = logging.getLogger(logger_name)
+        web_logger.setLevel(logging.INFO)
+        if web_log_handler not in web_logger.handlers:
+            web_logger.addHandler(web_log_handler)
+
     kwargs: dict[str, Any] = {
         "app": app,
         "host": str(settings.WEB_UI_HOST),
         "port": int(settings.WEB_UI_PORT),
         "loop": "asyncio",
+        "log_config": None,
+        "access_log": True,
     }
+
     if ssl_certfile and ssl_keyfile:
         kwargs["ssl_certfile"] = ssl_certfile
         kwargs["ssl_keyfile"] = ssl_keyfile
@@ -1997,5 +2041,6 @@ async def start_server_async(bot: Any = None) -> None:
             await server.serve()
         else:
             raise
+
 
 
