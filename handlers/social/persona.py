@@ -17,17 +17,27 @@ _HIGH_PRIORITY_LORE_PATTERNS = frozenset([
 ])
 
 
-@functools.lru_cache(maxsize=4)
-def _load_soul_persona(channel_id: int | None = None) -> str:
-    """載入 SOUL 靈魂 Markdown 檔案，支援頻道映射與 fallback 備援機制。"""
-    soul_file: Path = getattr(settings, "DEFAULT_SOUL_PATH", settings.BASE_DIR / "file" / "soul" / "sherry_default.md")
+@functools.lru_cache(maxsize=16)
+def _load_soul_persona_by_name(soul_name: str) -> str:
+    """載入指定名稱的 SOUL 靈魂 Markdown 檔案內容。
 
-    if channel_id and hasattr(settings, "CHANNEL_SOUL_MAP") and channel_id in settings.CHANNEL_SOUL_MAP:
-        mapped_name = settings.CHANNEL_SOUL_MAP[channel_id]
-        mapped_path = Path(mapped_name)
-        if not mapped_path.is_absolute():
-            mapped_path = getattr(settings, "SOUL_DIR", settings.BASE_DIR / "file" / "soul") / mapped_name
+    Args:
+        soul_name: 人設檔案名稱（例如 sherry_default.md）。
+
+    Returns:
+        str: 人設文本內容，若讀取失敗則 fallback 至 CORE_PERSONA。
+    """
+    soul_dir: Path = getattr(settings, "SOUL_DIR", settings.BASE_DIR / "file" / "soul")
+    mapped_path = Path(soul_name)
+    if not mapped_path.is_absolute():
+        soul_file = soul_dir / soul_name
+    else:
         soul_file = mapped_path
+
+    if not soul_file.exists() and not soul_name.startswith("manosaba_"):
+        fallback_file = soul_dir / f"manosaba_{soul_name}"
+        if fallback_file.exists():
+            soul_file = fallback_file
 
     try:
         if soul_file.exists():
@@ -40,10 +50,75 @@ def _load_soul_persona(channel_id: int | None = None) -> str:
     return getattr(settings, "CORE_PERSONA", "")
 
 
+def _load_soul_persona(channel_id: int | None = None) -> str:
+    """載入當前有效之 SOUL 靈魂 Markdown 檔案，支援頻道映射與全域預設。
+
+    Args:
+        channel_id: 可選的頻道 ID。
+
+    Returns:
+        str: 角色人設文本。
+    """
+    if channel_id and hasattr(settings, "CHANNEL_SOUL_MAP") and channel_id in settings.CHANNEL_SOUL_MAP:
+        return _load_soul_persona_by_name(settings.CHANNEL_SOUL_MAP[channel_id])
+
+    active_name = getattr(settings, "CURRENT_SOUL_NAME", "sherry_default.md")
+    return _load_soul_persona_by_name(active_name)
+
+
+@functools.lru_cache(maxsize=1)
+def _load_common_rules() -> str:
+    """載入通用防幻覺與互動鐵則 Markdown 檔案。
+
+    Returns:
+        str: 通用互動規則文本。
+    """
+    rules_file: Path = getattr(
+        settings,
+        "COMMON_RULES_PATH",
+        getattr(settings, "SOUL_DIR", settings.BASE_DIR / "file" / "soul") / "common_rules.md",
+    )
+    try:
+        if rules_file.exists():
+            content = rules_file.read_text(encoding="utf-8").strip()
+            if content:
+                return content
+    except Exception as exc:
+        logger.warning("[SOUL] 載入通用規則檔 '%s' 失敗: %s", rules_file, exc)
+
+    return ""
+
+
+@functools.lru_cache(maxsize=16)
+def _compile_lorebook(
+    items_tuple: tuple[tuple[str, str], ...]
+) -> list[tuple[re.Pattern[str], bool, str]]:
+    """預編譯 Lorebook 正則表達式並快取編譯結果。
+
+    Args:
+        items_tuple: Lorebook 鍵值對元組。
+
+    Returns:
+        list[tuple[re.Pattern[str], bool, str]]: (compiled_regex, is_high_priority, lore_fact) 列表。
+    """
+    return [
+        (re.compile(pattern, re.IGNORECASE), pattern in _HIGH_PRIORITY_LORE_PATTERNS, fact)
+        for pattern, fact in items_tuple
+    ]
+
+
+def clear_soul_cache() -> None:
+    """清除人設與通用規則快取，供動態熱切換時調用。"""
+    _load_soul_persona_by_name.cache_clear()
+    _load_common_rules.cache_clear()
+    _compile_lorebook.cache_clear()
+
+
 def build_dynamic_persona(
     current_text: str,
     intent_name: str,
     channel_id: int | None = None,
+    server_id: str = "",
 ) -> tuple[str, str]:
     """動態人格拼裝系統（ST 雙層注入與 SOUL 外部化版）。
 
@@ -51,92 +126,121 @@ def build_dynamic_persona(
       - head_persona: 放在 Prompt 最前面（背景設定、低優先度世界觀）
       - tail_lore:    放在對話歷史最後面（高優先度鐵則，緊貼生成點，模仿 ST Author's Note）
 
+    Args:
+        current_text: 當前對話歷史或輸入文字（用於觸發世界書關鍵字匹配）。
+        intent_name: 意圖分類名稱（如 CHAT, STOCK, DRAW 等）。
+        channel_id: 當前頻道 ID（用於特定頻道 SOUL 設定載入）。
+        server_id: 當前伺服器識別碼（用於過濾跨伺服器世界記憶）。
+
     Returns:
-        (head_persona, tail_lore)
+        tuple[str, str]: (head_persona, tail_lore) 二元組。
     """
-    # ── 頭部人設（從 SOUL 檔載入或 fallback 至 CORE_PERSONA）──────────────
+    # ── 頭部人設（從 SOUL 檔載入或 fallback 至 CORE_PERSONA + 通用互動規則）──────────────
+    # 為了最大化 LLM 前綴快取 (Prefix/KV Cache) 命中率，動態時間標籤改移至尾部 tail_lore，
+    # 確保 head_persona 內容在相同頻道與意圖下完全靜態恆定。
     TAIWAN_TZ = timezone(timedelta(hours=8))
     now_tw = datetime.now(TAIWAN_TZ)
     weekday_names = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
     time_block = f"⏰【目前時間】：{now_tw.strftime('%Y-%m-%d %H:%M')}（台灣時間，{weekday_names[now_tw.weekday()]}）"
-    head_blocks = [_load_soul_persona(channel_id), time_block]
+
+    soul_text = _load_soul_persona(channel_id)
+    rule_text = _load_common_rules()
+    head_blocks: list[str] = [soul_text]
+    if rule_text:
+        head_blocks.append(rule_text)
 
     if intent_name == "MUSIC":
-        head_blocks.append("🎙️【狀態設定】：現在是在負責音樂魔法室台的氣氛 DJ 狀態，不用理會太多案情推論，專心聊聊氣氛吧。")
+        head_blocks.append("🎙️【狀態設定】：現在正在為頻道播放音樂與帶動氣氛，請以妳一貫的性格與口吻陪伴大家聽音樂。")
     elif intent_name in ("SEARCH", "SUMMARY"):
-        head_blocks.append("🔎【狀態設定】：拿到重要線索在為眾人宣讀的情報科特派名偵探！如果資訊太悶妳可以加上天真的嘲諷與吐槽。無獲也別生氣喔。")
+        head_blocks.append("🔎【狀態設定】：正在為大家彙整與解讀查到的重要情報！請以妳的核心人設與性格，條理分明、一針見血地解說核心重點。")
     elif intent_name == "PIXIV":
-        head_blocks.append("📸【狀態設定】：剛剛炫耀著端出別人一直想窺視的神奇秘密照出來獻寶的名偵探！請展露妳自信的成就。")
+        head_blocks.append("📸【狀態設定】：正在為大家展示剛找到的精美圖片！請以符合妳性格特質與風格的語氣向大家分享與介紹。")
     elif intent_name == "STOCK":
         head_blocks.append(
-            "📈【狀態設定】：現在是化身為股市情報分析師的名偵探模式！\n"
-            "妳超喜歡用那種「看穿一切」的分析眼光來解讀數據，請用輕鬆又充滿自信的語氣報告行情、解析趨勢。"
-            "可以適時加上帶點傲嬌的評論，例如：「哼，這支股票的走勢根本是小學算術，給本偵探看一眼就破案了！」"
+            "📈【狀態設定】：現在正在解讀股市與財金數據！\n"
+            "請貫徹妳的核心性格與說話風格，用自信清晰且符合角色的口吻報告行情與趨勢分析。"
         )
     elif intent_name == "WEATHER":
         head_blocks.append(
-            "⛅【狀態設定】：現在是氣象播報員名偵探模式！\n"
-            "播報天氣要帶點關心與活潑感，可以順便提醒「要記得帶傘喔」之類的貼心話。"
-            "如果天氣很爛，可以加上帶點無奈的吐槽，但整體保持輕鬆親切的口吻。"
+            "⛅【狀態設定】：現在正在為大家播報即時氣象與天氣預報！\n"
+            "請用符合妳角色的語氣，自然地告知天氣狀況並適度給予貼心提醒。"
         )
     elif intent_name == "SCHEDULE":
         head_blocks.append(
-            "🗓️【狀態設定】：現在是可靠又愛調皮的行程管理助理模式！\n"
-            "幫大家確認提醒事項時要顯得可靠又細心，但可以帶點傲嬌感。"
-            "例如：「哼，幸好有本偵探替你盯著，要不然你肯定忘了吧！」"
+            "🗓️【狀態設定】：現在正在協助管理與確認排程、鬧鐘或提醒事項！\n"
+            "請以符合妳角色的口吻確認時間與內容，條理分明地協助處理。"
         )
     elif intent_name == "DRAW":
         head_blocks.append(
-            "🎨【狀態設定】：現在是執筆中的名偵探繪師模式！\n"
-            "接到繪圖委託要表現出躍躍欲試又有點高傲的藝術家感，例如：「哼，就讓本偵探展示一下真正的藝術吧！」"
-            "完成後要驕傲地展示作品，失敗時要帶點無奈但不失可愛地道歉。"
+            "🎨【狀態設定】：現在正在接受大家的繪圖與創作委託！\n"
+            "請以符合妳角色的語氣回應委託，完成後展示作品，展現個人創作風格。"
         )
     elif intent_name == "CHAT":
         head_blocks.append(
-            "💬【狀態設定】：正在群裡跟熟群友輕鬆開心閒聊！\n"
-            "嚴禁對別人的普通打招呼或閒聊進行過度解讀或說教！回覆要親切自然、生動豐富、熱情可愛，像個話多又愛互動的台灣 15 歲高中女生。可以多表達情緒與分享（不需要刻意簡短），結尾可以適時『像好群友一樣隨口反問或丟球互動』（例如『今天有什麼委託要找我嗎？👀』、『笨蛋，你想找我聊天對吧？』），絕對禁止咄咄逼人的質問或心理說教！"
+            "💬【狀態設定】：正在與身邊重要的人面對面輕鬆交談！\n"
+            "請徹底貫徹妳當前設定的核心人設、性格特質與說話風格。以兩人就在眼前的面對面臨場感，自然流暢地互動交流，多表達情緒與想法，結尾可適時延續話題；嚴禁生硬說教或機械式回覆！"
         )
 
 
-    # ── 掃描 LOREBOOK，依優先度分流 ─────────────────────────────────
-    text_to_scan = current_text.lower()
-    head_lores: list[str] = []
-    tail_lores: list[str] = []
-
-    for regex_pattern, lore_fact in settings.LOREBOOK.items():
-        if re.search(regex_pattern, text_to_scan, re.IGNORECASE):
-            if regex_pattern in _HIGH_PRIORITY_LORE_PATTERNS:
-                tail_lores.append(f"- {lore_fact}")
-            else:
-                head_lores.append(f"- {lore_fact}")
-
-    if head_lores:
-        head_blocks.append(
-            "📖【專屬的秘密線索庫啟動！】:\n"
-            "注意！若是涉及探討以下紀錄中的關鍵點或人物；妳回答前必須『依照底下給的事實背景出發與互動』不能自生矛盾與假事實喔：\n"
-            + "\n".join(head_lores)
-        )
-
+    # ── head_persona 保持 100% 靜態恆定（僅包含 SOUL 靈魂設定與意圖狀態）───────
     head_persona = "\n\n".join(head_blocks)
 
-    # ── 世界記憶注入（世界近期大事）───────────────────────────
+    # ── 掃描 LOREBOOK，依優先度分流至動態尾部 (tail_lore) ───────────────
+    text_to_scan = current_text.lower()
+    general_lores: list[str] = []
+    override_lores: list[str] = []
+
+    lorebook_items = tuple(getattr(settings, "LOREBOOK", {}).items())
+    for pattern_obj, is_high_priority, lore_fact in _compile_lorebook(lorebook_items):
+        if pattern_obj.search(text_to_scan):
+            if is_high_priority:
+                override_lores.append(f"- {lore_fact}")
+            else:
+                general_lores.append(f"- {lore_fact}")
+
+    # 限制通用世界書條目上限 (Top-3)，避免長尾條目擠佔 context 與破壞前綴結構
+    if len(general_lores) > settings.LOREBOOK_MAX_GENERAL_ENTRIES:
+        general_lores = general_lores[: settings.LOREBOOK_MAX_GENERAL_ENTRIES]
+
+    # ── 尾部注入（Author's Note 模仿層，緊貼對話歷史末端）──────────
+    # 將時間戳記、世界記憶、動態線索與即時人設覆蓋全數置於尾部，
+    # 既符合注意力臨近原則，又能確保最前端數千字元的靜態前綴 (head_persona)
+    # 永不因對話提及人物或話題而改變，徹底保證 Prefix Caching 100% 命中！
+    tail_parts: list[str] = [time_block]
+
+    # 世界記憶注入（世界近期大事，屬動態情境，預算控制在 5~8 筆）
     try:
         from handlers.memory.world_memory import get_world_memory_snippet
-        world_snippet = get_world_memory_snippet(days=3, min_importance=3)
+        world_snippet = get_world_memory_snippet(
+            days=3, min_importance=3, server_id=server_id, limit=6
+        )
         if world_snippet:
-            head_persona = f"{head_persona}\n\n{world_snippet}"
+            tail_parts.append(world_snippet)
     except Exception:
         pass    # 世界記憶模組未載入時靜默跳過
 
-    # ── 尾部注入（Author's Note 模仿層，緊貼對話歷史末端）──────────
-    tail_parts: list[str] = []
-    if tail_lores:
+    if general_lores:
+        tail_parts.append(
+            "📖【專屬的秘密線索庫啟動！】:\n"
+            "注意！若是涉及探討以下紀錄中的關鍵點或人物；妳回答前必須『依照底下給的事實背景出發與互動』不能自生矛盾與假事實喔：\n"
+            + "\n".join(general_lores)
+        )
+
+    if override_lores:
         tail_parts.append(
             "⚡【作者備註 / 即時人設覆蓋】\n"
             "（本段置於最近對話之後，確保優先被模型讀取）\n"
-            + "\n".join(tail_lores)
+            + "\n".join(override_lores)
         )
 
     tail_lore = "\n\n".join(tail_parts)
 
-    return head_persona, tail_lore
+    return head_persona, tail_lore
+
+
+def get_current_time_block() -> str:
+    """取得當前台灣時間標籤字串。"""
+    TAIWAN_TZ = timezone(timedelta(hours=8))
+    now_tw = datetime.now(TAIWAN_TZ)
+    weekday_names = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
+    return f"⏰【目前時間】：{now_tw.strftime('%Y-%m-%d %H:%M')}（台灣時間，{weekday_names[now_tw.weekday()]}）"

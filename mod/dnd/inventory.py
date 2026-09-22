@@ -55,22 +55,3 @@ def equip_item(user_id: int, item_name: str) -> tuple[Character, str]:
 
     return char, f"已成功裝備「{target_item.name}」！"
 
-
-def add_gold(user_id: int, gold_amount: int) -> Character:
-    """Add gold to character.
-
-    Args:
-        user_id: User ID.
-        gold_amount: Amount of gold to add.
-
-    Returns:
-        Updated Character.
-    """
-    all_chars = load_characters()
-    if user_id in all_chars:
-        char = all_chars[user_id]
-        char.inventory.gold = max(0, char.inventory.gold + gold_amount)
-        all_chars[user_id] = char
-        save_characters(all_chars)
-        return char
-    raise ValueError(f"Character for user {user_id} not found.")

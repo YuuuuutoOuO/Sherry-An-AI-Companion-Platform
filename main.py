@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from logging.handlers import RotatingFileHandler
 import sys
 from pathlib import Path
 from typing import Any
@@ -26,12 +27,10 @@ import settings
 settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
 settings.FILE_DIR.mkdir(parents=True, exist_ok=True)
 settings.SOUL_DIR.mkdir(parents=True, exist_ok=True)
-settings.THINKING_LOG_DIR.mkdir(parents=True, exist_ok=True)
 settings.CHAT_LOG_DIR.mkdir(parents=True, exist_ok=True)
 settings.VIDEO_DIR.mkdir(parents=True, exist_ok=True)
 
 import os
-import sys
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -61,7 +60,12 @@ from handlers.social.observability import (
 # Logging setup (must happen before any other import that logs)
 # ---------------------------------------------------------------------------
 _stream_handler = logging.StreamHandler(sys.stdout)
-_file_handler = logging.FileHandler(settings.BOT_LOG_PATH, encoding="utf-8")
+_file_handler = RotatingFileHandler(
+    settings.BOT_LOG_PATH,
+    maxBytes=10 * 1024 * 1024,
+    backupCount=5,
+    encoding="utf-8",
+)
 _trace_filter = TraceIdFilter()
 _stream_handler.addFilter(_trace_filter)
 _file_handler.addFilter(_trace_filter)
@@ -82,36 +86,79 @@ EXTENSIONS: list[str] = [
     "handlers.bot_brain",
     "handlers.social",
     "handlers.vibe_manager",
-    # "handlers.web_explorer",
     "handlers.music",
     "handlers.memory",
     "handlers.admin",
     "handlers.voice",
-    "handlers.scheduler",
+    "handlers.spark",  # 核心 SPARK 條件排程與推播系統（全面接管 scheduler）
     "handlers.executor",
     "handlers.help_cog",
     "handlers.welcome_cog",
     "handlers.heartbeat",
+    "handlers.sys_inspector",
     "handlers.roast",
+    "handlers.context_menu",
 ]
+
+import json
 
 # ---------------------------------------------------------------------------
 # Optional Mod Directory (auto-discovered plugins)
-# 凡是 ./mod/<name>/cog.py 存在的子目錄，都會被自動嘗試載入。
-# 失敗時只輸出 WARNING，絕不影響雪莉主程式。
+# 凡是 ./mod/<name>/cog.py 存在的子目錄，且未在 data/mod_config.json 中被停用者，
+# 都會被自動嘗試載入。失敗時只輸出 WARNING，絕不影響雪莉主程式。
 # ---------------------------------------------------------------------------
 BASE_DIR: Path = Path(__file__).resolve().parent
 MOD_DIR: Path = BASE_DIR / "mod"
+MOD_CONFIG_PATH: Path = settings.DATA_DIR / "mod_config.json"
+
+
+def _load_mod_config() -> dict[str, bool]:
+    """載入 data/mod_config.json 模組開關設定。
+
+    Returns:
+        dict[str, bool]: 模組鍵名對應是否啟用之字典。
+    """
+    if MOD_CONFIG_PATH.exists():
+        try:
+            raw = MOD_CONFIG_PATH.read_text(encoding="utf-8")
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return {str(k): bool(v) for k, v in data.items()}
+        except Exception as exc:
+            logger.warning("讀取 mod_config.json 失敗: %s", exc)
+    return {}
+
+
+def _is_mod_enabled(mod_key: str, config: dict[str, bool]) -> bool:
+    """檢查模組是否啟用（未明確設定者預設為 True）。
+
+    Args:
+        mod_key: 模組識別碼。
+        config: 模組設定字典。
+
+    Returns:
+        bool: 若啟用回傳 True，否則回傳 False。
+    """
+    return config.get(mod_key, True)
 
 
 def _discover_optional_extensions() -> list[str]:
-    """掃描 ./mod/ 目錄，自動找出含有 cog.py 的子資料夾。"""
+    """掃描 ./mod/ 目錄，自動找出含有 cog.py 且未被停用的子資料夾。
+
+    Returns:
+        list[str]: 待載入之模組擴充套件路徑清單。
+    """
     found: list[str] = []
     if not MOD_DIR.exists():
         return found
+    mod_config = _load_mod_config()
     for child in sorted(MOD_DIR.iterdir()):
         if child.is_dir() and (child / "cog.py").exists():
-            found.append(f"mod.{child.name}.cog")
+            mod_key = child.name
+            if _is_mod_enabled(mod_key, mod_config):
+                found.append(f"mod.{mod_key}.cog")
+            else:
+                logger.info("可選模組 [%s] 在 mod_config.json 中已設為停用，略過啟動載入。", mod_key)
     return found
 
 
@@ -156,8 +203,10 @@ async def main() -> None:
         pass
 
     bot = build_bot()
-    from core import SherryCore
+    from app import SherryCore
     bot.core = SherryCore(bot)  # type: ignore[attr-defined]
+    from core.sys_inspector.audit_service import set_cloud_inference_client
+    set_cloud_inference_client(bot.core.cloud_client)  # type: ignore[attr-defined]
 
     async with bot:
         for ext in EXTENSIONS:
@@ -221,7 +270,7 @@ async def main() -> None:
 
             logger.info("Startup sequence completed successfully.")
 
-            async def presence_loop():
+            async def presence_loop() -> None:
                 await bot.wait_until_ready()
                 import random
                 statuses = [
@@ -268,23 +317,28 @@ async def main() -> None:
             if itype == discord.InteractionType.application_command:
                 tid = new_trace_id("cmd")
                 set_trace_id(tid)
-                data = interaction.data or {}
-                cmd_name = data.get("name", "unknown")
+                raw_data: Any = interaction.data
+                data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+                cmd_name = str(data.get("name") or "unknown")
 
                 # 萃取參數選項（支援子指令結構）
                 options_dict: dict[str, Any] = {}
 
-                def _extract_options(opts: list[dict[str, Any]]) -> None:
+                def _extract_options(opts: list[Any]) -> None:
                     for opt in opts:
-                        if "value" in opt:
-                            options_dict[opt.get("name", "")] = opt.get("value")
-                        elif "options" in opt:
-                            sub_name = opt.get("name", "")
-                            options_dict["_subcommand"] = sub_name
-                            _extract_options(opt.get("options", []))
+                        if isinstance(opt, dict):
+                            if "value" in opt:
+                                options_dict[str(opt.get("name", ""))] = opt.get("value")
+                            elif "options" in opt:
+                                sub_name = str(opt.get("name", ""))
+                                options_dict["_subcommand"] = sub_name
+                                sub_opts = opt.get("options")
+                                if isinstance(sub_opts, list):
+                                    _extract_options(sub_opts)
 
-                if "options" in data and isinstance(data["options"], list):
-                    _extract_options(data["options"])
+                raw_opts = data.get("options")
+                if isinstance(raw_opts, list):
+                    _extract_options(raw_opts)
 
                 logger.info(
                     "[SlashCommand] User: %s (%s) | Guild: %s | Channel: #%s | Command: /%s | Options: %s",
@@ -313,10 +367,12 @@ async def main() -> None:
             elif itype == discord.InteractionType.component:
                 tid = new_trace_id("btn")
                 set_trace_id(tid)
-                data = interaction.data or {}
-                custom_id = data.get("custom_id", "unknown")
-                comp_type = data.get("component_type", 0)
-                values = data.get("values", [])
+                raw_data = interaction.data
+                data = raw_data if isinstance(raw_data, dict) else {}
+                custom_id = str(data.get("custom_id") or "unknown")
+                comp_type = int(data.get("component_type") or 0)
+                raw_values = data.get("values")
+                values = raw_values if isinstance(raw_values, list) else []
 
                 comp_kind = "select" if values or comp_type in (3, 5, 6, 7, 8) else "button"
                 logger.info(
@@ -345,8 +401,9 @@ async def main() -> None:
             elif itype == discord.InteractionType.modal_submit:
                 tid = new_trace_id("modal")
                 set_trace_id(tid)
-                data = interaction.data or {}
-                custom_id = data.get("custom_id", "unknown")
+                raw_data = interaction.data
+                data = raw_data if isinstance(raw_data, dict) else {}
+                custom_id = str(data.get("custom_id") or "unknown")
                 logger.info(
                     "[Modal] Custom ID: %s | User: %s | Channel: #%s",
                     custom_id,
@@ -400,7 +457,7 @@ async def main() -> None:
 
         # 註冊前綴指令監聽
         @bot.event
-        async def on_command(ctx: commands.Context) -> None:
+        async def on_command(ctx: commands.Context[Any]) -> None:
             tid = new_trace_id("prefix")
             set_trace_id(tid)
             setattr(ctx, "_start_timer", make_timer())
@@ -414,7 +471,7 @@ async def main() -> None:
             )
 
         @bot.event
-        async def on_command_completion(ctx: commands.Context) -> None:
+        async def on_command_completion(ctx: commands.Context[Any]) -> None:
             timer = getattr(ctx, "_start_timer", None)
             latency_ms = timer() if timer else 0
             cmd_name = ctx.command.name if ctx.command else "unknown"
@@ -433,7 +490,7 @@ async def main() -> None:
             )
 
         @bot.event
-        async def on_command_error(ctx: commands.Context, error: Exception) -> None:
+        async def on_command_error(ctx: commands.Context[Any], error: Exception) -> None:
             # 忽略找不到前綴指令的錯誤（群組成員打 !xxx 不影響 slash commands）
             if isinstance(error, commands.CommandNotFound):
                 return

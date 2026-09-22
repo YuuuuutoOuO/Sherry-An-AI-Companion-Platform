@@ -14,9 +14,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-import settings
 from handlers.social.registry import TOOL_LIST, get_fallback_tool
-from handlers.social.utils import fetch_context_script
+from handlers.social.utils import fetch_context_script, is_admin_user
 
 logger = logging.getLogger(__name__)
 
@@ -29,17 +28,6 @@ ADMIN_ONLY_INTENTS: set[str] = {
     "VIBE_CLEAR",
     "DEBUG",
 }
-
-
-def is_admin_user(interaction: discord.Interaction) -> bool:
-    """判斷使用者是否具備管理員權限。"""
-    if not settings.ADMIN_ROLE_IDS and not settings.ADMIN_USER_IDS:
-        return True
-    if settings.ADMIN_USER_IDS and interaction.user.id in settings.ADMIN_USER_IDS:
-        return True
-    if settings.ADMIN_ROLE_IDS and isinstance(interaction.user, discord.Member):
-        return any(r.id in settings.ADMIN_ROLE_IDS for r in interaction.user.roles)
-    return False
 
 
 # 動態從 TOOL_LIST 構建 intent choices
@@ -143,7 +131,7 @@ class PromptTestModal(discord.ui.Modal, title="🧪 意圖直通與 Prompt 測�
             await interaction.followup.send("❌ 請在文字頻道中執行！")
             return
 
-        context_script = await fetch_context_script(interaction.channel, None)
+        context_script = await fetch_context_script(interaction.channel, None, bot=self.bot)
         trigger_line = f"🎯 【互動中樞測試 [{intent}]】：[{interaction.user.display_name}] 正在測試：\u201c{content}\u201d"
         full_context = f"{context_script}\n\n{trigger_line}" if context_script else trigger_line
 
@@ -251,11 +239,31 @@ class CommandHubCategorySelect(discord.ui.Select):
 class CommandHubView(discord.ui.View):
     """雪莉全能互動測試中樞 View。"""
 
-    def __init__(self, bot: commands.Bot) -> None:
-        super().__init__(timeout=300)
+    def __init__(self, bot: commands.Bot, author_id: int | None = None) -> None:
+        super().__init__(timeout=180)
         self.bot = bot
+        self.author_id = author_id
+        self.message: discord.Message | None = None
         self.current_category: str = "spark"
         self.add_item(CommandHubCategorySelect(self))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """限制僅指令發起者可點擊操作。"""
+        if self.author_id and interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ 這是其他人的控制面板，你不能點選喔！", ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        """超時時自動將元件設為 disabled，防止過期點擊。"""
+        for item in self.children:
+            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
 
     def build_preview_embed(self, category: str) -> discord.Embed:
         """根據選定分類產生預覽說明 Embed。"""
@@ -338,7 +346,7 @@ class CommandHubView(discord.ui.View):
         if self.current_category == "spark":
             spark_cog: Any = self.bot.get_cog("SparkCog")
             if spark_cog and hasattr(spark_cog, "service"):
-                from mod.spark.cog import SparkMainView
+                from handlers.spark.cog import SparkMainView
                 s_view = SparkMainView(spark_cog.service, channel_id=interaction.channel_id)
                 s_embed = s_view.build_dashboard_embed()
                 await interaction.response.send_message(embed=s_embed, view=s_view, ephemeral=True)
@@ -387,7 +395,6 @@ class CommandHubView(discord.ui.View):
                     ephemeral=True,
                 )
                 return
-            admin_cog: Any = self.bot.get_cog("AdminCog")
             embed = discord.Embed(
                 title="⚙️ 雪莉系統管理儀表板",
                 description="請使用 `/admin`、`/vibe`、`/memory` 指令進行系統維護與指令同步。",
@@ -438,7 +445,7 @@ class ExecutorCog(commands.Cog):
         """若無傳入 intent 則開啟互動測試中樞；若有傳入則直接執行 Tool。"""
         # 若未指定 intent，直接開啟全功能互動測試中樞（全體成員皆可開啟）
         if not intent or not content:
-            view = CommandHubView(self.bot)
+            view = CommandHubView(self.bot, author_id=interaction.user.id)
             embed = view.build_preview_embed(view.current_category)
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
             return
@@ -467,7 +474,7 @@ class ExecutorCog(commands.Cog):
             await interaction.followup.send("❌ 此指令僅限在文字頻道中使用！")
             return
 
-        context_script = await fetch_context_script(interaction.channel, None)
+        context_script = await fetch_context_script(interaction.channel, None, bot=self.bot)
         trigger_line = f"🎯 【強制測試指令 /execute [{intent}]】：[{interaction.user.display_name}] 正在測試：\u201c{content}\u201d"
         full_context = f"{context_script}\n\n{trigger_line}" if context_script else trigger_line
 

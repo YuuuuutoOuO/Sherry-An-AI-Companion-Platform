@@ -5,22 +5,23 @@ from pathlib import Path
 from typing import Any
 
 import settings
+from core.db import get_db_connection, db_transaction
 
 logger = logging.getLogger(__name__)
+MEMORY_DB_PATH = settings.DATA_DIR / "sherry_memory.db"
+
+
+_RELATIONS_DB_INITIALIZED: bool = False
+
+
+_INITIALIZED_RELATIONS_DBS: set[str] = set()
 
 
 class RelationshipManager:
     """
-    社交關係管理器（好感度、關係等級）。
+    社交關係管理器（好感度、關係等級，支援 SQLite 持久化）。
 
-    ⚠️  存檔路徑為 USER_RELATIONS_PATH（user_relations.json）。
-        不再與 UserProfile (user_memory.json) 共用同一個 JSON 檔案，
-        避免兩個不同結構的資料互相覆蓋破壞。
-
-    使用方式：
-        # 在 MemoryManager Cog 中自動實例化
-        mem_mgr = bot.get_cog("MemoryManager")
-        mem_mgr.relations.update_affinity(user_id, delta)
+    資料庫表：sherry_memory.db -> user_relations
     """
 
     # 好感度自然衰減：每天減少此量
@@ -40,30 +41,104 @@ class RelationshipManager:
         self._dirty: bool = False
         self._debounce_seconds: float = debounce_seconds
         self._flush_task: Any = None
+        self._init_db()
         self._load()
 
+    def _init_db(self) -> None:
+        """初始化 user_relations 資料表 (僅首次執行)。"""
+        db_key = str(MEMORY_DB_PATH.resolve()) if MEMORY_DB_PATH.exists() else str(MEMORY_DB_PATH)
+        if db_key in _INITIALIZED_RELATIONS_DBS and MEMORY_DB_PATH.exists():
+            return
+        try:
+            MEMORY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with db_transaction(MEMORY_DB_PATH) as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS user_relations (
+                        user_id TEXT PRIMARY KEY,
+                        affinity REAL NOT NULL DEFAULT 0.0,
+                        tier TEXT NOT NULL DEFAULT 'stranger',
+                        interaction_count INTEGER NOT NULL DEFAULT 0,
+                        last_interaction TEXT NOT NULL DEFAULT '',
+                        is_deleted INTEGER NOT NULL DEFAULT 0,
+                        deleted_at TEXT DEFAULT NULL,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+                        updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_rel_affinity ON user_relations(affinity DESC);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_rel_deleted ON user_relations(is_deleted);")
+            _INITIALIZED_RELATIONS_DBS.add(db_key)
+        except Exception as e:
+            logger.error("初始化 SQLite user_relations 失敗: %s", e)
+
     def _load(self) -> None:
-        path: Path = settings.USER_RELATIONS_PATH
-        if path.exists():
-            try:
-                with path.open("r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    self.store = data
-            except Exception as e:
-                logger.error("讀取 relationship 失敗: %s", e)
+        """優先自 SQLite 載入好感度，若無資料則讀取 JSON 備援。"""
+        loaded = False
+        try:
+            conn = get_db_connection(MEMORY_DB_PATH)
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT user_id, affinity, tier, interaction_count, last_interaction, updated_at
+                FROM user_relations
+                WHERE is_deleted = 0
+            """)
+            rows = cur.fetchall()
+            conn.close()
+
+            if rows:
+                for r in rows:
+                    self.store[str(r["user_id"])] = {
+                        "affinity": float(r["affinity"]),
+                        "tier": str(r["tier"]),
+                        "interaction_count": int(r["interaction_count"]),
+                        "last_interaction": str(r["last_interaction"]),
+                        "updated_at": str(r["updated_at"]),
+                    }
+                loaded = True
+        except Exception as e:
+            logger.warning("自 SQLite 讀取 relations 失敗，切換 JSON: %s", e)
+
+        if not loaded:
+            path: Path = settings.USER_RELATIONS_PATH
+            if path.exists():
+                try:
+                    with path.open("r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if isinstance(data, dict):
+                        self.store = data
+                except Exception as e:
+                    logger.error("讀取 relationship JSON 失敗: %s", e)
 
     def _do_write_sync(self, store_copy: dict[str, dict[str, Any]]) -> None:
-        """同步原子寫入磁碟。"""
-        path: Path = settings.USER_RELATIONS_PATH
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
+        """同步寫入 SQLite 與備份 JSON (在 ThreadPool 中執行)。"""
+        now_str = datetime.now(timezone.utc).isoformat()
         try:
-            with tmp.open("w", encoding="utf-8") as f:
-                json.dump(store_copy, f, ensure_ascii=False, indent=2)
-            tmp.replace(path)
+            with db_transaction(MEMORY_DB_PATH) as cur:
+                rows = [
+                    (
+                        str(uid),
+                        float(r_obj.get("affinity", 0.0)),
+                        str(r_obj.get("tier", "stranger")),
+                        int(r_obj.get("interaction_count", 0)),
+                        str(r_obj.get("last_interaction", "")),
+                        str(r_obj.get("updated_at", now_str)),
+                    )
+                    for uid, r_obj in store_copy.items()
+                ]
+                if rows:
+                    cur.executemany("""
+                        INSERT INTO user_relations (user_id, affinity, tier, interaction_count, last_interaction, updated_at, is_deleted, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, 0, datetime('now', 'localtime'))
+                        ON CONFLICT(user_id) DO UPDATE SET
+                            affinity = excluded.affinity,
+                            tier = excluded.tier,
+                            interaction_count = excluded.interaction_count,
+                            last_interaction = excluded.last_interaction,
+                            updated_at = excluded.updated_at,
+                            is_deleted = 0;
+                    """, rows)
         except Exception as e:
-            logger.error("寫入 relationship 失敗: %s", e)
+            logger.error("寫入 SQLite user_relations 失敗: %s", e)
 
     def flush(self, force: bool = False) -> None:
         """強制或髒標記落盤。
@@ -102,6 +177,9 @@ class RelationshipManager:
         """相容舊版直接存檔介面，觸發 flush。"""
         self.flush(force=True)
 
+    MAX_AFFINITY: float = 1000.0
+    DAILY_AFFINITY_GAIN_LIMIT: float = 10.0
+
     def get_affinity(self, uid: int) -> float:
         """回傳目前好感度（float，保留小數精度）。"""
         uid_str = str(uid)
@@ -110,7 +188,7 @@ class RelationshipManager:
     def update_affinity(self, uid: int, delta: int | float) -> None:
         """更新好感度（以 float 精度儲存，防止 0.5 被 int() 截斷）。
 
-        採用 Debounce 機制延遲落盤，避免每則訊息重複觸發全量寫入。
+        採用 Debounce 機制延遲落盤，並內建每日防刷上限與總量封頂保護。
 
         Args:
             uid: Discord 使用者 ID。
@@ -121,14 +199,30 @@ class RelationshipManager:
             self.store[uid_str] = {"affinity": 0.0, "affinity_tier": "stranger",
                                    "interaction_count": 0, "last_interaction": ""}
 
+        # 防刷機制：檢查單日正向增量上限
+        actual_delta = float(delta)
+        if actual_delta > 0:
+            if not hasattr(self, "_daily_gains"):
+                self._daily_gains: dict[tuple[str, str], float] = {}
+            from datetime import datetime, timezone, timedelta
+            today_str = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+            gain_key = (uid_str, today_str)
+            today_gain = self._daily_gains.get(gain_key, 0.0)
+            if today_gain >= self.DAILY_AFFINITY_GAIN_LIMIT:
+                logger.debug("RelationshipManager: 使用者 %s 當日好感度增量已達上限 (+%.1f)，略過累加", uid_str, self.DAILY_AFFINITY_GAIN_LIMIT)
+                return
+            allowed_gain = min(actual_delta, self.DAILY_AFFINITY_GAIN_LIMIT - today_gain)
+            actual_delta = allowed_gain
+            self._daily_gains[gain_key] = round(today_gain + allowed_gain, 2)
+
         current = float(self.store[uid_str].get("affinity", 0))
-        # ✅ [修復] 以 float 儲存，不再用 int() 截斷，保留 0.5 的精度
-        self.store[uid_str]["affinity"] = max(0.0, round(current + delta, 2))
+        new_affinity = min(self.MAX_AFFINITY, max(0.0, round(current + actual_delta, 2)))
+        self.store[uid_str]["affinity"] = new_affinity
         self.store[uid_str]["affinity_tier"] = self.get_affinity_tier(uid)
         self.store[uid_str]["interaction_count"] = int(self.store[uid_str].get("interaction_count", 0)) + 1
         self.store[uid_str]["last_interaction"] = datetime.now(timezone.utc).isoformat()
 
-        if abs(delta) > 0:
+        if abs(actual_delta) > 0:
             self._dirty = True
             self._schedule_debounce()
 

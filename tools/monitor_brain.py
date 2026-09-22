@@ -87,7 +87,6 @@ def _render_event_card(entry: dict[str, Any]) -> None:
     # ── 1. Discord 指令與元件操作卡片 ─────────────────────────────
     if event in ("command_exec", "component_interaction", "modal_submit"):
         cmd_type = extra.get("command_type", event).upper()
-        cmd_name = extra.get("command_name", "")
         status = extra.get("status", "success")
         options = extra.get("options")
         status_color = GREEN if status == "success" else (YELLOW if status == "invoked" else RED)
@@ -137,7 +136,7 @@ def _render_event_card(entry: dict[str, Any]) -> None:
         c_len = extra.get("completion_length", 0)
         q_lat = extra.get("queue_latency_ms", 0)
 
-        print(f"\n{BLUE if 'BLUE' in globals() else CYAN}╭{'─' * (width - 2)}╮{RESET}")
+        print(f"\n{CYAN}╭{'─' * (width - 2)}╮{RESET}")
         print(
             f"{CYAN}│{RESET} {BOLD}{MAGENTA}🧠 [LLM INFERENCE]{RESET} {DIM}{ts}{RESET} "
             f"模型: {CYAN}{model}{RESET}"

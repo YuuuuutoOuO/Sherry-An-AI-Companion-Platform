@@ -201,12 +201,10 @@ def extract_canonical_keys(item: FeedItem | SharedPost | dict[str, Any]) -> list
         item_id = str(item.get("post_id") or item.get("item_id") or "")
         title = str(item.get("title") or "")
         url = str(item.get("url") or "")
-        source = str(item.get("source") or "")
     elif isinstance(item, (FeedItem, SharedPost)):
         item_id = item.post_id if isinstance(item, SharedPost) else item.item_id
         title = item.title
         url = item.url
-        source = item.source
     else:
         return []
 

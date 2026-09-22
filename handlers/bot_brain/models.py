@@ -18,4 +18,10 @@ class InferenceTask:
     sequence_id: int = dataclasses.field(default=0)
     images: list[str] | None = dataclasses.field(default=None, compare=False)
     temperature: float | None = dataclasses.field(default=None, compare=False)
+    max_tokens: int | None = dataclasses.field(default=None, compare=False)
     stream_callback: Callable[[str], Awaitable[None]] | None = dataclasses.field(default=None, compare=False)
+    is_cancelled: bool = dataclasses.field(default=False, compare=False)
+
+    def cancel(self) -> None:
+        """標記該推論任務已取消，通知佇列 Worker 與底層推論跳過或中斷執行。"""
+        self.is_cancelled = True

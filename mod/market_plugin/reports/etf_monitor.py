@@ -8,6 +8,7 @@ etf_monitor.py  (mod/market_plugin/reports)
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
@@ -29,6 +30,26 @@ except ImportError:
 TARGET_USER_TAG = "<@425311733503229972>"
 
 
+def _fetch_etf_quote(ticker: str) -> tuple[float, float] | None:
+    """查詢單一 ETF 標的之市價與溢折價（同步函式，供執行緒池調用）。
+
+    Args:
+        ticker: ETF 股票代碼。
+
+    Returns:
+        tuple[float, float] | None: (market_price, premium) 或在失敗時回傳 None。
+    """
+    try:
+        stock = yf.Ticker(ticker)
+        market_price = float(stock.fast_info["lastPrice"])
+        nav = market_price * 1.015  # ⚠️ 模擬值，請替換為真實 NAV 來源
+        premium = ((market_price - nav) / nav) * 100
+        return market_price, premium
+    except Exception:
+        logger.exception("[market_plugin] ETF 監控錯誤 (%s)", ticker)
+        return None
+
+
 async def check_etf_premium(
     bot: commands.Bot, channel_id: int, load_watchlists_fn: Callable[[], dict[str, Any]]
 ) -> None:
@@ -47,7 +68,7 @@ async def check_etf_premium(
     if not (9 <= now.hour < 14):
         return
 
-    data = load_watchlists_fn()
+    data = await asyncio.to_thread(load_watchlists_fn)
     etf_list = data.get("etf_list", [])
     if not etf_list:
         return
@@ -58,19 +79,15 @@ async def check_etf_premium(
         return
 
     for ticker in etf_list:
-        try:
-            stock = yf.Ticker(ticker)
-            market_price = stock.fast_info["lastPrice"]
-            nav = market_price * 1.015  # ⚠️ 模擬值，請替換為真實 NAV 來源
-            premium = ((market_price - nav) / nav) * 100
-
-            if abs(premium) > 1.0:
-                alert = (
-                    f"🚨 **台股 ETF 溢折價警報**\n"
-                    f"標的: `{ticker}` | 市價: `{market_price:.2f}`\n"
-                    f"預估溢折價: **{premium:.2f}%**\n"
-                    f"提醒: {TARGET_USER_TAG}"
-                )
-                await channel.send(alert)
-        except Exception:
-            logger.exception("[market_plugin] ETF 監控錯誤 (%s)", ticker)
+        quote = await asyncio.to_thread(_fetch_etf_quote, ticker)
+        if quote is None:
+            continue
+        market_price, premium = quote
+        if abs(premium) > 1.0:
+            alert = (
+                f"🚨 **台股 ETF 溢折價警報**\n"
+                f"標的: `{ticker}` | 市價: `{market_price:.2f}`\n"
+                f"預估溢折價: **{premium:.2f}%**\n"
+                f"提醒: {TARGET_USER_TAG}"
+            )
+            await channel.send(alert)

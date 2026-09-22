@@ -20,7 +20,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 import settings
-from handlers.bot_brain import BotBrain, InferenceTask
+from handlers.bot_brain import InferenceTask
 from handlers.social.persona import build_dynamic_persona
 
 from . import config
@@ -31,19 +31,6 @@ from .repository import SentinelRepository
 logger = logging.getLogger(__name__)
 
 TAIWAN_TZ = timezone(timedelta(hours=8))
-
-
-def _load_seen_ids() -> set[str]:
-    """[相容性保留] 載入已推播過的情報 ID 集合。"""
-    repo = SentinelRepository()
-    return set(repo._seen_keys)
-
-
-def _save_seen_ids(seen_ids: set[str]) -> None:
-    """[相容性保留] 持久化已推播情報 ID 集合。"""
-    repo = SentinelRepository()
-    repo._seen_keys.update(seen_ids)
-    repo._save_seen_keys()
 
 
 class FeedSentinelCog(commands.Cog):
@@ -86,8 +73,8 @@ class FeedSentinelCog(commands.Cog):
     async def _sentinel_loop(self) -> None:
         await self.bot.wait_until_ready()
 
-        if not config.ENABLED:
-            logger.debug("[FeedSentinel] 模組在 config.py 中設定為停用，略過本次輪詢。")
+        if not config.is_enabled():
+            logger.debug("[FeedSentinel] 模組在設定中為停用狀態，略過本次輪詢。")
             return
 
         now_tw = datetime.now(TAIWAN_TZ)
@@ -208,12 +195,12 @@ class FeedSentinelCog(commands.Cog):
             "社群情報哨兵捕捉到了以下最新的 AI / 開源技術情報。\n"
             "請詳細閱讀情報標題、作者與摘要，輸出結構化的繁體中文解讀。\n\n"
             "【輸出格式嚴格規範】\n"
-            "💡 **【名偵探精選 3 大核心重點】**\n"
+            "💡 **【3 大核心重點精選】**\n"
             "1. <第一點核心突破或特色，精簡扼要>\n"
             "2. <第二點核心突破或特色，精簡扼要>\n"
             "3. <第三點核心突破或特色，精簡扼要>\n\n"
-            "🕵️‍♀️ **【雪莉的私房銳評】**\n"
-            "<以橘雪莉 15 歲毒舌但專業敏銳的名偵探第一人稱口吻，用 50~100 字給予犀利、有趣且有見地的評價。不要帶書名號或多餘前綴>"
+            "💬 **【角色觀點與私房銳評】**\n"
+            "<以符合妳當前人設特質的第一人稱口吻，用 50~100 字給予犀利、有趣且有見地的評價。不要帶書名號或多餘前綴>"
         )
 
         user_prompt = (
@@ -294,7 +281,7 @@ class FeedSentinelCog(commands.Cog):
         )
 
         return {
-            "enabled": config.ENABLED,
+            "enabled": config.is_enabled(),
             "is_processing": self._is_processing,
             "in_schedule_window": in_window,
             "current_hour": now_tw.hour,

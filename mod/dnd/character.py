@@ -9,26 +9,11 @@ HP calculations based on class, and leveling up.
 from __future__ import annotations
 
 import time
-from typing import Any
 
-from mod.dnd.dice import ability_modifier, roll_ability_scores
+from mod.dnd.dice import roll_ability_scores
 from mod.dnd.models import Character, CharacterStats, Inventory, Item, ItemRarity
 from mod.dnd.storage import load_characters, save_characters
 
-
-# XP Thresholds for levels 1 to 10
-XP_LEVEL_TABLE: dict[int, int] = {
-    1: 0,
-    2: 300,
-    3: 900,
-    4: 2700,
-    5: 6500,
-    6: 14000,
-    7: 23000,
-    8: 34000,
-    9: 48000,
-    10: 64000,
-}
 
 CLASS_BASE_HP: dict[str, int] = {
     "戰士": 10,
@@ -133,37 +118,3 @@ def create_character(user_id: int, name: str, race: str, character_class: str) -
 
     return char
 
-
-def add_experience(user_id: int, exp_gained: int) -> tuple[Character, bool]:
-    """Grant XP to a character and handle level-up logic.
-
-    Args:
-        user_id: User ID.
-        exp_gained: Amount of XP gained.
-
-    Returns:
-        Tuple of (Updated Character, whether character leveled up).
-    """
-    all_chars = load_characters()
-    if user_id not in all_chars:
-        raise ValueError(f"Character for user {user_id} not found.")
-
-    char = all_chars[user_id]
-    char.experience += exp_gained
-
-    leveled_up = False
-    next_level_xp = XP_LEVEL_TABLE.get(char.level + 1, 999999)
-
-    while char.experience >= next_level_xp and char.level < 10:
-        char.level += 1
-        leveled_up = True
-        con_mod = char.stats.modifier("constitution")
-        hp_gain = max(1, (CLASS_BASE_HP.get(char.character_class, 8) // 2 + 1) + con_mod)
-        char.hp_max += hp_gain
-        char.hp_current = char.hp_max
-        next_level_xp = XP_LEVEL_TABLE.get(char.level + 1, 999999)
-
-    all_chars[user_id] = char
-    save_characters(all_chars)
-
-    return char, leveled_up

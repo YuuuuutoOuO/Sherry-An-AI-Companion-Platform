@@ -5,20 +5,18 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import random
 import re
-from pathlib import Path
 from typing import Any
 
 import discord
 from discord.ext import commands
 
 import settings
-from handlers.bot_brain import BotBrain, InferenceTask
-from handlers.social.contracts import ToolCategory, ToolResult
+from handlers.bot_brain import InferenceTask
+from handlers.social.contracts import ToolResult
 from handlers.social.persona import build_dynamic_persona
 from handlers.social.tool_base import BaseTool, ToolResponseMode
 from handlers.social.utils import simulate_typing_and_send
@@ -273,23 +271,35 @@ class ImageSearchTool(BaseTool):
                     if tag and tag not in tier1 and tag not in tier2 and tag not in tier3:
                         tier3.append(tag)
 
-        # 2. 本地字典最長匹配掃描（補充遺漏標籤）
-        for dk in self._sorted_pixiv_keys:
-            if len(dk) >= 2 and dk in scan_query:
-                tag = self._pixiv_dict[dk]
-                # 判定分類層級
-                meta = self._tag_metadata.get(tag, {})
-                cat = meta.get("category", 0)
-                if cat in (3, 4) or "(" in tag:
-                    if tag not in tier1:
-                        tier1.append(tag)
-                elif any(c in tag for c in ["swimsuit", "maid", "dress", "uniform", "breasts", "legs", "eyes", "hair"]):
-                    if tag not in tier2:
-                        tier2.append(tag)
+        # 2. 候選詞哈希查找（依長度滑動窗口提取子字串做 O(1) 字典比對，取代 20 萬筆迴圈）
+        # 使用空字元佔位替換已匹配子字串，保持長度與索引穩定，避免縮短字串導致相鄰候選詞被漏檢
+        max_w = min(len(scan_query), 50)
+        for w in range(max_w, 1, -1):
+            if len(scan_query) < w:
+                continue
+            i = 0
+            while i <= len(scan_query) - w:
+                sub = scan_query[i : i + w]
+                if "\x00" not in sub and sub in self._pixiv_dict:
+                    tag = self._pixiv_dict[sub]
+                    # 判定分類層級
+                    meta = self._tag_metadata.get(tag, {})
+                    cat = meta.get("category", 0)
+                    if cat in (3, 4) or "(" in tag:
+                        if tag not in tier1:
+                            tier1.append(tag)
+                    elif any(c in tag for c in ["swimsuit", "maid", "dress", "uniform", "breasts", "legs", "eyes", "hair"]):
+                        if tag not in tier2:
+                            tier2.append(tag)
+                    else:
+                        if tag not in tier3 and tag not in tier2 and tag not in tier1:
+                            tier3.append(tag)
+                    scan_query = scan_query[:i] + ("\x00" * w) + scan_query[i + w :]
+                    i += w
                 else:
-                    if tag not in tier3 and tag not in tier2 and tag not in tier1:
-                        tier3.append(tag)
-                scan_query = scan_query.replace(dk, "")
+                    i += 1
+
+        scan_query = scan_query.replace("\x00", " ")
 
         # 3. 內建關鍵字正則映射
         _KEYWORD_MAPS: list[tuple[str, str, int]] = [
@@ -539,11 +549,11 @@ class ImageSearchTool(BaseTool):
                     priority=settings.PRIORITY_TAG_RESPONSE,
                     system_prompt=(
                         f"{head_persona}\n\n"
-                        "【任務】：有人找了一張妳自己（橘雪莉）的圖，現在把圖發給他。"
-                        "請以名偵探的口吻說一句話（一句就好！），表達妳對『自己的圖被人翻出來』這件事的真實反應。"
+                        f"【任務】：有人找了一張妳自己（{settings.BOT_NAME}）的圖，現在把圖發給他。"
+                        "請以符合妳性格特質的口吻說一句話（一句就好！），表達妳對『自己的圖被人翻出來』這件事的真實反應。"
                         "不要加動作描寫，直接說話。"
                     ),
-                    user_prompt=f"找到了一張橘雪莉的圖片，tags: {', '.join(used_tags)}",
+                    user_prompt=f"找到了一張{settings.BOT_NAME}的圖片，tags: {', '.join(used_tags)}",
                     callback=_on_self_reply,
                     model=settings.PRIMARY_MODEL,
                     task_id=f"image-self-aware-{message.id}",

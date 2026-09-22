@@ -43,17 +43,47 @@ def build_user_memory_block(
 
         blocks: list[str] = []
 
-        # 1. 說話者本身的記憶
-        snippet = mem_mgr.get_user_memory_snippet(user_id)
+        # 1. 說話者本身的記憶（上限 8 條 facts，預算 ~400 tok）與好感度關係狀態
+        rel_snippet = ""
+        if hasattr(mem_mgr, "relations") and hasattr(mem_mgr.relations, "get_relationship_snippet"):
+            try:
+                res = mem_mgr.relations.get_relationship_snippet(user_id)
+                if isinstance(res, str):
+                    rel_snippet = res
+            except Exception:
+                rel_snippet = ""
+
+        snippet = ""
+        try:
+            res_s = mem_mgr.get_user_memory_snippet(user_id, max_facts=8, query_text=query_text)
+            if isinstance(res_s, str):
+                snippet = res_s
+        except TypeError:
+            try:
+                res_s = mem_mgr.get_user_memory_snippet(user_id, max_facts=8)
+                if isinstance(res_s, str):
+                    snippet = res_s
+            except TypeError:
+                res_s = mem_mgr.get_user_memory_snippet(user_id)
+                if isinstance(res_s, str):
+                    snippet = res_s
+
+        user_content_parts: list[str] = []
+        if rel_snippet:
+            user_content_parts.append(rel_snippet)
         if snippet:
+            user_content_parts.append(snippet)
+
+        if user_content_parts:
+            combined_user_content = "\n".join(user_content_parts)
             blocks.append(
                 f"【🧠 關於正在與妳說話的這個人「{display_name}」的長期記憶】\n"
                 f"（以下是妳過去積累的真實記憶，請自然地融入對話中運用，不要直接背誦）\n"
-                f"{snippet}"
+                f"{combined_user_content}"
             )
 
-        # 2. 被 @提及 或 暱稱提及 的第三方使用者記憶
-        target_uids: set[str] = set()
+        # 2. 被 @提及 或 暱稱提及 的第三方使用者記憶（最多 1 人，上限 1 條 fact）
+        target_uids: list[str] = []
         target_map: dict[str, str] = {}
 
         bot_user_id = getattr(getattr(bot, "user", None), "id", None)
@@ -63,23 +93,36 @@ def build_user_memory_block(
                 uid = getattr(u, "id", None)
                 if uid and uid != user_id and uid != bot_user_id:
                     uid_str = str(uid)
-                    target_uids.add(uid_str)
-                    target_map[uid_str] = getattr(u, "display_name", str(uid))
+                    if uid_str not in target_uids:
+                        target_uids.append(uid_str)
+                        target_map[uid_str] = getattr(u, "display_name", str(uid))
+                    if len(target_uids) >= 1:
+                        break
 
-        if query_text and hasattr(mem_mgr, "_store") and isinstance(mem_mgr._store, dict):
+        if len(target_uids) < 1 and query_text and hasattr(mem_mgr, "_store") and isinstance(mem_mgr._store, dict):
             for uid_str, data in mem_mgr._store.items():
                 if uid_str == str(user_id):
                     continue
                 aliases = data.get("aliases", []) if isinstance(data, dict) else []
                 for alias in aliases:
-                    if alias and alias in query_text:
-                        target_uids.add(uid_str)
-                        if uid_str not in target_map:
-                            target_map[uid_str] = aliases[0] if aliases else uid_str
+                    if alias and len(alias) >= 2 and alias in query_text:
+                        if uid_str not in target_uids:
+                            target_uids.append(uid_str)
+                            target_map[uid_str] = alias
                         break
+                if len(target_uids) >= 1:
+                    break
 
-        for uid_str in target_uids:
-            other_snippet = mem_mgr.get_user_memory_snippet(int(uid_str))
+        for uid_str in target_uids[:1]:
+            other_snippet = ""
+            try:
+                res_o = mem_mgr.get_user_memory_snippet(int(uid_str), max_facts=1)
+                if isinstance(res_o, str):
+                    other_snippet = res_o
+            except TypeError:
+                res_o = mem_mgr.get_user_memory_snippet(int(uid_str))
+                if isinstance(res_o, str):
+                    other_snippet = res_o
             if other_snippet:
                 t_name = target_map.get(uid_str, uid_str)
                 blocks.append(

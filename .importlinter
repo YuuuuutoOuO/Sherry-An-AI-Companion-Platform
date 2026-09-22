@@ -1,8 +1,13 @@
 [importlinter]
-root_package = mod
+root_packages =
+    app
+    core
+    handlers
+    mod
+include_external_packages = True
 
 [importlinter:contract:1]
-name = Service 層不可直接 import I/O 套件
+name = I/O packages only inside adapter layers
 type = forbidden
 source_modules =
     mod
@@ -10,7 +15,29 @@ forbidden_modules =
     sqlite3
     requests
     aiohttp
-    discord
+allow_indirect_imports = True
 ignore_imports =
     mod.clients.* -> *
-    mod.repositories.* -> *
+    mod.*.clients.* -> *
+    mod.*.repositories.* -> *
+    mod.*.repository -> *
+    mod.feed_sentinel.fetcher -> *
+    mod.market_plugin.data_fetcher -> *
+
+[importlinter:contract:2]
+name = Core foundation must not import upper layers
+type = forbidden
+source_modules =
+    core
+forbidden_modules =
+    app
+    handlers
+    mod
+
+[importlinter:contract:3]
+name = Handlers must not import the application layer
+type = forbidden
+source_modules =
+    handlers
+forbidden_modules =
+    app

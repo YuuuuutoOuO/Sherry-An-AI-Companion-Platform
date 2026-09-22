@@ -131,7 +131,21 @@ class SmartMessageDispatcher:
         try:
             if reference_msg and hasattr(reference_msg, "reply"):
                 kwargs["mention_author"] = True
-                msg = await reference_msg.reply(**kwargs)
+                kwargs["fail_if_not_exists"] = False
+                try:
+                    msg = await reference_msg.reply(**kwargs)
+                except (discord.NotFound, discord.HTTPException) as exc:
+                    logger.warning(
+                        "SmartMessageDispatcher: 引用訊息 %s 發送失敗 (%s)，降級為頻道直接發送",
+                        getattr(reference_msg, "id", "unknown"),
+                        exc,
+                    )
+                    kwargs.pop("mention_author", None)
+                    kwargs.pop("fail_if_not_exists", None)
+                    if hasattr(target, "send"):
+                        msg = await target.send(**kwargs)
+                    else:
+                        return sent_messages
             elif hasattr(target, "send"):
                 msg = await target.send(**kwargs)
             else:

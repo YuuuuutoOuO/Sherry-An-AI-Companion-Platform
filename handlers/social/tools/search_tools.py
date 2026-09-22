@@ -9,8 +9,10 @@ handlers/social/tools/search_tools.py
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import re
+import socket
 import time
 import urllib.parse
 from typing import Any
@@ -21,10 +23,10 @@ import discord
 from discord.ext import commands
 
 import settings
-from handlers.bot_brain import BotBrain, InferenceTask
-from handlers.social.contracts import ToolCategory, ToolResult
+from handlers.bot_brain import InferenceTask
+from handlers.social.contracts import ToolResult
 from handlers.social.persona import build_dynamic_persona
-from handlers.social.tool_base import BaseTool, ToolResponseMode
+from handlers.social.tool_base import BaseTool
 from handlers.social.utils import simulate_typing_and_send
 from mod.deep_search.repositories.search_client import DuckDuckGoSearchClient
 
@@ -132,6 +134,118 @@ def _extract_slug_keywords(url: str) -> str:
         return ""
 
 
+def is_safe_public_url(url: str) -> bool:
+    """檢查目標網址是否為安全的公網 HTTP/HTTPS 位址，防禦 SSRF 攻擊。
+
+    阻擋私有 IP、迴路位址、Link-local、雲端 Metadata 服務 (如 169.254.169.254)、
+    Carrier-Grade NAT (RFC 6598) 與非 HTTP(S) 協定。
+
+    Args:
+        url: 待檢查的目標網址字串。
+
+    Returns:
+        bool: 若為安全公網位址則回傳 True，若存在安全風險或無法解析則回傳 False。
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme.lower() not in ("http", "https"):
+            return False
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+
+        clean_host = hostname.strip("[]")
+
+        # 阻擋本機常用別名
+        if clean_host.lower() in ("localhost", "local", "broadcasthost"):
+            return False
+
+        # 嘗試直接解析為 IP 物件
+        try:
+            ip = ipaddress.ip_address(clean_host)
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_reserved
+                or ip.is_multicast
+                or ip.is_unspecified
+                or not ip.is_global
+            ):
+                return False
+            return True
+        except ValueError:
+            # clean_host 為網域名稱，繼續進行 DNS 解析
+            pass
+
+        # 解析 DNS 記錄並檢查所有解析後的 IP
+        addr_info = socket.getaddrinfo(clean_host, None)
+        if not addr_info:
+            return False
+
+        for res in addr_info:
+            sockaddr = res[4]
+            ip_str = sockaddr[0]
+            ip = ipaddress.ip_address(ip_str)
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_reserved
+                or ip.is_multicast
+                or ip.is_unspecified
+                or not ip.is_global
+            ):
+                return False
+
+        return True
+    except Exception as exc:
+        logger.debug("[search_tools] URL 安全檢查判定不通過: %s (%s)", url, exc)
+        return False
+
+
+async def _check_redirect_safety(
+    url: str,
+    timeout_sec: int = DEFAULT_HTTP_TIMEOUT,
+    max_redirects: int = 5,
+) -> str | None:
+    """檢查目標網址及其所有跳轉鏈 (Redirects) 是否皆為安全公網位址。
+
+    Args:
+        url: 待檢查的目標網址。
+        timeout_sec: 連線超時秒數。
+        max_redirects: 最大允許跳轉次數。
+
+    Returns:
+        str | None: 若所有跳轉目的地皆安全，回傳最終目標 URL；若偵測到非安全跳轉或異常則回傳 None。
+    """
+    current = url
+    try:
+        session = await _get_search_session()
+        for _ in range(max_redirects):
+            if not is_safe_public_url(current):
+                return None
+            async with session.get(
+                current,
+                allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=timeout_sec),
+            ) as resp:
+                if resp.status in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("Location")
+                    if not location:
+                        return current
+                    next_url = urllib.parse.urljoin(current, location.strip())
+                    if not is_safe_public_url(next_url):
+                        return None
+                    current = next_url
+                else:
+                    return current
+        return current
+    except Exception as exc:
+        logger.debug("[search_tools] 跳轉安全性預檢例外: %s (%s)", current, exc)
+        return current if is_safe_public_url(current) else None
+
+
 async def fetch_and_extract_url(url: str, timeout_sec: int = DEFAULT_HTTP_TIMEOUT) -> tuple[str, str, str]:
     """多層次高品質網頁內文與情報萃取管線。
 
@@ -148,6 +262,16 @@ async def fetch_and_extract_url(url: str, timeout_sec: int = DEFAULT_HTTP_TIMEOU
         tuple[str, str, str]: (網頁標題, 萃取內文或情資摘要, 萃取方式標記)。
     """
     clean_target = extract_clean_url(url) or url
+    if not is_safe_public_url(clean_target):
+        logger.warning("[search_tools] SSRF 防護攔截不安全或內部網址: %s", clean_target)
+        return clean_target, "無法存取該網址：基於安全性考量，系統禁止存取內部網路、本機或保留網段位址。", "blocked"
+
+    # 預檢 HTTP 跳轉鏈，全面防禦跳轉繞過 (Redirect-based SSRF)
+    safe_target = await _check_redirect_safety(clean_target, timeout_sec=timeout_sec)
+    if not safe_target or not is_safe_public_url(safe_target):
+        logger.warning("[search_tools] SSRF 防護攔截跳轉至內部或不安全網址: %s -> %s", clean_target, safe_target)
+        return clean_target, "無法存取該網址：基於安全性考量，系統禁止存取內部網路、本機或保留網段位址。", "blocked"
+
     title = ""
     content = ""
     meta_desc = ""
@@ -183,16 +307,16 @@ async def fetch_and_extract_url(url: str, timeout_sec: int = DEFAULT_HTTP_TIMEOU
     raw_html: str | None = None
     try:
         raw_html, traf_content, traf_title = await asyncio.wait_for(
-            loop.run_in_executor(None, _fetch_trafilatura, clean_target),
+            loop.run_in_executor(None, _fetch_trafilatura, safe_target),
             timeout=float(timeout_sec),
         )
         if traf_title:
             title = traf_title
         if traf_content and len(traf_content.strip()) >= 50:
             content = traf_content.strip()
-            return title or clean_target, content, "trafilatura"
+            return title or safe_target, content, "trafilatura"
     except asyncio.TimeoutError:
-        logger.warning("[search_tools] Trafilatura 擷取超時 (%ds): %s", timeout_sec, clean_target)
+        logger.warning("[search_tools] Trafilatura 擷取超時 (%ds): %s", timeout_sec, safe_target)
     except Exception as exc:
         logger.debug("[search_tools] Trafilatura 略過: %s", exc)
 
@@ -200,7 +324,11 @@ async def fetch_and_extract_url(url: str, timeout_sec: int = DEFAULT_HTTP_TIMEOU
     if not raw_html:
         try:
             session = await _get_search_session()
-            async with session.get(clean_target, timeout=aiohttp.ClientTimeout(total=timeout_sec)) as resp:
+            async with session.get(
+                safe_target,
+                allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=timeout_sec),
+            ) as resp:
                 if resp.status == 200:
                     raw_html = await resp.text(errors="replace")
         except Exception as exc:
@@ -368,6 +496,16 @@ class URLSummaryTool(BaseTool):
             len(site_content),
         )
 
+        if source_type == "blocked":
+            if silent:
+                return ToolResult.error(site_content, is_direct_rendered=False)
+            await simulate_typing_and_send(
+                message,
+                f"❌ {site_content}",
+                intent_name="URL_SUMMARY",
+            )
+            return ToolResult.success(site_content, is_direct_rendered=True)
+
         if silent:
             summary_content = f"【網頁標題】：{title}\n【詳細情報內容】：\n{site_content[:2500]}"
             return ToolResult.success(summary_content, is_direct_rendered=False, extra_data={"url": url, "title": title})
@@ -381,7 +519,7 @@ class URLSummaryTool(BaseTool):
             f"【獲取情報內容 - 目標網址】：{url}\n"
             f"【網頁標題】：{title}\n"
             f"【詳細情報內容】：\n{site_content[:5000]}\n\n"
-            "請用妳的語氣（活潑毒舌又自信的名偵探橘雪莉），生動、豐富且一針見血地為大家總結這篇網頁的核心內容與重點！"
+            "請用符合妳當前人設與性格特質的語氣，生動、豐富且一針見血地為大家總結這篇網頁的核心內容與重點！"
         )
 
         start_time = time.time()
@@ -447,6 +585,9 @@ async def fetch_web_and_entity_context(user_query: str) -> tuple[str, str]:
     ).strip()
     if not clean_kw:
         clean_kw = user_query.strip()
+
+    if not clean_kw:
+        return "【🔍 即時網路與實體檢索情報】\n【網路檢索提示】：未提供有效檢索主題或關鍵字。", ""
 
     link = ""
     snippet = ""
@@ -545,7 +686,7 @@ class AdvancedSearchTool(BaseTool):
 
     @property
     def llm_description(self) -> str:
-        return "搜尋、查詢時事或最新資料時觸發。"
+        return "網路情報檢索工具。當使用者詢問專有名詞、作品/歌曲/角色背景、ACG動漫梗、時事新聞、百科知識，或提出「什麼是/誰是/介紹/這是什麼」等資訊性問題時使用。"
 
     def can_handle_by_regex(self, text: str) -> bool:
         return False

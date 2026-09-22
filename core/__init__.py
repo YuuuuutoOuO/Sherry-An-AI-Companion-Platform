@@ -6,6 +6,7 @@ core
 
 from core.contracts import (
     CapabilityDescriptor,
+    CloudInferenceProtocol,
     MindSnapshot,
     SherryRequest,
     SherryResponse,
@@ -13,16 +14,15 @@ from core.contracts import (
 )
 from core.dispatcher import SmartMessageDispatcher
 from core.guard import CoreGuard
-from core.orchestrator import SherryCore
 from core.registry import CapabilityRegistry
 from core.state import SherryMindState
 
 __all__ = [
     "CapabilityDescriptor",
     "CapabilityRegistry",
+    "CloudInferenceProtocol",
     "CoreGuard",
     "MindSnapshot",
-    "SherryCore",
     "SherryMindState",
     "SherryRequest",
     "SherryResponse",

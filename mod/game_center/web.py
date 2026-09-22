@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from quart import Blueprint, Response, jsonify, render_template, request
+from quart import Blueprint, Response, jsonify, request
 
 logger = logging.getLogger(__name__)
 

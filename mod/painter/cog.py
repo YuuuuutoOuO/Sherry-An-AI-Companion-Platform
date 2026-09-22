@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
 from typing import Any
 
 import discord
@@ -189,7 +188,8 @@ class PainterCog(commands.Cog):
         # Initialize canvas & execute Stage 1
         canvas = VirtualCanvas(width=800, height=800, style=style)
         interpreter = CommandInterpreter(canvas)
-        interpreter.execute_batch(commands_list)
+        if commands_list:
+            await asyncio.to_thread(interpreter.execute_batch, commands_list)
 
         # ── Stage 2: Self-Critique & Refine Pass (自我視覺審視與精修) ─────────
         elapsed = time.time() - start_time
@@ -197,7 +197,7 @@ class PainterCog(commands.Cog):
 
         if refine and brain and remaining_budget > 15.0:
             try:
-                draft_bytes = canvas.export_bytes(format_name="JPEG", quality=85)
+                draft_bytes = await asyncio.to_thread(canvas.export_bytes, format_name="JPEG", quality=85)
                 draft_b64 = base64.b64encode(draft_bytes).decode("utf-8")
                 refine_prompt = PainterAgent.build_reflection_user_prompt(content, style, draft_commentary=commentary)
 
@@ -222,7 +222,7 @@ class PainterCog(commands.Cog):
                 raw_reply2 = await asyncio.wait_for(future2, timeout=stage2_timeout)
                 commentary2, commands_list2 = PainterAgent.parse_llm_response(raw_reply2)
                 if commands_list2:
-                    interpreter.execute_batch(commands_list2)
+                    await asyncio.to_thread(interpreter.execute_batch, commands_list2)
                     if commentary2:
                         commentary = f"{commentary}\n\n🔍 **雪莉自我審視精修講評**：\n{commentary2}"
             except asyncio.TimeoutError:

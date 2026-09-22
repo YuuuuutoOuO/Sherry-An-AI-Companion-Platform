@@ -24,10 +24,10 @@ handlers/bot_brain/client.py
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
+import time
 from typing import Any, AsyncIterator
 
 import aiohttp
@@ -177,7 +177,7 @@ class OllamaClient:
             timeout = aiohttp.ClientTimeout(
                 total=getattr(settings, "LLM_TIMEOUT", 180),
                 connect=30.0,
-                sock_read=getattr(settings, "LLM_STREAM_CHUNK_TIMEOUT", 60.0),
+                sock_read=getattr(settings, "LLM_STREAM_CHUNK_TIMEOUT", 120.0),
             )
             self._session = aiohttp.ClientSession(timeout=timeout)
         return self._session
@@ -341,15 +341,28 @@ class OllamaClient:
         target_temp = temperature if temperature is not None else getattr(settings, "LLM_TEMPERATURE", 0.85)
         target_max_tokens = max_tokens if max_tokens is not None else settings.LLM_MAX_OUTPUT_TOKENS
 
+        # Google Gemini 官方 OpenAI 相容端點不支援 presence_penalty、frequency_penalty 與 stream_options，傳入會引發 HTTP 400
+        is_gemini = backend_label == "Gemini" or "googleapis.com" in base_url
+        if is_gemini:
+            # Gemini 2.0 / 2.5 Flash 具備內部思考推理機制（Thinking Tokens）。
+            # OpenAI 相容端點的 max_tokens 限制的是「思考 Token + 輸出 Token」總和，
+            # 若維持預設 1024 會被思考 Token 耗盡導致回覆嚴重截斷 (finish_reason=length)。
+            gemini_min_tokens = getattr(settings, "GEMINI_MIN_OUTPUT_TOKENS", 4096)
+            if target_max_tokens < gemini_min_tokens:
+                target_max_tokens = gemini_min_tokens
+
         payload: dict[str, Any] = {
             "model": actual_model,
             "messages": messages,
             "stream": True,
             "max_tokens": target_max_tokens,
             "temperature": target_temp,
-            "presence_penalty": getattr(settings, "LLM_PRESENCE_PENALTY", 0.6),
-            "frequency_penalty": getattr(settings, "LLM_FREQUENCY_PENALTY", 0.6),
         }
+        if not is_gemini:
+            payload["presence_penalty"] = getattr(settings, "LLM_PRESENCE_PENALTY", 0.6)
+            payload["frequency_penalty"] = getattr(settings, "LLM_FREQUENCY_PENALTY", 0.6)
+            if getattr(settings, "LLM_STREAM_INCLUDE_USAGE", True):
+                payload["stream_options"] = {"include_usage": True}
 
         url = f"{base_url}/chat/completions"
         logger.debug(
@@ -362,7 +375,10 @@ class OllamaClient:
         )
 
         total_timeout = timeout if timeout is not None else getattr(settings, "LLM_TIMEOUT", 180)
-        sock_timeout = timeout if timeout is not None else getattr(settings, "LLM_STREAM_CHUNK_TIMEOUT", 60.0)
+        # socket 讀取逾時（單一 chunk）。本機 GPU 慢速生成時，chunk 間隔可能拉長，
+        # 故讓 sock_read 至少不小於 total，避免「chunk 未屆即被中途斷線 → 重試疊加」。
+        chunk_timeout = getattr(settings, "LLM_STREAM_CHUNK_TIMEOUT", 120.0)
+        sock_timeout = max(chunk_timeout, total_timeout)
 
         req_timeout = aiohttp.ClientTimeout(
             total=total_timeout,
@@ -371,7 +387,13 @@ class OllamaClient:
         )
 
         reasoning_chunks: list[str] = []
+        in_reasoning_mode = False
         has_yielded_content = False
+        finish_reason: str | None = None
+        usage_tokens: dict[str, int] | None = None
+        stream_started = time.monotonic()
+        first_token_latency: float | None = None
+        last_chunk_ts = stream_started
 
         async with session.post(url, json=payload, headers=headers, timeout=req_timeout) as resp:
             if resp.status >= 400:
@@ -380,6 +402,7 @@ class OllamaClient:
                 resp.raise_for_status()
 
             async for raw_line in resp.content:
+                now = time.monotonic()
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line or not line.startswith("data:"):
                     continue
@@ -390,22 +413,103 @@ class OllamaClient:
 
                 try:
                     chunk = json.loads(data_str)
+                    if chunk.get("error"):
+                        err_detail = str(chunk["error"])[:200]
+                        logger.error("%s SSE 錯誤幀: %s", backend_label, err_detail)
+                        raise aiohttp.ClientResponseError(
+                            resp.request_info,
+                            history=(),
+                            status=200,
+                            message=f"{backend_label} SSE error frame: {err_detail}",
+                        )
                     choices = chunk.get("choices", [])
+                    usage = chunk.get("usage") or (choices[0].get("usage") if choices else None)
+                    if usage and isinstance(usage, dict):
+                        usage_tokens = {
+                            str(k): int(v)
+                            for k, v in usage.items()
+                            if k in ("prompt_tokens", "completion_tokens", "total_tokens")
+                        }
                     if choices:
                         choice = choices[0]
                         delta = choice.get("delta", {})
                         content = delta.get("content") or choice.get("text", "")
                         reasoning = delta.get("reasoning_content") or delta.get("reasoning") or delta.get("thought", "")
+                        fr = choice.get("finish_reason")
+                        if fr:
+                            finish_reason = fr
+
+                        # 收到首個 Token（無論是 reasoning_content 或 content）立即標記 TTFT
+                        if first_token_latency is None and (reasoning or content):
+                            first_token_latency = (now - stream_started) * 1000.0
+                            logger.info(
+                                "%s stream 首token延遲 %.0fms (prompt=%.0f字), 後續chunk間隔 ≥%.0fms, model=%s",
+                                backend_label, first_token_latency,
+                                len(system_prompt) + len(user_prompt),
+                                (now - last_chunk_ts) * 1000.0,
+                                actual_model,
+                            )
 
                         if reasoning:
                             reasoning_chunks.append(reasoning)
+                            if not in_reasoning_mode:
+                                in_reasoning_mode = True
+                                yield "<thought>"
+                            last_chunk_ts = now
+                            # 注意：不在此設 has_yielded_content = True，也不直接 yield reasoning。
+                            # reasoning 內容只收集進 reasoning_chunks，由串流結束後的 fallback
+                            # (line 504) 統一輸出乾淨文字。這樣純推理模型（DeepSeek-R1 / Gemma-4
+                            # 等只吐 reasoning_content 的模型）才能正確觸發 fallback，不會變成
+                            # generic 訊息。<thought> 標籤保留給混合型模型（reasoning→content）使用。
 
                         if content:
+                            if in_reasoning_mode:
+                                in_reasoning_mode = False
+                                yield "</thought>\n"
+                            last_chunk_ts = now
                             has_yielded_content = True
                             yield content
                 except json.JSONDecodeError:
                     logger.warning("%s SSE JSON 解析警告: %s", backend_label, data_str[:100])
                     continue
+
+        if in_reasoning_mode:
+            in_reasoning_mode = False
+            yield "</thought>\n"
+
+        if first_token_latency is not None:
+            prompt_len = len(system_prompt) + len(user_prompt)
+            usage_tokens = usage_tokens or {}
+            usage_str = (
+                f", usage={usage_tokens}"
+                if usage_tokens
+                else f", prompt估~{self._estimate_tokens(system_prompt, user_prompt)}tokens"
+            )
+            gen_ms = (time.monotonic() - stream_started) * 1000.0
+            completion_tokens = int(usage_tokens.get("completion_tokens", 0)) if usage_tokens else 0
+            if completion_tokens > 0 and gen_ms > first_token_latency:
+                decode_ms = gen_ms - first_token_latency
+                tok_s = completion_tokens / (decode_ms / 1000.0)
+                usage_str = f"{usage_str}, 生成速度~{tok_s:.1f}tok/s"
+            logger.info(
+                "%s stream 總生成 %.0fms (首token %.0fms + %d chunks), prompt=%d字%s, finish_reason=%s, model=%s",
+                backend_label,
+                gen_ms,
+                first_token_latency,
+                has_yielded_content,
+                prompt_len,
+                usage_str,
+                finish_reason,
+                actual_model,
+            )
+            if finish_reason == "length":
+                logger.warning(
+                    "%s 生成被 engine 以 finish_reason=length 中斷 (prompt=%d字%s)！回覆可能不完整，且很可能是 prompt 逼近 context/max_tokens 上限所致。",
+                    backend_label,
+                    prompt_len,
+                    usage_str,
+                )
+
 
         # 若模型為純思考/推理輸出 (例如 DeepSeek-R1 / Gemma-4 輸出僅含 reasoning_content)
         if not has_yielded_content and reasoning_chunks:
@@ -413,6 +517,18 @@ class OllamaClient:
             clean_text = re.sub(r"</?think>", "", full_reasoning).strip()
             if clean_text:
                 yield clean_text
+
+    @staticmethod
+    def _estimate_tokens(system_prompt: str, user_prompt: str) -> int:
+        """估算混合中英文本的真實 token 數（引擎未送回 usage 時使用）。
+
+        舊版用 1.5 tokens/字 虛胖估算（純中文約 0.75、英文約 4 字/token），
+        差到 2 倍以上，會誤導對 context／KV 容量的判斷。
+        """
+        text = system_prompt + user_prompt
+        cjk = sum(1 for c in text if "\u4e00" <= c <= "\u9fff" or "\u3040" <= c <= "\u30ff")
+        non_cjk = len(text) - cjk
+        return int(round(cjk * 0.75 + non_cjk / 3.5))
 
     async def _request_openai_compatible(
         self,
@@ -585,10 +701,12 @@ class OllamaClient:
                 },
             }
             url = f"{self._base_url}/api/chat"
+            total_ol = timeout if timeout is not None else getattr(settings, "LLM_TIMEOUT", 180)
+            chunk_ol = getattr(settings, "LLM_STREAM_CHUNK_TIMEOUT", 120.0)
             req_timeout = aiohttp.ClientTimeout(
-                total=timeout if timeout is not None else getattr(settings, "LLM_TIMEOUT", 180),
+                total=total_ol,
                 connect=30.0,
-                sock_read=timeout if timeout is not None else getattr(settings, "LLM_STREAM_CHUNK_TIMEOUT", 60.0),
+                sock_read=max(chunk_ol, total_ol),
             )
             async with session.post(url, json=payload, timeout=req_timeout) as resp:
                 resp.raise_for_status()
@@ -598,6 +716,15 @@ class OllamaClient:
                         continue
                     try:
                         chunk = json.loads(line)
+                        if chunk.get("error"):
+                            err_detail = str(chunk["error"])[:200]
+                            logger.error("Ollama api/chat 錯誤幀: %s", err_detail)
+                            raise aiohttp.ClientResponseError(
+                                resp.request_info,
+                                history=(),
+                                status=200,
+                                message=f"Ollama api/chat error frame: {err_detail}",
+                            )
                         msg = chunk.get("message", {})
                         content = msg.get("content", "")
                         if content:

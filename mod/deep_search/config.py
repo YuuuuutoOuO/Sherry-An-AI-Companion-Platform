@@ -14,6 +14,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+try:
+    import settings as _settings
+except ImportError:
+    _settings = None  # type: ignore[assignment]
+
 # ---------------------------------------------------------------------------
 # Module Root & Project Paths
 # ---------------------------------------------------------------------------
@@ -34,6 +39,16 @@ QUERIES_PER_ROUND: int = 2                 # 每一輪產生的檢索關鍵字�
 MAX_RESULTS_PER_QUERY: int = 4             # 每個關鍵字取得的候選結果數
 MAX_PAGES_TO_SCRAPE_PER_ROUND: int = 3     # 每一輪實際深入抓取內文的網頁上限
 MAX_CHARS_PER_PAGE: int = 4000             # 單一網頁擷取最大字元數 (適配地端 SLM context)
+
+# 由 Web UI 設定覆寫 (config_override.json)
+if _settings is not None:
+    DEFAULT_RESEARCH_ROUNDS = int(getattr(_settings, "DEEP_SEARCH_DEFAULT_ROUNDS", DEFAULT_RESEARCH_ROUNDS))
+    MIN_RESEARCH_ROUNDS = int(getattr(_settings, "DEEP_SEARCH_MIN_ROUNDS", MIN_RESEARCH_ROUNDS))
+    MAX_RESEARCH_ROUNDS = int(getattr(_settings, "DEEP_SEARCH_MAX_ROUNDS", MAX_RESEARCH_ROUNDS))
+    QUERIES_PER_ROUND = int(getattr(_settings, "DEEP_SEARCH_QUERIES_PER_ROUND", QUERIES_PER_ROUND))
+    MAX_RESULTS_PER_QUERY = int(getattr(_settings, "DEEP_SEARCH_MAX_RESULTS_PER_QUERY", MAX_RESULTS_PER_QUERY))
+    MAX_PAGES_TO_SCRAPE_PER_ROUND = int(getattr(_settings, "DEEP_SEARCH_MAX_PAGES_PER_ROUND", MAX_PAGES_TO_SCRAPE_PER_ROUND))
+    MAX_CHARS_PER_PAGE = int(getattr(_settings, "DEEP_SEARCH_MAX_CHARS_PER_PAGE", MAX_CHARS_PER_PAGE))
 
 # 網路與模型逾時 (秒)
 DEFAULT_HTTP_TIMEOUT: int = int(os.getenv("DEFAULT_HTTP_TIMEOUT", "12"))

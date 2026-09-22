@@ -13,7 +13,7 @@ from typing import Sequence
 
 from PIL import Image, ImageDraw, ImageFilter
 
-from mod.painter.models import BrushConfig, BrushType, RGBAColor
+from mod.painter.models import BrushConfig, BrushType
 
 
 def _interpolate_points(

@@ -24,7 +24,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from mod.deep_search import config
-from mod.deep_search.domain.models import DeepResearchReport, ResearchProgress, ResearchSession
+from mod.deep_search.domain.models import ResearchProgress, ResearchSession
 from mod.deep_search.engine.deep_search_engine import DeepSearchEngine
 from mod.deep_search.repositories.llm_client import OllamaResearchClient
 from mod.deep_search.repositories.scraper_client import TrafilaturaScraperClient

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 from typing import IO
 
@@ -189,20 +190,115 @@ def tail_lines(path: Path, n: int = 15, max_bytes: int = 131072) -> list[str]:
 
 
 SIGNAL_FILE: Path = BASE_DIR / "data" / "shutdown.signal"
+PID_FILE: Path = BASE_DIR / "data" / "sherry.pid"
+
+
+def is_pid_running(pid: int) -> bool:
+    """檢查指定 PID 之進程是否仍在系統中活躍執行。
+
+    Args:
+        pid: 目標進程識別碼。
+
+    Returns:
+        若仍在執行回傳 True，否則回傳 False。
+    """
+    if pid <= 0:
+        return False
+    if sys.platform != "win32":
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+    import ctypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    SYNCHRONIZE = 0x00100000
+    handle = ctypes.windll.kernel32.OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid
+    )
+    if not handle:
+        return False
+    exit_code = ctypes.c_ulong()
+    ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+    ctypes.windll.kernel32.CloseHandle(handle)
+    return exit_code.value == 259  # 259 代表 STILL_ACTIVE
+
+
+def get_main_bot_pid() -> int | None:
+    """讀取當前雪莉主核心 (main.py) 的 PID。
+
+    Returns:
+        成功取得回傳 int，檔案不存在或格式不符回傳 None。
+    """
+    if not PID_FILE.exists():
+        return None
+    try:
+        content = PID_FILE.read_text(encoding="utf-8").strip()
+        if content.isdigit():
+            return int(content)
+    except Exception:
+        pass
+    return None
+
+
+_main_bot_dead_since: float | None = None
+_has_seen_bot_alive: bool = False
+_last_restart_notice: float = 0.0
 
 
 def should_exit(start_time: float) -> bool:
-    """檢查是否收到重啟或關閉信號。
+    """檢查監控器是否應當退出。
+
+    規則：
+      1. 若收到 shutdown.signal 且前綴為 stop，表示系統停機，回傳 True。
+      2. 若收到 shutdown.signal 為 restart 或 update，表示主核心在同分頁原地重啟，
+         監控器維持待命狀態，回傳 False。
+      3. 若主核心曾活躍執行但已消失超過 15 秒（未觸發重啟或進程異常崩潰），判定主核心已關閉，回傳 True。
 
     Args:
-        start_time: 監控器啟動的時間戳記。
+        start_time: 監控器啟動時間戳記。
 
     Returns:
-        若 shutdown.signal 在啟動後被更新，回傳 True。
+        若監控器應當結束，回傳 True；否則回傳 False。
     """
-    if not SIGNAL_FILE.exists():
+    global _main_bot_dead_since, _has_seen_bot_alive, _last_restart_notice
+
+    if SIGNAL_FILE.exists():
+        try:
+            if SIGNAL_FILE.stat().st_mtime > start_time:
+                content = SIGNAL_FILE.read_text(encoding="utf-8").strip().lower()
+                if content.startswith("stop"):
+                    sys.stdout.write("\n\033[33m[INFO] 收到關閉指令，監控分頁即將結束。\033[0m\n")
+                    sys.stdout.flush()
+                    return True
+                if content.startswith("restart") or content.startswith("update"):
+                    # 正在重啟中，重設看門狗計時器，避免重啟間隔期間誤殺監控
+                    _main_bot_dead_since = None
+                    now = time.time()
+                    if now - _last_restart_notice > 6.0:
+                        _last_restart_notice = now
+                        sys.stdout.write("\n\033[33m[INFO] 偵測到雪莉主核心正在重新啟動，監控分頁持續待命中...\033[0m\n")
+                        sys.stdout.flush()
+                    return False
+        except Exception:
+            pass
+
+    # 檢查主核心 PID 存活看門狗
+    pid = get_main_bot_pid()
+    if pid is not None and is_pid_running(pid):
+        _has_seen_bot_alive = True
+        _main_bot_dead_since = None
         return False
-    try:
-        return SIGNAL_FILE.stat().st_mtime > start_time
-    except Exception:
-        return False
+
+    # 若主核心 PID 目前不在運行
+    if _has_seen_bot_alive:
+        now = time.time()
+        if _main_bot_dead_since is None:
+            _main_bot_dead_since = now
+        elif now - _main_bot_dead_since > 15.0:
+            # 主核心已斷開超過 15 秒且無重啟，自動結束監控分頁
+            return True
+
+    return False

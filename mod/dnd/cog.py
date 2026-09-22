@@ -10,20 +10,17 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Literal, Any
+from typing import Any
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 import settings
-from handlers.bot_brain import BotBrain, InferenceTask
-from handlers.social.utils import simulate_typing_and_send
+from handlers.bot_brain import InferenceTask
 from mod.dnd import config
 from mod.dnd.character import create_character
-from mod.dnd.combat import CombatManager
-from mod.dnd.dice import advantage_roll, disadvantage_roll, roll, roll_dice
-from mod.dnd.inventory import equip_item
+from mod.dnd.dice import advantage_roll, disadvantage_roll, roll_dice
 from mod.dnd.models import Character
 from mod.dnd.storage import (
     load_characters,
@@ -33,23 +30,26 @@ from mod.dnd.storage import (
 )
 from mod.dnd.world_sim import WorldSimEngine
 
-from mod.dnd.views import DndStoryView, DndMainDashboardView
+from mod.dnd.views import (
+    CustomActionModal,
+    DndCreateModal,
+    DndMainDashboardView,
+    DndRollModal,
+    DndStoryView,
+)
 
 logger = logging.getLogger(__name__)
 
 # Maximum number of history entries (user + assistant) kept per channel.
 # 6 = 3 rounds of [player action + DM reply], enough context without wasting tokens.
-MAX_HISTORY_ROUNDS: int = 6
+MAX_HISTORY_ROUNDS: int = int(getattr(settings, "DND_MAX_HISTORY_ROUNDS", 6))
 
 
 class DndCog(commands.Cog):
     """D&D AI World Engine Cog."""
 
-    dnd_group = app_commands.Group(name="dnd", description="🐉 D&D 跑團冒險系統")
-
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        self.combat_mgr = CombatManager()
         self.world_engine = WorldSimEngine(bot)
         # Per-channel rolling conversation history for DM continuity.
         # Format: {channel_id: [{"role": "user"|"assistant", "content": str}, ...]}
@@ -263,122 +263,87 @@ class DndCog(commands.Cog):
             model=config.DEFAULT_MODEL or getattr(settings, "PRIMARY_MODEL", "lms:gemma-4"),
             task_id=f"dnd-session-{message.author.id}-{int(message.created_at.timestamp())}",
         )
-    @app_commands.command(name="dnd", description="🐉 開啟 D&D 跑團冒險全功能互動主控面板")
-    async def dnd_dashboard(self, interaction: discord.Interaction) -> None:
-        """開啟全合一 D&D 跑團主控面板。"""
-        view = DndMainDashboardView(self.bot)
-        embed = view.build_dashboard_embed(interaction.user.id)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+        await brain.enqueue_task(task)
 
     # ---------------------------------------------------------------------------
-    # /dnd Subcommand Group (相容舊指令)
+    # /dnd Unified Slash Command
     # ---------------------------------------------------------------------------
 
-    @dnd_group.command(name="panel", description="🐉 開啟 D&D 跑團冒險主控面板")
-    async def dnd_panel_subcommand(self, interaction: discord.Interaction) -> None:
-        """開啟 D&D 跑團主控面板。"""
-        view = DndMainDashboardView(self.bot)
-        embed = view.build_dashboard_embed(interaction.user.id)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
-
-    @dnd_group.command(name="join", description="🎲 創建你的 D&D 冒險者角色卡")
-    @app_commands.choices(
-        race=[
-            app_commands.Choice(name="人類 (+全屬性 +1)", value="人類"),
-            app_commands.Choice(name="精靈 (+敏捷 +2)", value="精靈"),
-            app_commands.Choice(name="矮人 (+體質 +2)", value="矮人"),
-            app_commands.Choice(name="半身人", value="半身人"),
-            app_commands.Choice(name="半獸人 (+力量 +2)", value="半獸人"),
-        ],
-        character_class=[
-            app_commands.Choice(name="戰士 (高 HP / 近戰好手)", value="戰士"),
-            app_commands.Choice(name="法師 (魔法攻擊 / 知識強者)", value="法師"),
-            app_commands.Choice(name="遊俠 (遠程射手 / 森林追蹤)", value="遊俠"),
-            app_commands.Choice(name="盜賊 (高敏捷 / 技巧與隱蔽)", value="盜賊"),
-            app_commands.Choice(name="牧師 (神聖治療 / 輔助戰鬥)", value="牧師"),
-        ],
+    @app_commands.command(name="dnd", description="🐉 D&D 跑團冒險系統")
+    @app_commands.describe(
+        action="選擇要執行的動作（預設為開啟主控面板）",
+        context="動作內容（例如：行動描述、擲骰規格 d20/2d6、創角名稱或 session 開關）",
     )
-    async def dnd_join(
-        self,
-        interaction: discord.Interaction,
-        race: app_commands.Choice[str],
-        character_class: app_commands.Choice[str],
-        name: str,
-    ) -> None:
-        """Create a new D&D character."""
-        await interaction.response.defer(ephemeral=False)
-
-        uid = interaction.user.id
-        char = create_character(
-            user_id=uid,
-            name=name,
-            race=race.value,
-            character_class=character_class.value,
-        )
-
-        embed = discord.Embed(
-            title=f"⚔️ 冒險者誕生：{char.name}",
-            description=f"歡迎來到艾瑟蘭大陸！你成功創建了 **{char.race} {char.character_class}**。",
-            color=discord.Color.gold(),
-        )
-        embed.add_field(name="❤️ 生命值 (HP)", value=f"{char.hp_current} / {char.hp_max}", inline=True)
-        embed.add_field(name="🛡️ 防禦等級 (AC)", value=f"{char.ac}", inline=True)
-        embed.add_field(name="⭐ 等級", value=f"Lv.{char.level} (XP: {char.experience})", inline=True)
-
-        stats_str = (
-            f"💪 力量: {char.stats.strength} (+{char.stats.modifier('strength')})\n"
-            f"🏃 敏捷: {char.stats.dexterity} (+{char.stats.modifier('dexterity')})\n"
-            f"🛡️ 體質: {char.stats.constitution} (+{char.stats.modifier('constitution')})\n"
-            f"🧠 智力: {char.stats.intelligence} (+{char.stats.modifier('intelligence')})\n"
-            f"👁️ 感知: {char.stats.wisdom} (+{char.stats.modifier('wisdom')})\n"
-            f"✨ 魅力: {char.stats.charisma} (+{char.stats.modifier('charisma')})"
-        )
-        embed.add_field(name="📊 核心屬性", value=stats_str, inline=False)
-        embed.set_footer(text="提示：使用 /dnd session start 可開啟本頻道的自然打字對話模式！")
-
-        await interaction.followup.send(embed=embed)
-
-    @dnd_group.command(name="session", description="🏰 開啟或關閉本頻道的 D&D 自動遊戲模式")
     @app_commands.choices(
         action=[
-            app_commands.Choice(name="▶️ 開啟 (本頻道打字自動視為 D&D 行動)", value="start"),
-            app_commands.Choice(name="⏹️ 關閉 (恢復一般聊天)", value="stop"),
+            app_commands.Choice(name="📜 冒險行動 (action) - 向 DM 提出動作描述", value="action"),
+            app_commands.Choice(name="🐉 主控面板 (panel) - 開啟 D&D 跑團主控台", value="panel"),
+            app_commands.Choice(name="🎲 創建角色 (join) - 建立冒險者角色卡", value="join"),
+            app_commands.Choice(name="🎲 擲骰判定 (roll) - 進行擲骰檢定", value="roll"),
+            app_commands.Choice(name="📊 角色狀態 (status) - 查看目前角色數值", value="status"),
+            app_commands.Choice(name="🎒 查看背包 (inventory) - 查看裝備與物品", value="inventory"),
+            app_commands.Choice(name="🏰 跑團模式 (session) - 切換頻道自動跑團模式", value="session"),
+            app_commands.Choice(name="🌍 世界情報 (world) - 查看大陸時間與狀態", value="world"),
         ]
     )
-    async def dnd_session(
+    async def dnd(
         self,
         interaction: discord.Interaction,
-        action: app_commands.Choice[str],
+        action: app_commands.Choice[str] | None = None,
+        context: str | None = None,
     ) -> None:
-        """Toggle D&D session mode for channel."""
-        world = load_world_state()
-        cid = interaction.channel_id
-        if cid is None:
-            await interaction.response.send_message("❌ 無法取得當前頻道 ID！", ephemeral=True)
+        """D&D 跑團系統統一入口指令。
+
+        Args:
+            interaction: Discord Interaction 物件。
+            action: 使用者所選擇之操作動作。
+            context: 動作對應之內容文字（選填）。
+        """
+        act_val = action.value if action else "panel"
+        ctx = context.strip() if context else ""
+
+        if act_val == "panel":
+            await self._handle_panel(interaction)
+        elif act_val == "action":
+            await self._handle_action(interaction, ctx)
+        elif act_val == "join":
+            await self._handle_join(interaction, ctx)
+        elif act_val == "roll":
+            await self._handle_roll(interaction, ctx)
+        elif act_val == "status":
+            await self._handle_status(interaction)
+        elif act_val == "inventory":
+            await self._handle_inventory(interaction)
+        elif act_val == "session":
+            await self._handle_session(interaction, ctx)
+        elif act_val == "world":
+            await self._handle_world(interaction)
+        else:
+            await self._handle_panel(interaction)
+
+    async def _handle_panel(self, interaction: discord.Interaction) -> None:
+        """開啟 D&D 跑團主控面板。
+
+        Args:
+            interaction: Discord Interaction 物件。
+        """
+        view = DndMainDashboardView(self.bot)
+        embed = view.build_dashboard_embed(interaction.user.id)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+
+    async def _handle_action(self, interaction: discord.Interaction, context: str) -> None:
+        """處理冒險行動。
+
+        若未帶 context，則彈出輸入視窗；若有 context 則送交 BotBrain 敘事推演。
+
+        Args:
+            interaction: Discord Interaction 物件。
+            context: 行動描述文字。
+        """
+        if not context:
+            await interaction.response.send_modal(CustomActionModal(self.bot))
             return
 
-        if action.value == "start":
-            if cid not in world.active_channels:
-                world.active_channels.append(cid)
-                save_world_state(world)
-            await interaction.response.send_message(
-                "🏰 **【D&D 遊戲模式已開啟】**\n在本頻道輸入的任何文字都將自動視為冒險行動！由地下城主 (DM) 為您敘事。",
-                ephemeral=False,
-            )
-        else:
-            if cid in world.active_channels:
-                world.active_channels.remove(cid)
-                save_world_state(world)
-            # Clear history so next session starts fresh
-            self._clear_history(cid)
-            await interaction.response.send_message(
-                "🕊️ **【D&D 遊戲模式已關閉】**\n頻道已恢復為橘雪莉一般聊天模式。對話歷史已清除。",
-                ephemeral=False,
-            )
-
-    @dnd_group.command(name="action", description="📜 執行冒險行動（向 DM 提出動作描述）")
-    async def dnd_action(self, interaction: discord.Interaction, action_text: str) -> None:
-        """Perform action in D&D world."""
         await interaction.response.defer(ephemeral=False)
 
         uid = interaction.user.id
@@ -396,11 +361,11 @@ class DndCog(commands.Cog):
             loc_name = world.locations[char.location_id].name
 
         channel_id = interaction.channel_id or 0
-        self._append_history(channel_id, "user", action_text)
+        self._append_history(channel_id, "user", context)
         history = self._get_history(channel_id)
 
         sys_prompt, user_prompt = self._build_dm_prompt(
-            char, loc_name, action_text, history=history[:-1]
+            char, loc_name, context, history=history[:-1]
         )
 
         async def _on_action_reply(reply: str) -> None:
@@ -408,7 +373,7 @@ class DndCog(commands.Cog):
             if not clean_reply:
                 return
             self._append_history(channel_id, "assistant", clean_reply)
-            short_title = action_text if len(action_text) <= 20 else action_text[:20] + "..."
+            short_title = context if len(context) <= 20 else context[:20] + "..."
             embed = discord.Embed(
                 title=f"🎲 冒險行動：{short_title}",
                 description=clean_reply,
@@ -429,46 +394,105 @@ class DndCog(commands.Cog):
         )
         await brain.enqueue_task(task)
 
-    @dnd_group.command(name="roll", description="🎲 進行 D&D 擲骰判定 (支援 d20, d6, 優勢/劣勢)")
-    @app_commands.choices(
-        mode=[
-            app_commands.Choice(name="一般擲骰", value="normal"),
-            app_commands.Choice(name="優勢 (取高)", value="advantage"),
-            app_commands.Choice(name="劣勢 (取低)", value="disadvantage"),
-        ]
-    )
-    async def dnd_roll(
-        self,
-        interaction: discord.Interaction,
-        dice: str = "d20",
-        modifier: int = 0,
-        mode: app_commands.Choice[str] | None = None,
-    ) -> None:
-        """Roll dice."""
-        mode_val = mode.value if mode else "normal"
-        match = re.match(r"^(\d*)d(\d+)$", dice.lower().strip())
+    async def _handle_join(self, interaction: discord.Interaction, context: str) -> None:
+        """處理創角。
 
-        if not match:
-            await interaction.response.send_message("❌ 擲骰格式錯誤！請使用如 `d20` 或 `2d6` 格式。", ephemeral=True)
+        若未帶 context，則彈出創角視窗；若帶有 context 則嘗試解析為角色名稱、種族與職業。
+
+        Args:
+            interaction: Discord Interaction 物件。
+            context: 創角文字（可為名字，或以空格分隔「名字 種族 職業」）。
+        """
+        if not context:
+            await interaction.response.send_modal(DndCreateModal())
             return
 
-        count = int(match.group(1)) if match.group(1) else 1
-        sides = int(match.group(2))
+        await interaction.response.defer(ephemeral=False)
 
-        if mode_val == "advantage":
+        tokens = context.split()
+        name = tokens[0]
+        race = tokens[1] if len(tokens) > 1 else "人類"
+        character_class = tokens[2] if len(tokens) > 2 else "戰士"
+
+        uid = interaction.user.id
+        char = create_character(
+            user_id=uid,
+            name=name,
+            race=race,
+            character_class=character_class,
+        )
+
+        embed = discord.Embed(
+            title=f"⚔️ 冒險者誕生：{char.name}",
+            description=f"歡迎來到艾瑟蘭大陸！你成功創建了 **{char.race} {char.character_class}**。",
+            color=discord.Color.gold(),
+        )
+        embed.add_field(name="❤️ 生命值 (HP)", value=f"{char.hp_current} / {char.hp_max}", inline=True)
+        embed.add_field(name="🛡️ 防禦等級 (AC)", value=f"{char.ac}", inline=True)
+        embed.add_field(name="⭐ 等級", value=f"Lv.{char.level} (XP: {char.experience})", inline=True)
+
+        stats_str = (
+            f"💪 力量: {char.stats.strength} (+{char.stats.modifier('strength')})\n"
+            f"🏃 敏捷: {char.stats.dexterity} (+{char.stats.modifier('dexterity')})\n"
+            f"🛡️ 體質: {char.stats.constitution} (+{char.stats.modifier('constitution')})\n"
+            f"🧠 智力: {char.stats.intelligence} (+{char.stats.modifier('intelligence')})\n"
+            f"👁️ 感知: {char.stats.wisdom} (+{char.stats.modifier('wisdom')})\n"
+            f"✨ 魅力: {char.stats.charisma} (+{char.stats.modifier('charisma')})"
+        )
+        embed.add_field(name="📊 核心屬性", value=stats_str, inline=False)
+        embed.set_footer(text="提示：使用 /dnd action:跑團模式 可開啟本頻道的自然打字對話模式！")
+
+        await interaction.followup.send(embed=embed)
+
+    async def _handle_roll(self, interaction: discord.Interaction, context: str) -> None:
+        """處理擲骰判定。
+
+        若未帶 context，則彈出擲骰表單；若有 context 則解析骰子字串進行計算。
+
+        Args:
+            interaction: Discord Interaction 物件。
+            context: 擲骰規格（例如：d20, 2d6, 1d20+3, adv, dis）。
+        """
+        if not context:
+            await interaction.response.send_modal(DndRollModal())
+            return
+
+        dice_expr = context.lower().strip()
+        is_adv = "adv" in dice_expr or "優勢" in dice_expr
+        is_dis = "dis" in dice_expr or "劣勢" in dice_expr
+
+        modifier = 0
+        mod_match = re.search(r"([+-]\s*\d+)", dice_expr)
+        if mod_match:
+            try:
+                modifier = int(mod_match.group(1).replace(" ", ""))
+            except ValueError:
+                modifier = 0
+
+        dice_match = re.search(r"(\d*)d(\d+)", dice_expr)
+        if not dice_match:
+            count = 1
+            sides = 20
+            dice_tag = "d20"
+        else:
+            count = int(dice_match.group(1)) if dice_match.group(1) else 1
+            sides = int(dice_match.group(2))
+            dice_tag = f"{count}d{sides}"
+
+        if is_adv and not is_dis:
             d1, d2, chosen = advantage_roll(sides)
             total = chosen + modifier
-            desc = f"🎲 優勢擲骰 [{dice}]: 第一次 `{d1}`，第二次 `{d2}` → 取高 `{chosen}` + 修正 `{modifier:+d}` = **{total}**"
-        elif mode_val == "disadvantage":
+            desc = f"🎲 優勢擲骰 [{dice_tag}]: 第一次 `{d1}`，第二次 `{d2}` → 取高 `{chosen}` + 修正 `{modifier:+d}` = **{total}**"
+        elif is_dis:
             d1, d2, chosen = disadvantage_roll(sides)
             total = chosen + modifier
-            desc = f"🎲 劣勢擲骰 [{dice}]: 第一次 `{d1}`，第二次 `{d2}` → 取低 `{chosen}` + 修正 `{modifier:+d}` = **{total}**"
+            desc = f"🎲 劣勢擲骰 [{dice_tag}]: 第一次 `{d1}`，第二次 `{d2}` → 取低 `{chosen}` + 修正 `{modifier:+d}` = **{total}**"
         else:
             rolls = roll_dice(count, sides)
             raw_sum = sum(rolls)
             total = raw_sum + modifier
             rolls_str = ", ".join(str(r) for r in rolls)
-            desc = f"🎲 擲骰 [{count}d{sides}]: ({rolls_str}) = `{raw_sum}` + 修正 `{modifier:+d}` = **{total}**"
+            desc = f"🎲 擲骰 [{dice_tag}]: ({rolls_str}) = `{raw_sum}` + 修正 `{modifier:+d}` = **{total}**"
 
         embed = discord.Embed(
             title="🎲 擲骰結果",
@@ -477,15 +501,18 @@ class DndCog(commands.Cog):
         )
         await interaction.response.send_message(embed=embed)
 
-    @dnd_group.command(name="status", description="📊 查看你的角色卡狀態")
-    async def dnd_status(self, interaction: discord.Interaction) -> None:
-        """View character status."""
+    async def _handle_status(self, interaction: discord.Interaction) -> None:
+        """查看角色卡狀態。
+
+        Args:
+            interaction: Discord Interaction 物件。
+        """
         uid = interaction.user.id
         characters = load_characters()
         char = characters.get(uid)
 
         if not char:
-            await interaction.response.send_message("❌ 你還沒有創建角色！請先使用 `/dnd join` 創角。", ephemeral=True)
+            await interaction.response.send_message("❌ 你還沒有創建角色！請使用 `/dnd action:創建角色` 創角。", ephemeral=True)
             return
 
         world = load_world_state()
@@ -514,15 +541,18 @@ class DndCog(commands.Cog):
 
         await interaction.response.send_message(embed=embed)
 
-    @dnd_group.command(name="inventory", description="🎒 查看背包內的裝備與物品")
-    async def dnd_inventory(self, interaction: discord.Interaction) -> None:
-        """View character inventory."""
+    async def _handle_inventory(self, interaction: discord.Interaction) -> None:
+        """查看背包內的裝備與物品。
+
+        Args:
+            interaction: Discord Interaction 物件。
+        """
         uid = interaction.user.id
         characters = load_characters()
         char = characters.get(uid)
 
         if not char:
-            await interaction.response.send_message("❌ 你還沒有創建角色！請使用 `/dnd join` 創角。", ephemeral=True)
+            await interaction.response.send_message("❌ 你還沒有創建角色！請使用 `/dnd action:創建角色` 創角。", ephemeral=True)
             return
 
         embed = discord.Embed(
@@ -542,9 +572,53 @@ class DndCog(commands.Cog):
         embed.set_footer(text=f"金幣: {char.inventory.gold} | 銀幣: {char.inventory.silver} | 銅幣: {char.inventory.copper}")
         await interaction.response.send_message(embed=embed)
 
-    @dnd_group.command(name="world", description="🌍 查看世界時間與勢力狀態")
-    async def dnd_world(self, interaction: discord.Interaction) -> None:
-        """View global D&D world state."""
+    async def _handle_session(self, interaction: discord.Interaction, context: str) -> None:
+        """切換頻道跑團模式。
+
+        Args:
+            interaction: Discord Interaction 物件。
+            context: 控制參數（start/stop/toggle 或為空）。
+        """
+        world = load_world_state()
+        cid = interaction.channel_id
+        if cid is None:
+            await interaction.response.send_message("❌ 無法取得當前頻道 ID！", ephemeral=True)
+            return
+
+        ctx_val = context.lower().strip()
+        should_start: bool
+        if ctx_val in ("start", "on", "開", "開啟", "enable"):
+            should_start = True
+        elif ctx_val in ("stop", "off", "關", "關閉", "disable"):
+            should_start = False
+        else:
+            # 若無特別指定，則以 Toggle（切換）方式處理
+            should_start = cid not in world.active_channels
+
+        if should_start:
+            if cid not in world.active_channels:
+                world.active_channels.append(cid)
+                save_world_state(world)
+            await interaction.response.send_message(
+                "🏰 **【D&D 遊戲模式已開啟】**\n在本頻道輸入的任何文字都將自動視為冒險行動！由地下城主 (DM) 為您敘事。",
+                ephemeral=False,
+            )
+        else:
+            if cid in world.active_channels:
+                world.active_channels.remove(cid)
+                save_world_state(world)
+            self._clear_history(cid)
+            await interaction.response.send_message(
+                "🕊️ **【D&D 遊戲模式已關閉】**\n頻道已恢復為橘雪莉一般聊天模式。對話歷史已清除。",
+                ephemeral=False,
+            )
+
+    async def _handle_world(self, interaction: discord.Interaction) -> None:
+        """查看世界狀態與時間。
+
+        Args:
+            interaction: Discord Interaction 物件。
+        """
         setting = load_world_setting()
         world = load_world_state()
 

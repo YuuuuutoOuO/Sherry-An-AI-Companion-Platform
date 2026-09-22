@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import discord
 from discord import ui
@@ -107,29 +107,23 @@ class MusicControlView(discord.ui.View):
     @discord.ui.button(label="⏭️ 跳過此曲", style=discord.ButtonStyle.blurple, custom_id="skip_song_btn", row=0)
     async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """跳過當前播放歌曲。"""
-        vc: Any = interaction.guild.voice_client if interaction.guild else None
-        if vc and vc.is_connected():
-            if vc.is_playing() or vc.is_paused():
-                vc.stop()  # 觸發 FFmpeg 的 after 行為切下一首
+        cog: Any = getattr(interaction.client, "get_cog", lambda _: None)("MusicHandler")
+        if cog and interaction.guild_id:
+            if cog.skip_song(interaction.guild_id):
                 await interaction.response.send_message(
                     f"⏭️ {interaction.user.mention} 跳過了這首歌！", delete_after=5
                 )
             else:
-                await interaction.response.send_message("❌ 目前沒有音樂正在播放。", ephemeral=True)
+                await interaction.response.send_message("❌ 目前沒有音樂正在播放或機器人不在語音頻道內。", ephemeral=True)
         else:
-            await interaction.response.send_message("❌ 機器人目前不在語音頻道內。", ephemeral=True)
+            await interaction.response.send_message("❌ 音樂模組未載入。", ephemeral=True)
 
     @discord.ui.button(label="⏹️ 停止/清空", style=discord.ButtonStyle.danger, custom_id="stop_song_btn", row=0)
     async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """停止播放並清空佇列。"""
         cog: Any = getattr(interaction.client, "get_cog", lambda _: None)("MusicHandler")
-        vc: Any = interaction.guild.voice_client if interaction.guild else None
         if cog and interaction.guild_id:
-            cog.queues[interaction.guild_id] = []
-            cog.current_song[interaction.guild_id] = None
-            if vc and vc.is_connected():
-                vc.stop()
-                await vc.disconnect()
+            await cog.stop_player(interaction.guild_id, disconnect=True)
             await interaction.response.send_message(f"⏹️ {interaction.user.mention} 已停止播放並清空清單！", delete_after=5)
         else:
             await interaction.response.send_message("❌ 音樂模組未載入。", ephemeral=True)

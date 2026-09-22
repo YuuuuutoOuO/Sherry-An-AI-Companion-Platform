@@ -242,28 +242,3 @@ class BooruClient:
 
         return None
 
-    async def search_federated(
-        self,
-        tags: list[str],
-        is_nsfw: bool = False,
-    ) -> tuple[str, str]:
-        """Multi-booru federated search with Safebooru primary and Danbooru fallback.
-
-        Args:
-            tags: List of query tags.
-            is_nsfw: Whether NSFW content is allowed.
-
-        Returns:
-            Tuple of (image_url, source_site). If not found, returns ("", "").
-        """
-        # Primary: Safebooru (Fast & Safe)
-        res = await self.search_safebooru(tags)
-        if res and res.image_url:
-            return res.image_url, res.source_site
-
-        # Fallback: Danbooru (SFW or full based on is_nsfw)
-        res_dan = await self.search_danbooru(tags, is_nsfw=is_nsfw)
-        if res_dan and res_dan.image_url:
-            return res_dan.image_url, res_dan.source_site
-
-        return "", ""

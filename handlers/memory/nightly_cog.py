@@ -21,9 +21,8 @@ import logging
 import re
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-import discord
 from discord.ext import commands, tasks
 
 import settings
@@ -32,12 +31,12 @@ from handlers.memory.chat_logger import (
     mark_date_processed, read_chat_log,
 )
 from handlers.memory.storage import (
-    load_user_memory, save_user_memory, make_fact, UserFact,
+    load_user_memory, save_user_memory, UserFact,
     sanitize_aliases, sanitize_and_merge_facts,
+    consolidate_all_user_memories,
     decay_memories, MAX_FACTS_PER_USER,
 )
-from handlers.bot_brain import BotBrain, InferenceTask
-from handlers.memory.cog import MemoryManager
+from handlers.bot_brain import InferenceTask
 
 logger = logging.getLogger(__name__)
 
@@ -59,26 +58,29 @@ _NIGHTLY_SYSTEM_PROMPT = (
     "1. 【嚴格禁止主客體顛倒】：發話者對其他人說的話（例如叫別人吃大便、罵別人、開玩笑說『你只能...』、『你去死』），"
     "是發話者對『其他人』的祈使或嘴砲句，絕對不可記為發話者本人的喜好或特質！\n"
     "2. 【嚴格過濾嘴砲與幹話】：群聊中的打鬧、互相嘲諷、無厘頭幹話或情緒發洩，請一律忽略，留下空陣列，寧缺勿濫！\n"
-    "3. 【嚴格別名判定】：只有發話者明確自我介紹（例如：『我叫XX』、『可以叫我XX』）才記入 aliases。"
+    "3. 【禁止公文套話與抽離元描述】：嚴禁使用『進行文字創作測試』、『進行日常對話』、『與特定角色互動』等抽象公文詞彙，必須精確記錄具體角色、情境設定與話題焦點！\n"
+    "4. 【嚴格別名判定】：只有發話者明確自我介紹（例如：『我叫XX』、『可以叫我XX』）才記入 aliases。"
     "絕對禁止將遊戲名稱（如賽爾號）、伺服器房號、動漫名、代號、泛稱（如群友、大家）或整句話記為 aliases！\n"
-    "4. 發言紀錄中出現的「[某群友]」是發話者在訊息中 TAG 的其他人，絕對不是發話者本人！\n"
-    "5. 分類規範（category）：\n"
+    "5. 發言紀錄中出現的「[某群友]」是發話者在訊息中 TAG 的其他人，絕對不是發話者本人！\n"
+    "6. 分類規範（category）：\n"
     "   - identity: 真實身份/職業/居住地/個人自稱\n"
-    "   - preference: 明確熱愛的遊戲/動漫/技術/興趣/食物\n"
+    "   - preference: 明確熱愛的遊戲/動漫/技術/食物，以及特定角色扮演情境偏好（如兄妹/主僕 RP）、性癖或情色互動喜好\n"
     "   - habit: 穩固生活作息/口頭禪/反覆出現的行為\n"
     "   - social: 與其他人（群友、家人、朋友）的關係，或他正在進行的長期項目\n"
-    "   - rule: 【最重要】他對雪莉（橘雪莉）的明確要求或溝通規則，如『叫我OO』『不要用模糊詞』『說話要直接』\n"
-    "6. 每條 fact 必須附上 importance（1~5整數）：\n"
-    "   1=短暫狀態  2=一般偏好  3=穩固習慣  4=重要特質  5=核心身份或最高規則\n\n"
-    "目前已知長期屬性（請勿重複，但可升級 importance）：\n"
+    "   - rule: 【嚴格限定】他對雪莉（橘雪莉）的明確溝通硬規則（如『叫我OO』『不要用模糊詞』『說話要直接』『禁止某稱呼』）。注意：個人性癖、情境愛好或角色扮演偏好一律歸入 preference，絕對不是 rule！\n"
+    "7. 每條 fact 必須附上 importance（1~5整數）：\n"
+    "   1=短暫狀態  2=一般偏好  3=穩固習慣  4=重要特質  5=核心身份或最高規則\n"
+    "8. 【記憶合併同類項原則】：請仔細參照底下『目前已知長期屬性』，若今日對話涉及相同情境（如同一款遊戲或按摩/角色設定），請將細節整合成 1 條語意完整且精練的事實並提高 importance，嚴禁生成重複破碎的多條同類事實！\n\n"
+    "目前已知長期屬性（請勿重複，但可合併升級 importance）：\n"
     "{current_facts}\n\n"
     "請只返回 JSON 格式，不可有任何其他文字：\n"
     '```json\n'
     '{{"aliases": ["真實的綽號或自稱(若無則空陣列)"],\n'
     ' "facts": [\n'
-    '   {{"fact": "他平時喜歡寫Python", "importance": 3, "category": "preference"}},\n'
-    '   {{"fact": "請叫他歐潤吉", "importance": 5, "category": "rule"}},\n'
-    '   {{"fact": "他正在開發雪莉 Discord 機器人", "importance": 4, "category": "social"}}\n'
+    '   {{"fact": "在角色扮演情境中偏好兄妹設定與沉浸式互動", "importance": 4, "category": "preference"}},\n'
+    '   {{"fact": "要求雪莉對話時必須直接稱呼他為主人", "importance": 5, "category": "rule"}},\n'
+    '   {{"fact": "偏好純愛互動並強烈排斥 NTR 題材", "importance": 4, "category": "preference"}},\n'
+    '   {{"fact": "正在深入玩韓版楓之谷並專注於裝備洗鍊", "importance": 3, "category": "preference"}}\n'
     ' ]}}\n'
     '```'
 )
@@ -266,6 +268,14 @@ class NightlyDigest(commands.Cog):
             if decay_removed > 0:
                 logger.info("NightlyDigest: 記憶衰減移除了 %d 條暫時性 facts", decay_removed)
 
+            # ── 全庫記憶大掃除與語意去重 ─────────────────────────
+            clean_stats = consolidate_all_user_memories(store)
+            if clean_stats["facts_removed"] > 0 or clean_stats["aliases_removed"] > 0:
+                logger.info(
+                    "NightlyDigest: 全庫記憶大掃除完成，清理 %d 位使用者，移除 %d 條重複 facts、%d 個無效別名",
+                    clean_stats["users_cleaned"], clean_stats["facts_removed"], clean_stats["aliases_removed"],
+                )
+
             # ── Chat Log 清理（保留最近 30 天）───────────────────
             cutoff = datetime.now(_TZ_TW) - timedelta(days=30)
             chat_log_dir = settings.CHAT_LOG_DIR
@@ -297,6 +307,8 @@ class NightlyDigest(commands.Cog):
                 "facts_added": facts_added,
                 "total_messages": len(records),
                 "decay_removed": decay_removed,
+                "duplicates_removed": clean_stats["facts_removed"],
+                "aliases_cleaned": clean_stats["aliases_removed"],
             }
             mark_date_processed(date_str, stats)
             logger.info(
@@ -309,15 +321,125 @@ class NightlyDigest(commands.Cog):
             if mem_mgr:
                 mem_mgr.relations.decay_all()
 
-            # ── 世界記憶壓縮與清理 ───────────────────────────────
+            # ── 世界記憶提煉、壓縮與清理 ───────────────────────────────
             try:
-                from handlers.memory.world_memory import compress_daily_events, cleanup_old_logs
-                world_added = compress_daily_events(date_str)
-                world_cleaned = cleanup_old_logs(days=30)
+                from handlers.memory.world_memory import (
+                    log_world_event, compress_daily_events, cleanup_old_logs
+                )
+                # 按伺服器分組聊天記錄
+                by_server: dict[str, list[dict]] = defaultdict(list)
+                for rec in records:
+                    sid = str(rec.get("server_id", "") or "").strip()
+                    if sid:
+                        by_server[sid].append(rec)
+
+                # 對各伺服器昨日聊天提煉 3~6 條世界記憶條目（大事件 + 進行中話題 + 群體關係變化）
+                for sid, s_msgs in by_server.items():
+                    if len(s_msgs) < _MIN_MSGS_THRESHOLD:
+                        continue
+
+                    sample_size = int(getattr(settings, "NIGHTLY_WORLD_SAMPLE_COUNT", 200))
+                    sampled = s_msgs[-sample_size:]  # 深夜非同步，取樣多一些供提煉
+                    summary_text = "\n".join(
+                        f"[{r.get('display_name', '群友')}]: {r.get('content', '')}" for r in sampled
+                    )
+                    world_sys_prompt = (
+                        "你是一個專業且洞察敏銳的社群世界記憶史官。請從這份某 Discord 伺服器一日聊天記錄中，"
+                        "提煉 3~6 條最具代表性、生動且值得被長期記住的世界記憶條目，涵蓋：\n"
+                        "① 全群重大集體事件、深度互動插曲或熱烈話題焦點；\n"
+                        "② 正在進行、未來可能延續的情境主軸（包含與橘雪莉/希羅的深度對話或特定角色扮演）；\n"
+                        "③ 群體社會關係與互動默契的演變。\n\n"
+                        "⚠️【撰寫規範（重要）】：\n"
+                        "1. 【嚴禁公文套話與抽象元描述】：絕對禁止使用『進行文字創作測試』、『進行日常對話』、『與特定角色互動』、『展開相關討論』等空洞公文套話！\n"
+                        "2. 【保留具體關鍵細節】：務必清楚寫出：誰與誰（包含 Bot 當時扮演的角色/人設）、具體情境與設定（如兄妹角色扮演、主僕互動、特定遊戲副本或裝備名稱）、事件的核心焦點或結論。\n"
+                        "3. 【篇幅與長度】：每條 40~90 字以內，文筆生動流暢，主謂分明，彼此主題不可重複。\n"
+                        "【格式要求】：繁體中文，請僅返回 JSON Array 格式，嚴禁任何其他說明文字：\n"
+                        '```json\n'
+                        '[\n'
+                        '  {"summary": "雪莉大小姐與雪莉（希羅）進行兄妹情境的角色扮演互動，沉浸於禁忌浪漫與細膩的情節展開", "importance": 4, "participants": ["雪莉大小姐", "橘雪莉"]},\n'
+                        '  {"summary": "歐潤吉與喵喵針對韓版楓之谷新轉移卷軸機制與裝備洗鍊收益深入探討攻略細節", "importance": 3, "participants": ["歐潤吉", "喵喵"]},\n'
+                        '  {"summary": "群友們針對《絕區零》新角色養成機制與抽卡規劃展開熱烈交流與經驗分享", "importance": 3, "participants": ["喵喵", "咕咕嘎嘎"]}\n'
+                        ']\n'
+                        '```'
+                    )
+                    world_user_prompt = f"以下是伺服器在 {date_str} 的對話記錄（共 {len(sampled)} 則）：\n\n{summary_text}"
+
+                    world_done_event = asyncio.Event()
+                    world_res_holder: list[list[dict] | None] = [None]
+
+                    async def _on_world_result(reply: str, _sid=sid) -> None:
+                        try:
+                            raw = reply.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+                            m = re.search(r"\[.*\]", raw, re.DOTALL)
+                            if m:
+                                raw = m.group(0)
+                            parsed = json.loads(raw)
+                            if isinstance(parsed, list):
+                                world_res_holder[0] = parsed
+                        except Exception as e:
+                            logger.warning("NightlyDigest: 世界記憶 JSON 解析失敗 sid=%s: %s", _sid, e)
+                        finally:
+                            world_done_event.set()
+
+                    await brain.enqueue_task(InferenceTask(
+                        priority=settings.PRIORITY_VIBE_UPDATE,
+                        system_prompt=world_sys_prompt,
+                        user_prompt=world_user_prompt,
+                        callback=_on_world_result,
+                        model=settings.NIGHTLY_DIGEST_MODEL,
+                        task_id=f"world-{date_str}-{sid}",
+                    ))
+
+                    try:
+                        await asyncio.wait_for(world_done_event.wait(), timeout=settings.NIGHTLY_DIGEST_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        logger.warning("NightlyDigest: 世界記憶提煉超時 sid=%s", sid)
+                        continue
+
+                    extracted_events = world_res_holder[0]
+                    if extracted_events:
+                        for ev in extracted_events[:8]:  # 防 LLM 過度產出，封頂 8 條
+                            if not (isinstance(ev, dict) and ev.get("summary")):
+                                continue
+                            summary_text = str(ev["summary"]).strip()
+                            if len(summary_text) < 12:  # 過短的無意義條目直接略過
+                                continue
+                            log_world_event(
+                                event_type="CHAT",
+                                summary=summary_text,
+                                participants=list(ev.get("participants", []) or []),
+                                importance=int(ev.get("importance", 3)),
+                                server_id=sid,
+                                date_str=date_str,
+                            )
+
+                # 依伺服器分組壓縮，確保各伺服器世界記憶彼此獨立
+                server_ids: list[str] = list(by_server.keys())
+                guilds = getattr(self.bot, "guilds", [])
+                if guilds:
+                    server_ids.extend([str(g.id) for g in guilds if getattr(g, "id", None) is not None])
+                server_ids.append("")  # 涵蓋無 server 歸屬的舊事件
+                unique_sids = list(set(server_ids))
+
+                def _run_world_compress() -> tuple[int, int]:
+                    added = sum(compress_daily_events(date_str, server_id=sid) for sid in unique_sids)
+                    cleaned = cleanup_old_logs(days=30)
+                    return added, cleaned
+
+                world_added, world_cleaned = await asyncio.to_thread(_run_world_compress)
                 if world_added > 0:
-                    logger.info("NightlyDigest: 世界記憶壓縮完成，新增 %d 條事件", world_added)
+                    logger.info("NightlyDigest: 世界記憶壓縮完成，新增 %d 條事件（分組 %d 個伺服器）", world_added, len(unique_sids))
                 if world_cleaned > 0:
                     logger.info("NightlyDigest: 清理了 %d 個過期世界 log 檔案", world_cleaned)
+
+                # ── 世界記憶長期歸檔（每週/月 Markdown，只存不注入）────────────────
+                try:
+                    from handlers.memory import memory_archive
+                    archived = await asyncio.to_thread(memory_archive.archive_finished_week, date_str)
+                    if archived:
+                        logger.info("NightlyDigest: 世界記憶週歸檔完成: %s", archived.name)
+                except Exception as arc_err:
+                    logger.warning("NightlyDigest: 世界記憶週歸檔失敗: %s", arc_err)
             except Exception as e:
                 logger.warning("NightlyDigest: 世界記憶處理失敗: %s", e)
 

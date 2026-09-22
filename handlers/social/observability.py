@@ -20,13 +20,17 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
 import settings
+from core.db import db_transaction
+from core.sys_inspector import notify_failure_sync, notify_slow_response_sync
 
 logger = logging.getLogger(__name__)
+
+_TZ_TW = timezone(timedelta(hours=8))  # 台灣時間 UTC+8
 
 # ---------------------------------------------------------------------------
 # Trace ID & ContextVar (全域鏈路追蹤機制)
@@ -93,34 +97,182 @@ _MAX_LOG_SIZE_BYTES: int = 50 * 1024 * 1024  # 50 MB
 _WRITE_COUNTS: dict[str, int] = {}
 _STAT_CHECK_INTERVAL: int = 100
 
+_CHAT_DB_PATH: Path = settings.DATA_DIR / "chat_history.db"
+
+
+def _init_events_db() -> None:
+    """初始化 chat_history.db 中的 runtime_events 與 error_events 資料表。"""
+    try:
+        with db_transaction(_CHAT_DB_PATH) as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS runtime_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    trace_id TEXT,
+                    event TEXT NOT NULL,
+                    user TEXT,
+                    channel_id TEXT,
+                    latency_ms INTEGER DEFAULT 0,
+                    data_json TEXT NOT NULL
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_runtime_time ON runtime_events(timestamp DESC);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_runtime_event ON runtime_events(event);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_runtime_trace ON runtime_events(trace_id);")
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS error_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    trace_id TEXT,
+                    event TEXT NOT NULL,
+                    error_type TEXT,
+                    message TEXT,
+                    data_json TEXT NOT NULL
+                )
+            """)
+    except Exception as e:
+        logger.debug("observability: 初始化 SQLite 資料表失敗: %s", e)
+
+
+_DB_INITIALIZED = False
+
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# 背景非同步寫入緩衝
 # ---------------------------------------------------------------------------
+# 說明：log_event/log_error 在回覆熱路徑被大量同步呼叫，若每次都直接做
+#「開連線→INSERT→commit→close + JSONL append」會阻塞事件迴圈。
+# 故透過記憶體緩衝 + 背景 daemon 執行緒批次落盤，讓熱路徑寫入近乎 O(1) 非阻塞，
+# 同時保持 log_event 等既有同步 API 不變。
+import threading
+import queue as _pyqueue
+
+_WRITE_QUEUE: "_pyqueue.Queue[tuple[Path, dict] | None]" = _pyqueue.Queue()
+_WRITE_THREAD_STARTED = False
+
+
+def _flush_batch(batch: list[tuple[Path, dict]]) -> None:
+    """實際批次落盤（SQLite + JSONL），於背景執行緒中單一交易執行。"""
+    if not batch:
+        return
+    global _DB_INITIALIZED
+    try:
+        if not _DB_INITIALIZED:
+            _init_events_db()
+            _DB_INITIALIZED = True
+
+        runtime_rows = []
+        error_rows = []
+        files_map: dict[Path, list[str]] = {}
+
+        for path, entry in batch:
+            ts = str(entry.get("ts", ""))
+            tid = str(entry.get("trace_id", ""))
+            event = str(entry.get("event", "unknown"))
+            data_json = json.dumps(entry, ensure_ascii=False)
+
+            if path.name.startswith("error"):
+                error_rows.append((
+                    ts,
+                    tid,
+                    event,
+                    str(entry.get("error_type", "")),
+                    str(entry.get("message", "")),
+                    data_json,
+                ))
+            else:
+                latency = int(entry.get("latency_ms", 0))
+                user = str(entry.get("user", ""))
+                ch_id = str(entry.get("channel_id", ""))
+                runtime_rows.append((ts, tid, event, user, ch_id, latency, data_json))
+
+            files_map.setdefault(path, []).append(data_json)
+
+        # 1. 單一 Transaction 批次寫入 SQLite
+        with db_transaction(_CHAT_DB_PATH) as cur:
+            if error_rows:
+                cur.executemany("""
+                    INSERT INTO error_events (timestamp, trace_id, event, error_type, message, data_json)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, error_rows)
+            if runtime_rows:
+                cur.executemany("""
+                    INSERT INTO runtime_events (timestamp, trace_id, event, user, channel_id, latency_ms, data_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, runtime_rows)
+
+        # 2. 批次寫入 JSONL
+        for target_path, lines in files_map.items():
+            try:
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                with target_path.open("a", encoding="utf-8") as f:
+                    f.write("\n".join(lines) + "\n")
+            except Exception as json_err:
+                logger.debug("observability: 批次寫入 JSONL 失敗: %s", json_err)
+
+    except Exception as exc:
+        logger.debug("observability: 批次寫入 SQLite 失敗: %s", exc)
+
+
+def _writer_worker() -> None:
+    """背景執行緒：持續取出事件並批次寫入 SQLite 與 JSONL。"""
+    batch: list[tuple[Path, dict]] = []
+    while True:
+        item = _WRITE_QUEUE.get()
+        try:
+            if item is None:
+                if batch:
+                    _flush_batch(batch)
+                break
+            batch.append(item)
+
+            # 累積最多 50 筆或排空當前隊列
+            while len(batch) < 50:
+                try:
+                    next_item = _WRITE_QUEUE.get_nowait()
+                    if next_item is None:
+                        break
+                    batch.append(next_item)
+                except _pyqueue.Empty:
+                    break
+
+            _flush_batch(batch)
+        except Exception:
+            logger.debug("observability: 背景寫入異常", exc_info=True)
+        finally:
+            for _ in range(len(batch)):
+                _WRITE_QUEUE.task_done()
+            batch.clear()
+
+
+def _ensure_writer_thread() -> None:
+    """確保背景寫入執行緒已啟動（daemon，隨行程結束）。"""
+    global _WRITE_THREAD_STARTED
+    if _WRITE_THREAD_STARTED:
+        return
+    _WRITE_THREAD_STARTED = True
+    t = threading.Thread(target=_writer_worker, name="observability-writer", daemon=True)
+    t.start()
+
 
 def _write_line(path: Path, entry: dict) -> None:
-    """Append a single JSON line to a JSONL file. Silently ignores all errors."""
+    """將事件推入背景佇列，非阻塞。由 _writer_worker 執行緒實際批次落盤。"""
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path_key = str(path)
-        count = _WRITE_COUNTS.get(path_key, 0) + 1
-        _WRITE_COUNTS[path_key] = count
+        _ensure_writer_thread()
+        _WRITE_QUEUE.put_nowait((path, entry))
+    except Exception:
+        # 佇列滿（不應發生）或執行緒未就緒時，改為同步兜底，避免丟失事件
+        try:
+            _flush_batch([(path, entry)])
+        except Exception:
+            logger.debug("observability: 同步兜底寫入失敗", exc_info=True)
 
-        # Rotate if file exceeds size limit (checked once every _STAT_CHECK_INTERVAL writes)
-        if (count == 1 or count % _STAT_CHECK_INTERVAL == 0) and path.exists():
-            try:
-                if path.stat().st_size > _MAX_LOG_SIZE_BYTES:
-                    rotated = path.with_suffix(".jsonl.1")
-                    path.replace(rotated)
-                    _WRITE_COUNTS[path_key] = 0
-            except OSError:
-                pass  # If rotation fails, keep writing to same file
 
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    except Exception as exc:
-        # Never raise from observability layer — logging is best-effort
-        logger.debug("observability: 寫入失敗 (%s): %s", path.name, exc)
+def flush_observability_logs() -> None:
+    """等待背景寫入佇列清空（供測試與優雅關機使用）。"""
+    if _WRITE_THREAD_STARTED:
+        _WRITE_QUEUE.join()
 
 
 # ---------------------------------------------------------------------------
@@ -152,9 +304,16 @@ def log_event(
     cot_thought: str = "",
     reply_preview: str = "",
     model_used: str = "",
-    # 效能
+    # 效能與細粒度 APM 指標 (V1.9 Prefill / KV Cache / Latency Breakdown)
     latency_ms: int = 0,
     queue_size: int = 0,
+    prompt_tokens_cached: int = 0,
+    prompt_tokens_uncached: int = 0,
+    decode_tokens: int = 0,
+    ttft_ms: int = 0,
+    prefill_latency_ms: int = 0,
+    decode_latency_ms: int = 0,
+    cache_hit_ratio: float = 0.0,
     # 任意附加欄位
     **extra: Any,
 ) -> None:
@@ -184,7 +343,7 @@ def log_event(
     """
     actual_tid = trace_id or get_trace_id()
     entry: dict[str, Any] = {
-        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "ts": datetime.now(_TZ_TW).strftime("%Y-%m-%d %H:%M:%S"),
         "trace_id": actual_tid,
         "event": event,
         "message_id": message_id,
@@ -203,6 +362,13 @@ def log_event(
         "model_used": model_used,
         "latency_ms": latency_ms,
         "queue_size": queue_size,
+        "prompt_tokens_cached": prompt_tokens_cached,
+        "prompt_tokens_uncached": prompt_tokens_uncached,
+        "decode_tokens": decode_tokens,
+        "ttft_ms": ttft_ms,
+        "prefill_latency_ms": prefill_latency_ms,
+        "decode_latency_ms": decode_latency_ms,
+        "cache_hit_ratio": round(cache_hit_ratio, 4),
     }
     if extra:
         entry["extra"] = {
@@ -211,6 +377,81 @@ def log_event(
         }
 
     _write_line(_RUNTIME_LOG_PATH, entry)
+
+    # 自動向 component_metrics 記錄組件與功能度量
+    try:
+        from core.sys_inspector.metrics import component_metrics
+        lat_f = float(max(0, latency_ms))
+
+        # 計算/估算 Token
+        p_tokens = len(raw_input) if raw_input else 0
+        c_tokens = (len(reply_preview) if reply_preview else 0) + (len(cot_thought) if cot_thought else 0)
+        if extra:
+            if "prompt_length" in extra and isinstance(extra["prompt_length"], (int, float)):
+                p_tokens = int(extra["prompt_length"])
+            elif "prompt_tokens" in extra and isinstance(extra["prompt_tokens"], (int, float)):
+                p_tokens = int(extra["prompt_tokens"])
+            if "completion_length" in extra and isinstance(extra["completion_length"], (int, float)):
+                c_tokens = int(extra["completion_length"])
+            elif "completion_tokens" in extra and isinstance(extra["completion_tokens"], (int, float)):
+                c_tokens = int(extra["completion_tokens"])
+
+        if event == "chat_reply":
+            component_metrics.record_execution(
+                "CHAT",
+                latency_ms=lat_f,
+                success=True,
+                prompt_tokens=p_tokens,
+                completion_tokens=c_tokens,
+                trace_id=actual_tid,
+            )
+            component_metrics.record_execution(
+                "BOT_BRAIN",
+                latency_ms=lat_f,
+                success=True,
+                prompt_tokens=p_tokens,
+                completion_tokens=c_tokens,
+                trace_id=actual_tid,
+            )
+        elif event == "draw":
+            component_metrics.record_execution("DRAW", latency_ms=lat_f, success=True, trace_id=actual_tid)
+        elif event == "search_rag":
+            component_metrics.record_execution("SEARCH", latency_ms=lat_f, success=True, trace_id=actual_tid, prompt_tokens=p_tokens, completion_tokens=c_tokens)
+        elif event == "stock_query":
+            component_metrics.record_execution("STOCK", latency_ms=lat_f, success=True, trace_id=actual_tid)
+        elif event == "image_search":
+            component_metrics.record_execution("PIXIV", latency_ms=lat_f, success=True, trace_id=actual_tid)
+        elif event == "music_action":
+            component_metrics.record_execution("MUSIC", latency_ms=lat_f, success=True, trace_id=actual_tid)
+        elif event == "schedule_action":
+            component_metrics.record_execution("SCHEDULE", latency_ms=lat_f, success=True, trace_id=actual_tid)
+
+        if tools_invoked:
+            for t_name in tools_invoked:
+                if t_name:
+                    component_metrics.record_execution(
+                        t_name.upper(),
+                        latency_ms=lat_f,
+                        success=True,
+                        trace_id=actual_tid,
+                        prompt_tokens=p_tokens,
+                        completion_tokens=c_tokens,
+                    )
+    except Exception:
+        pass
+
+    # 自我監控鉤子：單筆回覆超過 90 秒時發送慢速警報信號
+    if latency_ms >= 90000:
+        try:
+            notify_slow_response_sync(
+                latency_ms=latency_ms,
+                trace_id=actual_tid,
+                channel_id=channel_id,
+                user_name=user,
+                raw_prompt=raw_input,
+            )
+        except Exception:
+            pass
 
 
 def log_error(
@@ -226,7 +467,7 @@ def log_error(
     """記錄一筆錯誤/降級事件，同時寫入 runtime_log 與 error_log。"""
     actual_tid = trace_id or get_trace_id()
     entry: dict[str, Any] = {
-        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "ts": datetime.now(_TZ_TW).strftime("%Y-%m-%d %H:%M:%S"),
         "trace_id": actual_tid,
         "event": event,
         "message_id": message_id,
@@ -243,6 +484,36 @@ def log_error(
     # Write to both logs
     _write_line(_RUNTIME_LOG_PATH, entry)
     _write_line(_ERROR_LOG_PATH, entry)
+
+    # 自我監控鉤子：超過 120 秒失敗、推論中斷或重大連線崩潰發送警報信號
+    lat_val = int(extra.get("latency_ms", 0)) if extra else 0
+    is_fatal = bool(extra.get("is_fatal", False)) if extra else False
+    err_lower = f"{error_type} {message}".lower()
+    has_fatal_keyword = any(
+        kw in err_lower
+        for kw in (
+            "timeout", "connectionreset", "cannot connect", "give-up",
+            "transferencoding", "connection error", "refused", "unauthorized",
+            "brokenpipe", "clientconnectorerror", "inferencegiveup", "fatal"
+        )
+    )
+    if lat_val >= 120000 or is_fatal or has_fatal_keyword:
+        try:
+            ch_id = int(extra.get("channel_id", 0)) if extra else 0
+            u_name = str(extra.get("user", "")) if extra else ""
+            raw_p = str(extra.get("raw_input", "")) if extra else ""
+            notify_failure_sync(
+                latency_ms=lat_val,
+                error_msg=f"{error_type}: {message}" if error_type else message,
+                trace_id=actual_tid,
+                channel_id=ch_id,
+                user_name=u_name,
+                raw_prompt=raw_p,
+                task_id=task_id,
+                is_fatal=is_fatal or has_fatal_keyword,
+            )
+        except Exception:
+            pass
 
 
 def log_command(
@@ -376,6 +647,23 @@ def log_tool_exec(
         **combined_extra,
     )
 
+    try:
+        from core.sys_inspector.metrics import component_metrics
+        c_name = tool_name.upper() if tool_name else "UNKNOWN"
+        p_tok = len(tool_input) if tool_input else 0
+        c_tok = len(observation) if observation else 0
+        component_metrics.record_execution(
+            c_name,
+            latency_ms=float(latency_ms),
+            success=(status == "success"),
+            error_msg=error_msg,
+            trace_id=trace_id,
+            prompt_tokens=p_tok,
+            completion_tokens=c_tok,
+        )
+    except Exception:
+        pass
+
 
 def log_inference(
     *,
@@ -431,6 +719,20 @@ def log_inference(
         latency_ms=inference_latency_ms,
         **combined_extra,
     )
+
+    try:
+        from core.sys_inspector.metrics import component_metrics
+        component_metrics.record_execution(
+            "BOT_BRAIN",
+            latency_ms=float(inference_latency_ms),
+            prompt_tokens=prompt_length,
+            completion_tokens=completion_length,
+            success=(status == "success"),
+            error_msg=error_msg,
+            trace_id=trace_id,
+        )
+    except Exception:
+        pass
 
 
 def make_timer() -> Callable[[], int]:

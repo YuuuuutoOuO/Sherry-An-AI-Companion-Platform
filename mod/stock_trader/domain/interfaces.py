@@ -7,7 +7,7 @@ interfaces.py (mod/stock_trader/domain)
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from mod.stock_trader.domain.models import (
     DailySnapshot, PortfolioAccount, ThoughtLog, TradeRecord,

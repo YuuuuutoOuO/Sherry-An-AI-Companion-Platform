@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
+import secrets
 import time
 from typing import Any, AsyncGenerator, Optional
 from urllib.parse import unquote
@@ -38,7 +40,13 @@ livestream_app: Quart = Quart(
     "livestream_display",
     template_folder=str(_TEMPLATE_DIR),
 )
-livestream_app.secret_key = "sherry-livestream-secret-key"
+_configured_livestream_key: str = os.getenv("LIVESTREAM_SECRET_KEY", "").strip()
+if _configured_livestream_key:
+    livestream_app.secret_key = _configured_livestream_key
+else:
+    livestream_app.secret_key = secrets.token_hex(24)
+    logger.warning("未設定 LIVESTREAM_SECRET_KEY 環境變數，使用臨時隨機金鑰；重啟服務後既存 Session 將會失效。")
+
 livestream_app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
 # Blueprint (for optional backward compatibility with main web_ui)
@@ -463,6 +471,8 @@ async def start_livestream_server_async() -> None:
             asyncio.create_task(_open_browser_delayed())
 
         await server.serve()
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        logger.info("Livestream Web Server received shutdown signal.")
     except Exception as err:
         logger.error("Livestream Web Server critical error on %s:%d: %s", host, port, err, exc_info=True)
 

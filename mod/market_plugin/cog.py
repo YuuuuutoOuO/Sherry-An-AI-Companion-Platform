@@ -20,10 +20,8 @@ Market & PTCG Tracker — 主要 Discord Cog。
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 import discord
@@ -34,13 +32,12 @@ from mod.market_plugin import config as cfg
 from mod.market_plugin.ai_analyst import AIAnalyst
 from mod.market_plugin.card_scraper import fetch_snkrdunk_grades_sync
 from mod.market_plugin.data_fetcher import DataFetcher
-from mod.market_plugin.repository import Database, MarketRepository
+from mod.market_plugin.repository import Database
 from mod.market_plugin.reports.card_report import run_card_daily_report
 from mod.market_plugin.reports.daily_raw import run_daily_raw_report
 from mod.market_plugin.reports.etf_monitor import check_etf_premium
 from mod.market_plugin.reports.evening_ai import run_evening_ai_report
 from mod.market_plugin.reports.morning_verify import run_morning_verify_report
-from mod.market_plugin.visualizer import Visualizer
 
 TAIWAN_TZ = timezone(timedelta(hours=8))
 
@@ -55,7 +52,6 @@ class MarketCog(commands.Cog, name="Market & PTCG"):
         self.fetcher = DataFetcher()
         self.analyst = AIAnalyst()
         self.db = Database()
-        self.visualizer = Visualizer()
         self._last_triggered: dict[str, str] = {}
         self._last_etf_trigger_minute: int | None = None
 
@@ -65,59 +61,23 @@ class MarketCog(commands.Cog, name="Market & PTCG"):
         logger.info("[market_plugin] MarketCog 初始化完成")
 
     # =========================================================================
-    # JSON 讀寫工具
+    # Watchlist / Cards 儲存庫委派方法 (遵循 Clean Architecture 分層規範)
     # =========================================================================
     def _load_watchlists(self) -> dict[str, list[str]]:
-        path: Path = cfg.STOCKS_JSON_PATH
-        if not path.exists():
-            default = {
-                "ai_list": ["NVDA", "AAPL", "MSFT", "GOOG", "AMZN", "META", "TSLA", "TSM", "AVGO", "AMD"],
-                "raw_list": ["NVDA", "AAPL", "MSFT", "TSLA", "AMD", "GOOG", "META", "AMZN", "TSM", "AVGO"],
-                "etf_list": ["0050.TW", "0056.TW", "00878.TW"],
-            }
-            self._save_watchlists(default)
-            return default
-        try:
-            with path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-            for key in ("ai_list", "raw_list", "etf_list"):
-                if key not in data:
-                    data[key] = []
-                else:
-                    data[key] = [t.replace(".B", "-B").replace(".A", "-A") for t in data[key]]
-            return dict(data)
-        except (OSError, json.JSONDecodeError, ValueError) as e:
-            logger.error("[market_plugin] 讀取 stocks.json 失敗: %s", e)
-            return {"ai_list": [], "raw_list": [], "etf_list": []}
+        """自儲存庫讀取股票追蹤清單。"""
+        return self.db.load_watchlists()
 
     def _save_watchlists(self, data: dict[str, list[str]]) -> bool:
-        try:
-            with cfg.STOCKS_JSON_PATH.open("w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4, ensure_ascii=False)
-            return True
-        except (OSError, json.JSONDecodeError, ValueError) as e:
-            logger.error("[market_plugin] 儲存 stocks.json 失敗: %s", e)
-            return False
+        """將股票追蹤清單委派寫入儲存庫。"""
+        return self.db.save_watchlists(data)
 
     def _load_cards(self) -> dict[str, Any]:
-        if not cfg.CARDS_JSON_PATH.exists():
-            self._save_cards({})
-            return {}
-        try:
-            with cfg.CARDS_JSON_PATH.open("r", encoding="utf-8") as f:
-                return dict(json.load(f))
-        except (OSError, json.JSONDecodeError, ValueError) as e:
-            logger.error("[market_plugin] 讀取 cards.json 失敗: %s", e)
-            return {}
+        """自儲存庫讀取卡片追蹤清單。"""
+        return self.db.load_cards()
 
     def _save_cards(self, data: dict[str, Any]) -> bool:
-        try:
-            with cfg.CARDS_JSON_PATH.open("w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4, ensure_ascii=False)
-            return True
-        except (OSError, json.JSONDecodeError, ValueError) as e:
-            logger.error("[market_plugin] 儲存 cards.json 失敗: %s", e)
-            return False
+        """將卡片追蹤清單委派寫入儲存庫。"""
+        return self.db.save_cards(data)
 
     # =========================================================================
     # Cog 生命週期與排程
@@ -148,7 +108,7 @@ class MarketCog(commands.Cog, name="Market & PTCG"):
             now_tw.hour == cfg.MORNING_VERIFY_HOUR
             and now_tw.minute == cfg.MORNING_VERIFY_MINUTE
             and self._last_triggered.get("morning_verify") != today_str
-            and cfg.MORNING_VERIFY == True
+            and cfg.MORNING_VERIFY
         ):
             self._last_triggered["morning_verify"] = today_str
             bot_loop = self.bot.loop
@@ -159,7 +119,7 @@ class MarketCog(commands.Cog, name="Market & PTCG"):
             now_tw.hour == cfg.DAILY_RAW_HOUR
             and now_tw.minute == cfg.DAILY_RAW_MINUTE
             and self._last_triggered.get("daily_raw") != today_str
-            and cfg.DAILY_RAW == True
+            and cfg.DAILY_RAW
         ):
             self._last_triggered["daily_raw"] = today_str
             bot_loop = self.bot.loop
@@ -170,7 +130,7 @@ class MarketCog(commands.Cog, name="Market & PTCG"):
             now_tw.hour == cfg.CARD_REPORT_HOUR
             and now_tw.minute == cfg.CARD_REPORT_MINUTE
             and self._last_triggered.get("card_report") != today_str
-            and cfg.CARD_REPORT == True
+            and cfg.CARD_REPORT
         ):
             self._last_triggered["card_report"] = today_str
             bot_loop = self.bot.loop
@@ -181,7 +141,7 @@ class MarketCog(commands.Cog, name="Market & PTCG"):
             now_tw.hour == cfg.EVENING_AI_HOUR
             and now_tw.minute == cfg.EVENING_AI_MINUTE
             and self._last_triggered.get("evening_ai") != today_str
-            and cfg.EVENING_AI == True
+            and cfg.EVENING_AI
         ):
             self._last_triggered["evening_ai"] = today_str
             bot_loop = self.bot.loop
@@ -192,7 +152,7 @@ class MarketCog(commands.Cog, name="Market & PTCG"):
             9 <= now_tw.hour < 14
             and now_tw.minute % cfg.ETF_MONITOR_INTERVAL_MINUTES == 0
             and self._last_etf_trigger_minute != now_tw.minute
-            and cfg.ETF_MONITOR_INTERVAL == True
+            and cfg.ETF_MONITOR_INTERVAL
         ):
             self._last_etf_trigger_minute = now_tw.minute
             bot_loop = self.bot.loop

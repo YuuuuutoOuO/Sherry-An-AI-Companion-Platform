@@ -14,6 +14,16 @@ venv/
 dist/
 build/
 models/
+Deprecated/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.import_linter_cache/
+.coverage
+htmlcov/
+
 
 # Logs
 *.log
@@ -27,6 +37,9 @@ ffmpeg/
 # Video
 Video/
 
-# Other
+# Images
+Image/
+# Generated AST analysis caches
+file/auto/
+
 .exe
-tests/

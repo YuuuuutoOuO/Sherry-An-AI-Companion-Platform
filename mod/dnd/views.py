@@ -20,11 +20,10 @@ from handlers.bot_brain import InferenceTask
 from mod.dnd import config
 from mod.dnd.character import create_character
 from mod.dnd.dice import roll
-from mod.dnd.inventory import equip_item
 from mod.dnd.storage import load_characters, load_world_state
 
 if TYPE_CHECKING:
-    from handlers.bot_brain import BotBrain
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -261,7 +260,7 @@ class DndStoryView(ui.View):
         char = characters.get(uid)
 
         if not char:
-            await interaction.response.send_message("❌ 你還沒有冒險者角色！請使用 `/dnd_join` 創角。", ephemeral=True)
+            await interaction.response.send_message("❌ 你還沒有冒險者角色！請使用 `/dnd action:創建角色` 創角。", ephemeral=True)
             return
 
         embed = discord.Embed(
@@ -438,7 +437,7 @@ class DndMainDashboardView(ui.View):
 
     def build_dashboard_embed(self, user_id: int) -> discord.Embed:
         """建立 D&D 主控面板 Embed。"""
-        from mod.dnd.storage import load_world_setting, save_world_state
+        from mod.dnd.storage import load_world_setting
         setting = load_world_setting()
         world = load_world_state()
         characters = load_characters()

@@ -1,5 +1,14 @@
 <!-- ===== SETTINGS VIEW ===== -->
 <div class="view hidden" id="view-settings">
+    <div class="settings-header-bar">
+        <div class="settings-search-box">
+            <span class="settings-search-icon">🔎</span>
+            <input type="text" id="settings-search-input" class="settings-search-input"
+                placeholder="搜尋設定（名稱 / 鍵名 / 說明）…" oninput="onSettingsSearch(this.value)">
+            <button type="button" class="settings-search-clear" onclick="clearSettingsSearch()" aria-label="清除搜尋">×</button>
+        </div>
+        <button type="button" class="settings-reset-btn admin-only" onclick="resetSettingsChanges()">↩ 還原未儲存變更</button>
+    </div>
     <div class="settings-tabs-header" id="settings-tabs-header">
         <button class="settings-tab-btn active" data-tab="tab-ai" onclick="switchSettingsTab('tab-ai')">🤖 AI 模型與大腦</button>
         <button class="settings-tab-btn" data-tab="tab-persona" onclick="switchSettingsTab('tab-persona')">👧 雪莉靈魂與人設</button>
