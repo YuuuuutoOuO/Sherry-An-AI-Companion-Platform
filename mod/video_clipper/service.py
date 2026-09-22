@@ -8,8 +8,6 @@ Strictly follows clean architecture: no imports of discord, sqlite3, or requests
 from __future__ import annotations
 
 import logging
-import re
-from typing import Optional
 
 from mod.video_clipper import config
 from mod.video_clipper.contracts import AbstractVideoGifClient

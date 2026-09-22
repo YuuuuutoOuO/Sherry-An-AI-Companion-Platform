@@ -10,7 +10,7 @@ import logging
 from typing import Any, Callable, Sequence
 
 from mod.painter.canvas import VirtualCanvas
-from mod.painter.models import ArtStyle, BrushType, DrawingCommand, ShapeType
+from mod.painter.models import BrushType, DrawingCommand, ShapeType
 
 logger = logging.getLogger(__name__)
 

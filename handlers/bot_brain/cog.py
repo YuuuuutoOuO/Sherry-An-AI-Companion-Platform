@@ -22,6 +22,7 @@ class BotBrain(commands.Cog):
         self._lock = asyncio.Lock()
         self._ollama = OllamaClient()
         self._worker_task: asyncio.Task[None] | None = None
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         # VRAM state flags & Event
         self._sd_generating = False
         self._sd_event = asyncio.Event()
@@ -50,8 +51,13 @@ class BotBrain(commands.Cog):
     async def cog_unload(self) -> None:
         if self._worker_task and not self._worker_task.done():
             self._worker_task.cancel()
-            try: await self._worker_task
-            except asyncio.CancelledError: pass
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
+        for bg_t in list(self._background_tasks):
+            if not bg_t.done():
+                bg_t.cancel()
         await self._ollama.close()
         logger.info("BotBrain: Inference worker 退役中止。")
 
@@ -91,20 +97,49 @@ class BotBrain(commands.Cog):
 
         logger.info("BotBrain: 大腦非同步心跳跳動中。等待新推斷任務注入。")
         while True:
-            task: InferenceTask = await self._queue.get()
-            is_cloud = task.model.startswith(("openai:", "deepseek:", "gemini:", "claude:", "openrouter:"))
-            if is_cloud:
-                # 雲端模型不佔用本地 GPU/Lock，背景並行放行
-                asyncio.create_task(self._process_task(task, MAX_RETRIES, RETRY_DELAY))
-            else:
-                # 本地模型依 PriorityQueue 優先級順序串行執行，落實 GPU 鎖與優先權
-                await self._process_task(task, MAX_RETRIES, RETRY_DELAY)
+            try:
+                task: InferenceTask = await self._queue.get()
+                # 佇列取出時立即檢查取消狀態，避免浪費資源
+                if getattr(task, "is_cancelled", False):
+                    logger.info("BotBrain: 任務 '%s' 取出時已處於取消狀態，跳過推論！", task.task_id)
+                    self._queue.task_done()
+                    continue
+
+                is_cloud = task.model.startswith(("openai:", "deepseek:", "gemini:", "claude:", "openrouter:"))
+                # VRAM 防護與零等待降級：地端生圖中時自動將本地對話導向雲端模型
+                if not is_cloud and self._sd_generating:
+                    cloud_fallback = str(getattr(settings, "CLOUD_FALLBACK_MODEL", "gemini:gemini-2.5-flash"))
+                    logger.info("BotBrain: 偵測到地端生圖中 (VRAM 鎖定)，任務 '%s' 自動切換至雲端模型 %s", task.task_id, cloud_fallback)
+                    task.model = cloud_fallback
+                    is_cloud = True
+
+                if is_cloud:
+                    # 雲端模型不佔用本地 GPU/Lock，背景並行放行（保持強引用防 GC）
+                    t = asyncio.create_task(self._process_task(task, MAX_RETRIES, RETRY_DELAY))
+                    self._background_tasks.add(t)
+                    t.add_done_callback(self._background_tasks.discard)
+                else:
+                    # 本地模型依 PriorityQueue 優先級順序串行執行，落實 GPU 鎖與優先權
+                    await self._process_task(task, MAX_RETRIES, RETRY_DELAY)
+            except asyncio.CancelledError:
+                logger.info("BotBrain: Inference Worker 收到取消信號，正常終止。")
+                raise
+            except Exception as exc:
+                logger.critical("BotBrain: Inference Worker 主循環異常（已保護重啟）: %s", exc, exc_info=True)
+                await asyncio.sleep(0.5)
 
     async def _process_task(self, task: InferenceTask, max_retries: int, retry_delay: float) -> None:
-        from handlers.social.observability import log_inference, make_timer
+        from handlers.social.observability import get_trace_id, log_error, log_inference, make_timer
+
+        # 幽靈任務防禦：上層若已超時取消，直接跳過推論以釋放本地 GPU / 雲端算力
+        if getattr(task, "is_cancelled", False):
+            logger.info("BotBrain: 偵測到 Task '%s' 已在排隊期間被取消，跳過推論！", task.task_id)
+            return
 
         reply = ""
         callback_invoked = False
+        max_timeout_retries = 1
+        timeout_retries_done = 0
         queue_start = getattr(task, "enqueued_at", time.monotonic())
         queue_latency_ms = int((time.monotonic() - queue_start) * 1000)
         inf_timer = make_timer()
@@ -114,17 +149,43 @@ class BotBrain(commands.Cog):
             has_images = bool(getattr(task, "images", None))
 
             for attempt in range(1, max_retries + 1):
-                # 【動態模型切換機制】降遲迴避功能！（僅限無圖片之純文字任務）
-                if attempt == 2 and not has_images:
-                    quick_model = getattr(settings, "QUICK_MODEL", current_model)
-                    if current_model != quick_model:
-                        logger.warning(
-                            "BotBrain: attempt %d 觸發! task '%s' 自行捨棄邏輯大核轉快嘴小核降低等候秒數: %s !",
-                            attempt,
-                            task.task_id,
-                            quick_model,
-                        )
-                        current_model = quick_model
+                if getattr(task, "is_cancelled", False):
+                    logger.info("BotBrain: Task '%s' 於 attempt %d 前被取消，中止後續嘗試！", task.task_id, attempt)
+                    break
+
+                attempt_timer = make_timer()
+                # 【動態模型切換機制】降遲與容錯備援
+                if attempt >= 2:
+                    if current_model.startswith("gemini:") or task.model.startswith("gemini:"):
+                        # Gemini 雲端模型（支援純文字與多模態圖片）依序嘗試官方穩定備援序列
+                        fallback_pool = list(getattr(settings, "GEMINI_FALLBACK_MODELS", [
+                            "gemini:gemini-2.5-flash",
+                            "gemini:gemini-2.0-flash",
+                            "gemini:gemini-1.5-flash",
+                        ]))
+                        candidates = [task.model] + [m for m in fallback_pool if m != task.model]
+                        target_idx = min(attempt - 1, len(candidates) - 1)
+                        gemini_fallback = candidates[target_idx]
+                        if current_model != gemini_fallback:
+                            logger.warning(
+                                "BotBrain: attempt %d 觸發! task '%s' 啟用 Gemini 備援模型: %s (原模型: %s)",
+                                attempt,
+                                task.task_id,
+                                gemini_fallback,
+                                current_model,
+                            )
+                            current_model = gemini_fallback
+                    elif attempt == 2 and not has_images:
+                        # 本地/純文字任務：切換至快嘴小核降低等候秒數
+                        quick_model = getattr(settings, "QUICK_MODEL", current_model)
+                        if current_model != quick_model:
+                            logger.warning(
+                                "BotBrain: attempt %d 觸發! task '%s' 自行捨棄邏輯大核轉快嘴小核降低等候秒數: %s !",
+                                attempt,
+                                task.task_id,
+                                quick_model,
+                            )
+                            current_model = quick_model
 
                 is_local = True
                 if current_model.startswith(("openai:", "deepseek:", "gemini:", "claude:", "openrouter:")):
@@ -142,7 +203,16 @@ class BotBrain(commands.Cog):
                             user_prompt=task.user_prompt,
                             images=task.images,
                             temperature=task_temp,
+                            max_tokens=getattr(task, "max_tokens", None),
                         ):
+                            # 串流執行中若被上層取消（例如 router 對視覺模型超時），
+                            # 立即中斷串流釋放本地 GPU，否則會一路跑完佔住 GPU
+                            if getattr(task, "is_cancelled", False):
+                                logger.info(
+                                    "BotBrain: 串流推論中偵測到 Task '%s' 被取消，中斷串流！",
+                                    task.task_id,
+                                )
+                                break
                             token_chunks.append(chunk)
                             try:
                                 await stream_cb(chunk)
@@ -156,6 +226,7 @@ class BotBrain(commands.Cog):
                             user_prompt=task.user_prompt,
                             images=task.images,
                             temperature=task_temp,
+                            max_tokens=getattr(task, "max_tokens", None),
                         )
 
                 try:
@@ -163,13 +234,37 @@ class BotBrain(commands.Cog):
                         # 狀態三：圖片生成中，等待 Event 通知（零 CPU 輪詢開銷）
                         await self._sd_event.wait()
 
+                        if getattr(task, "is_cancelled", False):
+                            logger.info("BotBrain: Task '%s' 於等候 GPU 鎖期間被取消，跳過！", task.task_id)
+                            break
+
                         async with self._lock:  # [強保證:永遠僅存在一列單排等待處裡任務送往本地]
+                            if getattr(task, "is_cancelled", False):
+                                break
+                            lock_wait_ms = int((time.monotonic() - queue_start) * 1000)
+                            gen_start = make_timer()
                             reply = await _execute_chat()
+                            gen_ms = gen_start()
+                            logger.info(
+                                "BotBrain: task '%s' 拿到GPU鎖時已等 %dms, 推理生成 %dms, model=%s",
+                                task.task_id, lock_wait_ms, gen_ms, current_model,
+                            )
                     else:
                         # 雲端模型直接併發放行，不獲取鎖
                         reply = await _execute_chat()
+                except asyncio.TimeoutError as exc:
+                    # 明確的逾時：本機模型重試只會疊加 GPU 負載，限制重試次數
+                    timeout_retries_done += 1
+                    last_error_msg = f"TimeoutError: {exc}"
+                    logger.error(
+                        "BotBrain: 推理逾時 task '%s' (attempt %d/%d) -> err: %s",
+                        task.task_id, attempt, max_retries, exc,
+                    )
                 except aiohttp.ClientError as exc:
                     last_error_msg = str(exc)
+                    is_timeout = isinstance(exc, asyncio.TimeoutError) or "timeout" in str(exc).lower()
+                    if is_timeout:
+                        timeout_retries_done += 1
                     logger.error(
                         "BotBrain: 連線或 API 訪問異常 task '%s' (attempt %d/%d) -> err: %s",
                         task.task_id,
@@ -197,11 +292,36 @@ class BotBrain(commands.Cog):
                     )
 
                 if reply:
+                    logger.info(
+                        "BotBrain: task '%s' attempt %d/%d 成功, 本次耗時 %dms, 總耗時 %dms, prompt=%d字, 回覆=%d字, model=%s",
+                        task.task_id, attempt, max_retries,
+                        attempt_timer(), inf_timer(),
+                        len(task.system_prompt or "") + len(task.user_prompt or ""),
+                        len(reply), current_model,
+                    )
                     break
 
-                logger.warning("BotBrain: Empty reply! Task: %s attempt(%d/%d).", task.task_id, attempt, max_retries)
-                if attempt < max_retries:
-                    await asyncio.sleep(retry_delay)
+                logger.warning(
+                    "BotBrain: Empty reply! Task: %s attempt(%d/%d) 本次耗時 %dms 總耗時 %dms 逾時重試次數已用 %d/%d model=%s.",
+                    task.task_id, attempt, max_retries,
+                    attempt_timer(), inf_timer(),
+                    timeout_retries_done, max_timeout_retries,
+                    current_model,
+                )
+                # 逾時/連線類錯誤不無腦重試：超過上限即提前放棄，避免疊加本機 GPU 負載
+                if attempt < max_retries and timeout_retries_done < max_timeout_retries:
+                    is_rate_or_overload = any(
+                        keyword in last_error_msg.lower()
+                        for keyword in ("503", "429", "high demand", "service unavailable", "overloaded", "quota")
+                    )
+                    wait_delay = (retry_delay * attempt) if is_rate_or_overload else retry_delay
+                    if is_rate_or_overload:
+                        logger.info(
+                            "BotBrain: 偵測到服務端負載尖峰 (503/429)，等待 %.1f 秒後進行第 %d 次嘗試...",
+                            wait_delay,
+                            attempt + 1,
+                        )
+                    await asyncio.sleep(wait_delay)
 
             inf_latency_ms = inf_timer()
             prompt_len = len(task.system_prompt or "") + len(task.user_prompt or "")
@@ -226,11 +346,39 @@ class BotBrain(commands.Cog):
                 await task.callback(reply)
             else:
                 logger.error("BotBrain: 徹查無獲(give-up)放棄 task: '%s'.", task.task_id)
+                log_error(
+                    event="inference_failure",
+                    task_id=task.task_id,
+                    trace_id=getattr(task, "trace_id", "") or get_trace_id(),
+                    error_type="InferenceGiveUp",
+                    message=f"Task {task.task_id} 在 {attempt} 次嘗試後徹底失敗放棄: {last_error_msg}",
+                    latency_ms=inf_latency_ms,
+                    channel_id=getattr(task, "channel_id", 0),
+                    user=getattr(task, "user_name", ""),
+                    raw_input=task.user_prompt[:200] if task.user_prompt else "",
+                    is_fatal=True,
+                )
                 callback_invoked = True
                 await task.callback("")
 
         except Exception as exc:
             logger.exception("BotBrain: _process_task 致命異常！！ task: %s -> err:%s", task.task_id, exc)
+            try:
+                from handlers.social.observability import get_trace_id, log_error
+                log_error(
+                    event="inference_fatal_exception",
+                    task_id=getattr(task, "task_id", ""),
+                    trace_id=getattr(task, "trace_id", "") or get_trace_id(),
+                    error_type=type(exc).__name__,
+                    message=str(exc),
+                    latency_ms=inf_timer() if "inf_timer" in locals() else 0,
+                    channel_id=getattr(task, "channel_id", 0),
+                    user=getattr(task, "user_name", ""),
+                    raw_input=getattr(task, "user_prompt", "")[:200] if getattr(task, "user_prompt", "") else "",
+                    is_fatal=True,
+                )
+            except Exception:
+                pass
             if not callback_invoked:
                 try:
                     await task.callback("")

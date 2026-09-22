@@ -7,7 +7,7 @@ from typing import Any
 import settings
 # 分為內部同包裹載入儲存模型
 from .storage import load_vibe_store, save_vibe_store, TopicEntry, VibeStore
-from handlers.bot_brain import BotBrain, InferenceTask
+from handlers.bot_brain import InferenceTask
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +34,14 @@ class VibeManager(commands.Cog):
     # ==========================
     def get_top_topics_snippet(self, channel_id: int) -> str:
         channel_id_str = str(channel_id)
-        if channel_id_str not in self._store: return ""
+        if channel_id_str not in self._store:
+            return ""
         topics = self._store[channel_id_str]
         
         qualifying = [(topic, entry) for topic, entry in topics.items() 
                       if entry["weight"] >= settings.VIBE_MIN_WEIGHT_TO_INJECT]
-        if not qualifying: return ""
+        if not qualifying:
+            return ""
 
         top = sorted(qualifying, key=lambda x: x[1]["weight"], reverse=True)[: settings.VIBE_TOP_N_TOPICS]
         return "\n".join(
@@ -52,13 +54,15 @@ class VibeManager(commands.Cog):
     # ==========================
     async def request_vibe_update(self, channel: discord.TextChannel) -> None:
         brain: Any = self.bot.get_cog("BotBrain")
-        if brain is None: return
+        if brain is None:
+            return
 
         lines: list[str] = []
         async for msg in channel.history(limit=settings.VIBE_UPDATE_MESSAGE_THRESHOLD, oldest_first=False):
             if not msg.author.bot:
                 lines.append(f"[{msg.author.display_name}]: {msg.clean_content}")
-        if not lines: return
+        if not lines:
+            return
         
         conversation_block = "\n".join(reversed(lines))
         channel_id_str = str(channel.id)
@@ -76,22 +80,27 @@ class VibeManager(commands.Cog):
             try:
                 cleaned = result.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
                 items: list[dict[str, str]] = json.loads(cleaned)
-                if not isinstance(items, list): raise ValueError("Expected list!")
-            except (json.JSONDecodeError, ValueError) as exc:
+                if not isinstance(items, list):
+                    raise ValueError("Expected list!")
+            except (json.JSONDecodeError, ValueError):
                 return
 
             channel_store = self._store.setdefault(channel_id_str, {})
             for item in items:
-                if not isinstance(item, dict): continue
+                if not isinstance(item, dict):
+                    continue
                 topic = str(item.get("topic", "")).strip()
                 summary = str(item.get("summary", "")).strip()
-                if not topic: continue
+                if not topic:
+                    continue
 
                 if topic in channel_store:
                     channel_store[topic]["weight"] = settings.VIBE_REINFORCE_MAX_WEIGHT
-                    if summary: channel_store[topic]["summary"] = summary
+                    if summary:
+                        channel_store[topic]["summary"] = summary
                 else:
-                    channel_store[topic] = TopicEntry(summary=summary, weight=2)
+                    initial_weight = int(getattr(settings, "VIBE_MIN_WEIGHT_TO_INJECT", 5))
+                    channel_store[topic] = TopicEntry(summary=summary, weight=initial_weight)
             save_vibe_store(self._store, settings.CHANNEL_VIBE_PATH)
 
         task = InferenceTask(
@@ -106,14 +115,27 @@ class VibeManager(commands.Cog):
     # ==========================
     @tasks.loop(seconds=3600) 
     async def _decay_loop(self) -> None:
-        if not self._store: return
+        if not self._store:
+            return
+
+        from datetime import datetime
+        current_hour = datetime.now().hour
+        # 深夜 02:00 ~ 07:00 時段無人聊天，暫停時鐘衰減，防止話題枉死
+        if 2 <= current_hour < 7:
+            logger.debug("VibeManager: 深夜時段 (02:00~07:00)，跳過話題衰減")
+            return
+
+        decay_amount = int(getattr(settings, "VIBE_DECAY_AMOUNT", 1))
         for channel_id in list(self._store.keys()):
             channel_topics = self._store[channel_id]
-            to_delete = [topic for topic, entry in channel_topics.items() if entry["weight"] - settings.VIBE_DECAY_AMOUNT <= 0]
+            to_delete = [topic for topic, entry in channel_topics.items() if entry["weight"] - decay_amount <= 0]
             
-            for topic in to_delete: del channel_topics[topic]
-            for entry in channel_topics.values(): entry["weight"] -= settings.VIBE_DECAY_AMOUNT
-            if not channel_topics: del self._store[channel_id]
+            for topic in to_delete:
+                del channel_topics[topic]
+            for entry in channel_topics.values():
+                entry["weight"] -= decay_amount
+            if not channel_topics:
+                del self._store[channel_id]
             
         save_vibe_store(self._store, settings.CHANNEL_VIBE_PATH)
 

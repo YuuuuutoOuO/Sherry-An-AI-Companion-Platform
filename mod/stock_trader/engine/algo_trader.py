@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from mod.stock_trader import config as cfg
 from mod.stock_trader.domain.interfaces import ITraderRepository

@@ -1,7 +1,8 @@
 """
 handlers/social/tools/weather_tool.py
 =======================================
-天氣查詢工具。
+天氣查詢工具。(DEPRECATED: 已於架構收斂中退役，日常天氣查詢統一收斂由 SEARCH / 聯網檢索承接)
+本檔案保留類別定義以維持外部單元測試向後相容性。
 
 資料流：
   1. LLM 從使用者語句萃取城市名稱（英文）
@@ -25,10 +26,10 @@ import discord
 from discord.ext import commands
 
 import settings
-from handlers.bot_brain import BotBrain, InferenceTask
-from handlers.social.contracts import ToolCategory, ToolResult
+from handlers.bot_brain import InferenceTask
+from handlers.social.contracts import ToolResult
 from handlers.social.observability import log_event, make_timer
-from handlers.social.tool_base import BaseTool, ToolResponseMode
+from handlers.social.tool_base import BaseTool
 
 logger = logging.getLogger(__name__)
 
@@ -55,12 +56,18 @@ _OWM_API_URL = settings.OPENWEATHERMAP_API_URL
 
 def _weather_desc_to_emoji(description: str) -> str:
     desc = description.lower()
-    if any(k in desc for k in ["clear", "sunny", "晴"]): return "☀️"
-    if any(k in desc for k in ["cloud", "陰", "多雲"]): return "☁️"
-    if any(k in desc for k in ["rain", "shower", "drizzle", "雨"]): return "🌧️"
-    if any(k in desc for k in ["storm", "thunder", "雷"]): return "⛈️"
-    if any(k in desc for k in ["snow", "雪"]): return "❄️"
-    if any(k in desc for k in ["fog", "mist", "haze", "霧"]): return "🌫️"
+    if any(k in desc for k in ["clear", "sunny", "晴"]):
+        return "☀️"
+    if any(k in desc for k in ["cloud", "陰", "多雲"]):
+        return "☁️"
+    if any(k in desc for k in ["rain", "shower", "drizzle", "雨"]):
+        return "🌧️"
+    if any(k in desc for k in ["storm", "thunder", "雷"]):
+        return "⛈️"
+    if any(k in desc for k in ["snow", "雪"]):
+        return "❄️"
+    if any(k in desc for k in ["fog", "mist", "haze", "霧"]):
+        return "🌫️"
     return "🌤️"
 
 
@@ -112,40 +119,41 @@ class WeatherTool(BaseTool):
                 await message.reply(err, mention_author=True)
             return ToolResult.error(err, is_direct_rendered=not silent)
 
-        # ── Step 1: LLM 萃取城市名稱 ─────────────────────────────────────
-        city_future: asyncio.Future[str] = bot.loop.create_future()
-
-        async def _on_city_extract(raw: str) -> None:
-            if not city_future.done():
-                city_future.set_result(raw.strip())
-
-        city_extract_task = InferenceTask(
-            priority=0,
-            system_prompt=(
-                "[PARSER MODE]\n"
-                "請從使用者輸入萃取出「城市名稱」的英文拼音，"
-                "只輸出英文城市名（例如 Taipei / Tokyo / New York），"
-                "不要有任何解釋或標點。"
-                "若無明確城市，輸出：Taipei"
-            ),
-            user_prompt=user_query,
-            callback=_on_city_extract,
-            model=settings.CLASSIFIER_MODEL,
-            task_id=f"weather-extract-{message.id}",
-        )
-        await brain.enqueue_task(city_extract_task)
-
-        try:
-            raw_city = await asyncio.wait_for(city_future, timeout=settings.WEATHER_EXTRACT_TIMEOUT)
-        except asyncio.TimeoutError:
-            raw_city = "Taipei"
-
-        # 嘗試從常見對照表解析，否則使用 LLM 的結果
-        city = raw_city
+        # ── Step 1: 萃取城市名稱（優先查對照表，未命中再由 LLM 解析）──────────────
+        city: str | None = None
         for cn, en in _CITY_MAP.items():
             if cn in user_query:
                 city = en
                 break
+
+        if not city:
+            city_future: asyncio.Future[str] = bot.loop.create_future()
+
+            async def _on_city_extract(raw: str) -> None:
+                if not city_future.done():
+                    city_future.set_result(raw.strip())
+
+            city_extract_task = InferenceTask(
+                priority=0,
+                system_prompt=(
+                    "[PARSER MODE]\n"
+                    "請從使用者輸入萃取出「城市名稱」的英文拼音，"
+                    "只輸出英文城市名（例如 Taipei / Tokyo / New York），"
+                    "不要有任何解釋或標點。"
+                    "若無明確城市，輸出：Taipei"
+                ),
+                user_prompt=user_query,
+                callback=_on_city_extract,
+                model=settings.CLASSIFIER_MODEL,
+                task_id=f"weather-extract-{message.id}",
+            )
+            await brain.enqueue_task(city_extract_task)
+
+            try:
+                raw_city = await asyncio.wait_for(city_future, timeout=settings.WEATHER_EXTRACT_TIMEOUT)
+                city = raw_city.strip() if raw_city.strip() else "Taipei"
+            except asyncio.TimeoutError:
+                city = "Taipei"
 
         logger.info("WeatherTool: 查詢城市 = %s", city)
 
@@ -243,6 +251,11 @@ class WeatherTool(BaseTool):
         try:
             reply_text = await asyncio.wait_for(reply_future, timeout=settings.WEATHER_REPLY_TIMEOUT)
         except asyncio.TimeoutError:
+            setattr(reply_task, "is_cancelled", True)
+            logger.warning(
+                "WeatherTool: LLM 天氣播報生成超時 (%.1fs)，已標記取消背景推論以釋放 GPU，降級回傳天氣摘要",
+                float(settings.WEATHER_REPLY_TIMEOUT),
+            )
             reply_text = weather_summary
 
         try:

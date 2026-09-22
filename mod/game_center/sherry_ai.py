@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import random
-from typing import Any
 
 from mod.game_center import config
 from handlers.bot_brain.client import OllamaClient

@@ -36,9 +36,9 @@ from handlers.memory.storage import (
     save_user_memory,
     sanitize_aliases,
     sanitize_and_merge_facts,
+    consolidate_all_user_memories,
     MAX_FACTS_PER_USER,
     UserMemoryStore,
-    UserFact,
 )
 from handlers.memory.chat_logger import read_chat_log
 
@@ -57,12 +57,12 @@ _BANTER_PATTERNS: list[re.Pattern[str]] = [
 
 
 def sanitize_existing(path: Path = settings.USER_MEMORY_PATH) -> dict[str, int]:
-    """掃描並清洗現有 user_memory.json 內的污染資料。
+    """掃描並清洗現有 user_memory.json 與 SQLite 內的污染資料與重複事實。
 
     清洗項目：
     - Aliases：過濾超長/超短、含 @、含 [某群友]、命中黑名單或遊戲代號格式的別名。
-    - Facts：移除文字為空、超長句子（> 60 字）、含 [某群友] 或 @ 的污染 fact、
-             移除明顯的群聊互嘴幹話（如吃大便），並進行語意模糊去重。
+    - Facts：移除文字為空、超長句子（> 70 字）、含 [某群友] 或 @ 的污染 fact、
+             移除明顯的群聊互嘴幹話（如吃大便），並進行自體與全域語意模糊去重。
 
     Args:
         path: user_memory.json 的路徑。
@@ -70,65 +70,8 @@ def sanitize_existing(path: Path = settings.USER_MEMORY_PATH) -> dict[str, int]:
     Returns:
         統計字典，含 users_cleaned、aliases_removed、facts_removed。
     """
-    from handlers.memory.storage import calculate_fact_similarity
-
     store: UserMemoryStore = load_user_memory(path)
-    stats = {"users_cleaned": 0, "aliases_removed": 0, "facts_removed": 0}
-
-    for uid, profile in store.items():
-        original_alias_count = len(profile.get("aliases", []))
-        original_fact_count = len(profile.get("facts", []))
-
-        # ── Aliases 清洗（使用升級版 sanitize_aliases）─────────
-        clean_aliases = sanitize_aliases(profile.get("aliases", []))
-
-        # ── Facts 清洗與模糊去重 ────────────────────────────
-        filtered_facts = []
-        for fact in profile.get("facts", []):
-            text = str(fact.get("fact", "")).strip()
-            if not text:
-                continue
-            if len(text) > 60:  # 過長句子通常是小模型把整句記成 fact
-                logger.debug("[清洗] uid=%s 丟棄過長 fact（%d 字）: %s", uid, len(text), text[:40])
-                continue
-            if "[某群友]" in text or text.startswith("@"):
-                logger.debug("[清洗] uid=%s 丟棄含 @mention 的 fact: %s", uid, text[:40])
-                continue
-            # 過濾明顯的互嗆/嘴砲幹話
-            if any(p.search(text) for p in _BANTER_PATTERNS):
-                logger.info("[清洗] uid=%s 丟棄嘴砲/幹話 fact: %s", uid, text)
-                continue
-
-            filtered_facts.append(fact)
-
-        # 語意模糊去重（保留重要性最高者）
-        deduped_facts: list[UserFact] = []
-        for f in filtered_facts:
-            f_text = f.get("fact", "")
-            f_imp = f.get("importance", 3)
-            matched = False
-            for existing in deduped_facts:
-                if calculate_fact_similarity(f_text, existing.get("fact", "")) >= 0.65:
-                    existing["importance"] = max(existing.get("importance", 3), f_imp)
-                    matched = True
-                    break
-            if not matched:
-                deduped_facts.append(f)
-
-        aliases_removed = original_alias_count - len(clean_aliases)
-        facts_removed = original_fact_count - len(deduped_facts)
-
-        if aliases_removed > 0 or facts_removed > 0:
-            profile["aliases"] = clean_aliases
-            profile["facts"] = deduped_facts
-            stats["users_cleaned"] += 1
-            stats["aliases_removed"] += aliases_removed
-            stats["facts_removed"] += facts_removed
-            logger.info(
-                "[清洗] uid=%s：移除 %d 個 alias，移除 %d 條 fact",
-                uid, aliases_removed, facts_removed,
-            )
-
+    stats = consolidate_all_user_memories(store)
     save_user_memory(store, path)
     logger.info(
         "[清洗完成] 共 %d 位使用者受影響，移除 %d alias / %d facts",

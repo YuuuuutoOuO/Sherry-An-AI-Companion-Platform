@@ -25,7 +25,9 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import math
 import re
+import time
 from typing import TYPE_CHECKING, Any
 
 import discord
@@ -35,13 +37,17 @@ if TYPE_CHECKING:
     import pandas as pd
 
 import settings
-from handlers.bot_brain import BotBrain, InferenceTask
-from handlers.social.contracts import ToolCategory, ToolResult
+from handlers.bot_brain import InferenceTask
+from handlers.social.contracts import ToolResult
 from handlers.social.observability import log_event, make_timer
 from handlers.social.tool_base import BaseTool, ToolResponseMode
 from handlers.social.utils import remove_hourglass_reaction
 
 logger = logging.getLogger(__name__)
+
+# Tier-1 記憶體 TTL 快取 (ticker -> (timestamp, png_bytes, indicators_dict))
+_STOCK_DATA_CACHE: dict[str, tuple[float, bytes | None, dict[str, Any]]] = {}
+_STOCK_CACHE_TTL_SEC: float = 120.0  # 2 分鐘快取
 
 # ---------------------------------------------------------------------------
 # 常用中文名稱 → yfinance ticker 對照表
@@ -97,8 +103,9 @@ _TICKER_REGEX = re.compile(
 _TICKER_EXTRACT_SYSTEM_PROMPT = (
     "你是一個金融標的代號識別專家。請從使用者語句中萃取出所有的股票代號、加密貨幣 Symbol 或指數代碼。\n"
     "規則：\n"
-    "- 若有多個標的，以逗號分隔（例如：2330, NVDA, BTC）。\n"
+    "- 若有多個標的，以逗號分隔（例如：2330, NVDA, BTC, MU）。\n"
     "- 只能輸出代號，不要有任何多餘的字元、解釋或標點。\n"
+    "- ⚠️ 絕對嚴禁將當前年份、日期或時間數字（例如 2026、2026-09-05、10:00 等）誤識別為股票代號！\n"
     "- 若完全找不到任何金融標的，輸出 NONE。"
 )
 
@@ -148,13 +155,30 @@ def _resolve_ticker(raw: str) -> str:
     return raw
 
 
+# 停用詞與市場後綴清單（避免誤識別為美股 ticker）
+_STOCK_STOPWORDS: set[str] = {
+    "TW", "TWO", "HK", "SS", "SZ", "US", "USD", "USDT", "BUSD", "EUR", "JPY", "TWD",
+    "HELP", "INFO", "SHOW", "LIST", "VIEW", "TWII", "STOCK", "STOCKS",
+    "BUY", "SELL", "HOLD", "KLINE", "EMA", "RSI", "MACD", "CHART", "PRICE",
+    "AND", "FOR", "THE", "ALL", "NEW", "TOP", "APP", "API", "HTTP", "HTTPS", "WWW",
+    # ── 總經與金融通用術語（避免實體抽取誤判）──
+    "ETF", "ETFS", "FED", "RATE", "RATES", "CPI", "GDP", "FOMC", "SEC", "IPO", "QE", "QT",
+    # ── 常見英文提問詞 ──
+    "WHY", "HOW", "WHAT", "WHEN", "WHERE", "WHO", "WHICH",
+    # ── 盤面數據術語 ──
+    "HIGH", "LOW", "OPEN", "CLOSE", "VOL", "VOLUME",
+}
+
+
 def _quick_extract_tickers(text: str) -> list[str]:
     """
     純用正則一步到位提取所有 tickers。
     支援多標的同時提取（如：0050 00878 00981A / 台積電 鴻海 NVDA / BTC ETH）。
+    具備佔位遮罩機制，防止 0050.TW 中的 .TW 被重複識別為美股 TW。
     """
     tickers: list[str] = []
     seen: set[str] = set()
+    cleaned_text = text
 
     def _add(t: str):
         resolved = _resolve_ticker(t)
@@ -164,27 +188,36 @@ def _quick_extract_tickers(text: str) -> list[str]:
 
     # 1. 中文名稱對照
     for cn, t in _CN_TO_TICKER.items():
-        if cn.upper() in text.upper():
+        if cn.upper() in cleaned_text.upper():
             _add(t)
+            cleaned_text = re.sub(re.escape(cn), " ", cleaned_text, flags=re.IGNORECASE)
 
-    # 2. 加密貨幣交易對正則（例如 XAUT/USDT, BTC-USDT）
-    pairs = re.findall(r"(?<![A-Za-z0-9])([A-Za-z0-9]{2,10})[/-]?(USDT|USD|BUSD|BTC|ETH)(?![A-Za-z0-9])", text, re.IGNORECASE)
-    for base_coin, quote_coin in pairs:
-        base_coin = base_coin.upper()
-        quote_coin = quote_coin.upper()
+    # 2. 加密貨幣交易對正則（例如 XAUT/USDT, BTC-USDT, ETH-USD）
+    pair_pattern = re.compile(r"(?<![A-Za-z0-9])([A-Za-z0-9]{2,10})[/-]?(USDT|USD|BUSD|BTC|ETH)(?![A-Za-z0-9])", re.IGNORECASE)
+    for m in pair_pattern.finditer(cleaned_text):
+        base_coin = m.group(1).upper()
+        quote_coin = m.group(2).upper()
         if base_coin not in ("HTTP", "HTTPS", "WWW") and base_coin != quote_coin:
             _add(f"{base_coin}-USD")
+    cleaned_text = pair_pattern.sub(" ", cleaned_text)
 
-    # 3. 台股四位或五位數字+字母代號 (如 0050, 00878, 00981A, 2330)
-    tw_matches = re.findall(r"(?<![A-Za-z0-9])(\d{4,5}[A-Za-z]?)(?![A-Za-z0-9])", text)
-    for m in tw_matches:
-        _add(f"{m.upper()}.TW")
+    # 3. 指數代號（例如 ^TWII, ^GSPC, ^DJI）
+    idx_pattern = re.compile(r"(\^[A-Za-z0-9]+)")
+    for m in idx_pattern.finditer(cleaned_text):
+        _add(m.group(1).upper())
+    cleaned_text = idx_pattern.sub(" ", cleaned_text)
 
-    # 4. 純 ASCII 大寫代號（2~8 字元）
-    ascii_matches = re.findall(r"(?<![A-Za-z])([A-Za-z]{2,8})(?![A-Za-z])", text)
+    # 4. 台股四位或五位數字+字母代號（支援帶 .TW/.TWO 或純數字，例如 0050.TW, 2330, 00981A）
+    tw_pattern = re.compile(r"(?<![A-Za-z0-9])(\d{4,5}[A-Za-z]?)(?:\.(?:TW|TWO))?(?![A-Za-z0-9])", re.IGNORECASE)
+    for m in tw_pattern.finditer(cleaned_text):
+        _add(f"{m.group(1).upper()}.TW")
+    cleaned_text = tw_pattern.sub(" ", cleaned_text)
+
+    # 5. 純 ASCII 大寫代號（2~8 字元，例如 AAPL, NVDA, TSLA, BTC）
+    ascii_matches = re.findall(r"(?<![A-Za-z])([A-Za-z]{2,8})(?![A-Za-z])", cleaned_text)
     for candidate in ascii_matches:
         cand_upper = candidate.upper()
-        if len(cand_upper) >= 2 and cand_upper not in ("HELP", "INFO", "SHOW", "LIST", "VIEW", "TWII", "USDT", "BUSD", "USD"):
+        if len(cand_upper) >= 2 and cand_upper not in _STOCK_STOPWORDS:
             if cand_upper in _KNOWN_CRYPTOS:
                 _add(f"{cand_upper}-USD")
             else:
@@ -210,21 +243,153 @@ def _compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     return 100 - (100 / (1 + rs))
 
 
+def _compute_kd(df: pd.DataFrame, n: int = 9, m1: int = 3, m2: int = 3) -> tuple[pd.Series, pd.Series]:
+    """計算 KD (隨機指標, Stochastic Oscillator)。
+
+    Args:
+        df: 包含 High, Low, Close 的歷史資料 DataFrame。
+        n: RSV 週期 (預設 9)。
+        m1: K 值平滑週期 (預設 3)。
+        m2: D 值平滑週期 (預設 3)。
+
+    Returns:
+        tuple[pd.Series, pd.Series]: (K 值序列, D 值序列)。
+    """
+    low_n = df["Low"].rolling(window=n, min_periods=1).min()
+    high_n = df["High"].rolling(window=n, min_periods=1).max()
+    rsv = ((df["Close"] - low_n) / (high_n - low_n + 1e-9)) * 100
+    rsv = rsv.fillna(50.0).clip(lower=0, upper=100)
+    k_series = rsv.ewm(com=m1 - 1, adjust=False).mean()
+    d_series = k_series.ewm(com=m2 - 1, adjust=False).mean()
+    return k_series, d_series
+
+
+def _compute_bollinger_bands(series: pd.Series, period: int = 20, std_dev: float = 2.0) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
+    """計算布林通道 (Bollinger Bands)。
+
+    Returns:
+        tuple: (中軌 MA20, 上軌 Upper, 下軌 Lower, 帶寬 Bandwidth %, %B 位階)。
+    """
+    mid = series.rolling(window=period, min_periods=1).mean()
+    std = series.rolling(window=period, min_periods=1).std().fillna(0.0)
+    upper = mid + (std * std_dev)
+    lower = mid - (std * std_dev)
+    bandwidth = ((upper - lower) / (mid + 1e-9)) * 100
+    pct_b = (series - lower) / (upper - lower + 1e-9)
+    return mid, upper, lower, bandwidth, pct_b
+
+
+def _compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """計算真實波動區間 (Average True Range, ATR)。"""
+    prev_close = df["Close"].shift(1)
+    tr1 = df["High"] - df["Low"]
+    tr2 = (df["High"] - prev_close).abs()
+    tr3 = (df["Low"] - prev_close).abs()
+    tr = tr1.combine(tr2, max).combine(tr3, max)
+    return tr.rolling(window=period, min_periods=1).mean()
+
+
+def _fetch_ticker_news(ticker: str, limit: int = 4) -> list[dict[str, str]]:
+    """抓取標的即時重大新聞與情報（在背景 executor 執行）。
+
+    具備智慧備援機制：當 ETF (如 0050, 00878) 或指數自身無專屬新聞 Feed 時，
+    自動備援抓取權值核心或大盤焦點新聞。
+
+    Args:
+        ticker: 股票或加密貨幣代號。
+        limit: 最大新聞則數。
+
+    Returns:
+        list[dict[str, str]]: 新聞清單 [{"title": ..., "publisher": ..., "time": ..., "url": ...}]。
+    """
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        raw_news = t.news or []
+
+        # 智慧備援：若 ETF / 指數本身無新聞，自動獲取關聯權值或大盤新聞
+        if not raw_news:
+            fallback_target = ""
+            if ticker.endswith(".TW") or ticker.endswith(".TWO") or ticker.startswith("^TW"):
+                fallback_target = "2330.TW"  # 台股權值與半導體風向球
+            elif ticker in ("^GSPC", "^IXIC", "^DJI", "SPY", "QQQ"):
+                fallback_target = "NVDA"     # 美股大盤動能指標
+            elif ticker.endswith("-USD") and ticker != "BTC-USD":
+                fallback_target = "BTC-USD"  # 幣圈大盤總指標
+
+            if fallback_target:
+                try:
+                    fb_t = yf.Ticker(fallback_target)
+                    raw_news = fb_t.news or []
+                except Exception:
+                    raw_news = []
+
+        parsed: list[dict[str, str]] = []
+        for item in raw_news[:limit]:
+            title = ""
+            publisher = ""
+            pub_time = ""
+            url = ""
+            # yfinance 0.2+ 結構
+            if "content" in item and isinstance(item["content"], dict):
+                cnt = item["content"]
+                title = cnt.get("title", "").strip()
+                publisher = cnt.get("provider", {}).get("displayName", "")
+                pub_date = cnt.get("pubDate", "")
+                if pub_date:
+                    pub_time = pub_date[:10]  # YYYY-MM-DD
+                click_info = cnt.get("clickThroughUrl") or cnt.get("canonicalUrl")
+                if isinstance(click_info, dict):
+                    url = click_info.get("url", "")
+                elif isinstance(click_info, str):
+                    url = click_info
+
+            # legacy 結構
+            if not title:
+                title = item.get("title", "").strip()
+                publisher = item.get("publisher", "")
+                provider_publish_time = item.get("providerPublishTime")
+                if provider_publish_time:
+                    import datetime
+                    pub_time = datetime.datetime.fromtimestamp(provider_publish_time).strftime("%m/%d")
+                url = item.get("link", "")
+
+            if title:
+                parsed.append({
+                    "title": title,
+                    "publisher": publisher or "Market News",
+                    "time": pub_time or "即時",
+                    "url": url or "",
+                })
+        return parsed
+    except Exception as exc:
+        logger.debug("StockTool: 新聞抓取跳過 (%s): %s", ticker, exc)
+        return []
+
+
 def _fetch_and_plot(ticker: str) -> tuple[bytes | None, dict]:
     """
-    同步函式：抓資料、計算指標、畫圖（在 executor 中執行，不阻塞 event loop）。
+    同步函式：抓資料、計算指標、抓取新聞、畫圖（在 executor 中執行，不阻塞 event loop）。
     回傳 (png_bytes, indicators_dict)。
     """
+    now = time.time()
+    if ticker in _STOCK_DATA_CACHE:
+        ts, cached_png, cached_indicators = _STOCK_DATA_CACHE[ticker]
+        if now - ts < _STOCK_CACHE_TTL_SEC:
+            logger.info("StockTool: 命中 Tier-1 股市快取 -> %s", ticker)
+            return cached_png, cached_indicators
+
     try:
         import matplotlib
         matplotlib.use("Agg")  # 修正: 確保在背景執行緒畫圖不會崩潰
+        import matplotlib.pyplot as plt
         import mplfinance as mpf
         import pandas as pd
         import yfinance as yf
 
         df = yf.download(
             ticker,
-            period="90d",
+            period="180d",
             interval="1d",
             progress=False,
             auto_adjust=True,
@@ -236,7 +401,7 @@ def _fetch_and_plot(ticker: str) -> tuple[bytes | None, dict]:
             fallback_ticker = f"{ticker}-USD"
             df_fallback = yf.download(
                 fallback_ticker,
-                period="90d",
+                period="180d",
                 interval="1d",
                 progress=False,
                 auto_adjust=True,
@@ -246,76 +411,189 @@ def _fetch_and_plot(ticker: str) -> tuple[bytes | None, dict]:
                 df = df_fallback
                 ticker = fallback_ticker
 
-        if df.empty or len(df) < 20:
+        if df.empty or len(df) < 15:
             return None, {}
 
         # 把 MultiIndex 壓扁（yfinance >= 0.2 回傳 MultiIndex columns）
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        # 計算技術指標
+        # 優先清洗掉未開盤或空值的無效行
+        df = df.dropna(subset=["Close", "Open", "High", "Low"])
+        if df.empty or len(df) < 5:
+            return None, {}
+
+        # ── 1. 多維度技術指標計算 ─────────────────────────────────────────
+        # 均線 EMA20 / EMA60
         df["EMA20"] = df["Close"].ewm(span=20, adjust=False).mean()
         df["EMA60"] = df["Close"].ewm(span=60, adjust=False).mean()
+
+        # 布林通道 (20, 2)
+        bb_mid, bb_upper, bb_lower, bb_width, bb_pct_b = _compute_bollinger_bands(df["Close"], period=20, std_dev=2.0)
+        df["BB_Mid"] = bb_mid
+        df["BB_Upper"] = bb_upper
+        df["BB_Lower"] = bb_lower
+        df["BB_Width"] = bb_width
+        df["BB_PctB"] = bb_pct_b
+
+        # RSI(14)
         df["RSI14"] = _compute_rsi(df["Close"], 14)
-        # MACD
+
+        # KD (9, 3, 3)
+        k_ser, d_ser = _compute_kd(df, n=9, m1=3, m2=3)
+        df["KD_K"] = k_ser
+        df["KD_D"] = d_ser
+
+        # MACD (12, 26, 9)
         ema12 = df["Close"].ewm(span=12, adjust=False).mean()
         ema26 = df["Close"].ewm(span=26, adjust=False).mean()
         df["MACD"] = ema12 - ema26
         df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
+        df["MACD_Hist"] = df["MACD"] - df["Signal"]
 
-        # 最新值
-        latest = df.iloc[-1]
-        close = float(latest["Close"])
-        ema20 = float(latest["EMA20"])
-        ema60 = float(latest["EMA60"])
-        rsi = float(latest["RSI14"])
-        macd = float(latest["MACD"])
-        signal = float(latest["Signal"])
-        prev_close = float(df["Close"].iloc[-2]) if len(df) > 1 else close
-        change_pct = (close - prev_close) / prev_close * 100
+        # ATR(14)
+        df["ATR14"] = _compute_atr(df, period=14)
+
+        # 成交量均線與量比 (Volume Ratio)
+        if "Volume" in df.columns:
+            df["Vol_MA20"] = df["Volume"].rolling(window=20, min_periods=1).mean()
+            df["Vol_Ratio"] = df["Volume"] / (df["Vol_MA20"] + 1e-9)
+        else:
+            df["Vol_MA20"] = 0.0
+            df["Vol_Ratio"] = 1.0
+
+        # ── 2. 最新數值提取與安全防呆 ───────────────────────────────────────
+        valid_df = df[df["Close"].notna()]
+        if valid_df.empty:
+            return None, {}
+
+        latest = valid_df.iloc[-1]
+
+        def _safe_float(val: Any, fallback: float = 0.0) -> float:
+            try:
+                f = float(val)
+                return fallback if (math.isnan(f) or math.isinf(f)) else f
+            except Exception:
+                return fallback
+
+        close = _safe_float(latest.get("Close"), 0.0)
+        ema20 = _safe_float(latest.get("EMA20"), close)
+        ema60 = _safe_float(latest.get("EMA60"), close)
+        bb_u = _safe_float(latest.get("BB_Upper"), close)
+        bb_l = _safe_float(latest.get("BB_Lower"), close)
+        bb_w = _safe_float(latest.get("BB_Width"), 0.0)
+        pct_b = _safe_float(latest.get("BB_PctB"), 0.5)
+        rsi = _safe_float(latest.get("RSI14"), 50.0)
+        kd_k = _safe_float(latest.get("KD_K"), 50.0)
+        kd_d = _safe_float(latest.get("KD_D"), 50.0)
+        macd = _safe_float(latest.get("MACD"), 0.0)
+        signal = _safe_float(latest.get("Signal"), 0.0)
+        macd_hist = _safe_float(latest.get("MACD_Hist"), 0.0)
+        atr14 = _safe_float(latest.get("ATR14"), 0.0)
+        vol_ratio = _safe_float(latest.get("Vol_Ratio"), 1.0)
+
+        # 多週期報酬率計算
+        prev_close_1d = float(valid_df["Close"].iloc[-2]) if len(valid_df) > 1 else close
+        change_1d = ((close - prev_close_1d) / prev_close_1d * 100) if prev_close_1d else 0.0
+
+        prev_close_5d = float(valid_df["Close"].iloc[-6]) if len(valid_df) > 5 else prev_close_1d
+        change_5d = ((close - prev_close_5d) / prev_close_5d * 100) if prev_close_5d else 0.0
+
+        prev_close_20d = float(valid_df["Close"].iloc[-21]) if len(valid_df) > 20 else prev_close_5d
+        change_20d = ((close - prev_close_20d) / prev_close_20d * 100) if prev_close_20d else 0.0
+
+        # 近 20 日與 60 日高低點（關鍵支撐與壓力）
+        window_20 = valid_df.tail(20)
+        high_20d = _safe_float(window_20["High"].max(), close) if "High" in window_20.columns else close
+        low_20d = _safe_float(window_20["Low"].min(), close) if "Low" in window_20.columns else close
+
+        window_60 = valid_df.tail(60)
+        high_60d = _safe_float(window_60["High"].max(), high_20d) if "High" in window_60.columns else high_20d
+        low_60d = _safe_float(window_60["Low"].min(), low_20d) if "Low" in window_60.columns else low_20d
+
+        # ── 3. 抓取即時重大新聞 ───────────────────────────────────────────
+        news_items = _fetch_ticker_news(ticker, limit=4)
 
         indicators = {
             "ticker": ticker,
             "close": round(close, 2),
-            "change_pct": round(change_pct, 2),
+            "change_pct": round(change_1d, 2),
+            "change_5d": round(change_5d, 2),
+            "change_20d": round(change_20d, 2),
             "ema20": round(ema20, 2),
             "ema60": round(ema60, 2),
+            "bb_upper": round(bb_u, 2),
+            "bb_lower": round(bb_l, 2),
+            "bb_width": round(bb_w, 2),
+            "pct_b": round(pct_b, 2),
             "rsi14": round(rsi, 1),
+            "kd_k": round(kd_k, 1),
+            "kd_d": round(kd_d, 1),
             "macd": round(macd, 3),
             "macd_signal": round(signal, 3),
+            "macd_hist": round(macd_hist, 3),
+            "atr14": round(atr14, 2),
+            "vol_ratio": round(vol_ratio, 2),
+            "high_20d": round(high_20d, 2),
+            "low_20d": round(low_20d, 2),
+            "high_60d": round(high_60d, 2),
+            "low_60d": round(low_60d, 2),
+            "news": news_items,
             "rows": len(df),
         }
 
-        # 畫 K 線圖（最近 60 天）
-        plot_df = df[["Open", "High", "Low", "Close", "Volume"]].tail(60)
+        # ── 4. 畫專業 K 線圖（最近 60 天，含布林通道與均量線）──────────────
+        plot_df = df[["Open", "High", "Low", "Close", "Volume", "EMA20", "EMA60", "BB_Upper", "BB_Lower", "Vol_MA20"]].tail(60)
+
         apds = [
-            mpf.make_addplot(df["EMA20"].tail(60), color="#E65100", width=1.5, label="EMA20"),
-            mpf.make_addplot(df["EMA60"].tail(60), color="#1976D2", width=1.5, label="EMA60"),
+            mpf.make_addplot(plot_df["EMA20"], color="#FF6F00", width=1.4, label="EMA20"),
+            mpf.make_addplot(plot_df["EMA60"], color="#1565C0", width=1.4, label="EMA60"),
+            mpf.make_addplot(plot_df["BB_Upper"], color="#7B1FA2", width=1.0, linestyle="--", alpha=0.7),
+            mpf.make_addplot(plot_df["BB_Lower"], color="#7B1FA2", width=1.0, linestyle="--", alpha=0.7),
         ]
+        if "Volume" in plot_df.columns and plot_df["Volume"].sum() > 0:
+            apds.append(mpf.make_addplot(plot_df["Vol_MA20"], panel=1, color="#FF9800", width=1.0, alpha=0.85))
+
         mc = mpf.make_marketcolors(up="#ef5350", down="#26a69a", inherit=True)
-        style = mpf.make_mpf_style(marketcolors=mc, gridstyle="--", gridcolor="#e0e0e0",
-                                   facecolor="white", edgecolor="#cccccc", figcolor="white",
-                                   y_on_right=False, rc={"axes.labelcolor": "black",
-                                                         "xtick.color": "black",
-                                                         "ytick.color": "black",
-                                                         "text.color": "black"})
-        fig, _ = mpf.plot(
-            plot_df, type="candle", addplot=apds, volume=True,
-            style=style, returnfig=True, figsize=(12, 7),
-            title=f"\n{ticker}  |  60-Day Chart",
+        style = mpf.make_mpf_style(
+            marketcolors=mc,
+            gridstyle="--",
+            gridcolor="#e0e0e0",
+            facecolor="white",
+            edgecolor="#cccccc",
+            figcolor="white",
+            y_on_right=False,
+            rc={
+                "axes.labelcolor": "black",
+                "xtick.color": "black",
+                "ytick.color": "black",
+                "text.color": "black",
+            },
         )
-        fig.patch.set_facecolor("white")
+        fig, _ = mpf.plot(
+            plot_df[["Open", "High", "Low", "Close", "Volume"]],
+            type="candle",
+            addplot=apds,
+            volume=True,
+            style=style,
+            returnfig=True,
+            figsize=(12, 7.5),
+            title=f"\n{ticker}  |  60-Day Technical Chart (with Bollinger Bands & EMA)",
+        )
+        try:
+            fig.patch.set_facecolor("white")
 
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=100, bbox_inches="tight", facecolor="white")
-        buf.seek(0)
-        import matplotlib.pyplot as plt
-        plt.close(fig)
-
-        return buf.read(), indicators
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", dpi=100, bbox_inches="tight", facecolor="white")
+            buf.seek(0)
+            res_png = buf.read()
+            _STOCK_DATA_CACHE[ticker] = (now, res_png, indicators)
+            return res_png, indicators
+        finally:
+            plt.close(fig)
 
     except Exception as exc:
-        logger.warning("StockTool: 資料獲取/繪圖失敗: %s", exc)
+        logger.warning("StockTool: 資料獲取/繪圖失敗 (%s): %s", ticker, exc)
         return None, {}
 
 
@@ -350,7 +628,7 @@ class StockTool(BaseTool):
         elapsed = make_timer()
         brain_cog = bot.get_cog("BotBrain")
         if not brain_cog:
-            return ToolResult.error("BotBrain 未就緒。", is_direct_rendered=True)
+            return ToolResult.error("BotBrain 未就緒。", is_direct_rendered=not silent)
         brain: Any = brain_cog
 
         # ── Step 1: 提取所有提及的 tickers（支援單次查詢多標的）──────────────
@@ -382,56 +660,144 @@ class StockTool(BaseTool):
                 tickers = []
 
         if not tickers:
-            await message.reply("唔⋯⋯名偵探沒看懂你想查哪支股票或幣耶！可以提供代號嗎？（例如：`2330`、`AAPL`、`BTC`）", mention_author=True)
-            return ToolResult.no_data("未能識別出股票或加密貨幣代號。", is_direct_rendered=True)
+            if not silent:
+                await message.reply("唔⋯⋯名偵探沒看懂你想查哪支股票或幣耶！可以提供代號嗎？（例如：`2330`、`AAPL`、`BTC`）", mention_author=True)
+            return ToolResult.no_data("未能識別出股票或加密貨幣代號。", is_direct_rendered=not silent)
 
         # ── Step 2: 平行抓取數據並繪圖 ──────────────────────────────────────
         indicator_summaries: list[str] = []
         files: list[discord.File] = []
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
+        timeout_val = getattr(settings, "DEFAULT_TIMEOUT_SEC", 15)
 
-        for ticker in tickers[:3]:  # 最多查 3 檔，防濫用
+        async def _fetch_single(t: str) -> tuple[str, bytes | None, dict[str, Any] | None]:
             try:
-                png_bytes, indicators = await asyncio.wait_for(
-                    loop.run_in_executor(None, _fetch_and_plot, ticker),
-                    timeout=getattr(settings, "DEFAULT_TIMEOUT_SEC", 15),
+                res = await asyncio.wait_for(
+                    loop.run_in_executor(None, _fetch_and_plot, t),
+                    timeout=timeout_val,
                 )
+                return t, res[0], res[1]
             except asyncio.TimeoutError:
-                logger.warning("StockTool: _fetch_and_plot 超時 (ticker=%s)", ticker)
-                continue
+                logger.warning("StockTool: _fetch_and_plot 超時 (ticker=%s)", t)
+                return t, None, None
+            except Exception as e:
+                logger.warning("StockTool: _fetch_and_plot 異常 (ticker=%s): %s", t, e)
+                return t, None, None
 
+        target_tickers = tickers[:3]  # 最多查 3 檔，防濫用
+        tasks = [_fetch_single(t) for t in target_tickers]
+        results = await asyncio.gather(*tasks)
+
+        for ticker, png_bytes, indicators in results:
             if not indicators:
                 continue
 
-            trend = "多頭排列 📈" if indicators["ema20"] > indicators["ema60"] else "空頭排列 📉"
-            rsi_status = (
-                "超買區 ⚠️" if indicators["rsi14"] > 70
-                else "超賣區 💡" if indicators["rsi14"] < 30
-                else "中性區"
-            )
-            macd_status = "黃金交叉（多方動能）" if indicators["macd"] > indicators["macd_signal"] else "死亡交叉（空方動能）"
-            change_str = f"+{indicators['change_pct']}%" if indicators["change_pct"] >= 0 else f"{indicators['change_pct']}%"
+            # 趨勢與均線狀態
+            trend_str = "多頭排列向上發散 📈" if indicators["ema20"] > indicators["ema60"] else "空頭排列偏弱整理 📉"
+            price = indicators["close"]
+            change_1d_str = f"+{indicators['change_pct']}%" if indicators["change_pct"] >= 0 else f"{indicators['change_pct']}%"
+            change_5d_str = f"+{indicators['change_5d']}%" if indicators["change_5d"] >= 0 else f"{indicators['change_5d']}%"
+            change_20d_str = f"+{indicators['change_20d']}%" if indicators["change_20d"] >= 0 else f"{indicators['change_20d']}%"
 
-            summary = (
-                f"【{ticker} 技術指標快報】\n"
-                f"收盤價：{indicators['close']} ({change_str})\n"
-                f"EMA20：{indicators['ema20']} / EMA60：{indicators['ema60']} → {trend}\n"
-                f"RSI14：{indicators['rsi14']} → {rsi_status}\n"
-                f"MACD：{indicators['macd']} / Signal：{indicators['macd_signal']} → {macd_status}"
-            )
+            # 量能狀態
+            vr = indicators["vol_ratio"]
+            vol_desc = "爆量突進 (≥2.0x)" if vr >= 2.0 else "顯著放量 (≥1.3x)" if vr >= 1.3 else "量能萎縮/窒息量 (≤0.7x)" if vr <= 0.7 else "量能溫和常態"
+
+            # 布林通道狀態
+            pct_b = indicators["pct_b"]
+            bb_pos = "突破上軌極強勢區" if pct_b >= 1.0 else "跌破下軌極弱勢區" if pct_b <= 0.0 else f"處於中軌與上軌間 (%B: {pct_b})" if pct_b >= 0.5 else f"處於中軌與下軌間 (%B: {pct_b})"
+
+            # 動能 KD / RSI / MACD
+            kd_k = indicators["kd_k"]
+            kd_d = indicators["kd_d"]
+            kd_status = "K向上突破D (黃金交叉)" if kd_k > kd_d else "K向下跌破D (死亡交叉)"
+            rsi_val = indicators["rsi14"]
+            rsi_status = "超買過熱區 (≥70) ⚠️" if rsi_val >= 70 else "超賣低檔區 (≤30) 💡" if rsi_val <= 30 else "常態震盪區"
+            macd_h = indicators["macd_hist"]
+            macd_status = "多方動能擴張 🔺" if macd_h > 0 else "空方動能主導 🔻"
+
+            summary_lines = [
+                f"【{ticker} 盤面數據與指標線索】",
+                f"• 即時現價：${price} (今日 {change_1d_str} | 近5日 {change_5d_str} | 近20日 {change_20d_str})",
+                f"• 均線趨勢：EMA20 ${indicators['ema20']} / EMA60 ${indicators['ema60']} → {trend_str}",
+                f"• 量價結構：今日量能為20日均量 {vr}x → {vol_desc}",
+                f"• 布林通道：帶寬 {indicators['bb_width']}% | 上軌 ${indicators['bb_upper']} / 下軌 ${indicators['bb_lower']} → {bb_pos}",
+                f"• 動能擺盪：KD(9,3,3) K:{kd_k} D:{kd_d} ({kd_status}) | RSI14: {rsi_val} ({rsi_status}) | MACD柱: {macd_h} ({macd_status})",
+                f"• 關鍵位階：近20日高點 ${indicators['high_20d']} (上方壓力) | 近20日低點 ${indicators['low_20d']} (下方支撐) | ATR14: ${indicators['atr14']}",
+            ]
+
+            news_list = indicators.get("news", [])
+            if news_list:
+                summary_lines.append("• 最新重大新聞與情報：")
+                for n in news_list[:3]:
+                    n_title = n.get("title", "")
+                    n_url = n.get("url", "")
+                    n_time = n.get("time", "即時")
+                    n_pub = n.get("publisher", "Market")
+                    if n_url:
+                        summary_lines.append(f"  - [{n_time}] [{n_title}]({n_url}) ({n_pub})")
+                    else:
+                        summary_lines.append(f"  - [{n_time}] {n_title} ({n_pub})")
+            else:
+                summary_lines.append("• 最新情報：近期暫無突發重大新聞消息")
+
+            summary = "\n".join(summary_lines)
             indicator_summaries.append(summary)
 
             if png_bytes:
                 files.append(discord.File(io.BytesIO(png_bytes), filename=f"{ticker}_chart.png"))
 
         if not indicator_summaries:
-            await message.reply(f"哇哇，找不到代號「{', '.join(tickers)}」的行情資料耶⋯⋯", mention_author=True)
-            return ToolResult.no_data(f"找不到 {', '.join(tickers)} 的股市數據。", is_direct_rendered=True)
+            if not silent:
+                await message.reply(f"哇哇，找不到代號「{', '.join(tickers)}」的行情資料耶⋯⋯", mention_author=True)
+            return ToolResult.no_data(f"找不到 {', '.join(tickers)} 的股市數據。", is_direct_rendered=not silent)
 
         combined_summary = "\n\n".join(indicator_summaries)
 
-        # ── Step 3: 交給雪莉播報發送至 Discord ─────────────────────────────
-        wants_analysis = bool(re.search(r"(分析|建議|怎麼看|能買嗎|該買嗎|看法)", user_query))
+        # ── Step 3: 靜音模式直接發送圖表並回傳數據，非靜音模式進行 LLM 獨立分析 ──
+        if silent:
+            await remove_hourglass_reaction(message, bot.user)
+            if files:
+                try:
+                    await message.reply(
+                        "📊 **已為您調閱最新市場行情與技術線圖：**",
+                        files=files,
+                        mention_author=True,
+                    )
+                except Exception as exc:
+                    logger.warning("StockTool: silent 模式發送圖表失敗 (非致命): %s", exc)
+
+            observation = f"【📊 {', '.join(tickers)} 盤面數據與指標線索】\n{combined_summary}"
+            all_news_links_silent = [
+                f"• [{n.get('title')}]({n.get('url')}) ({n.get('publisher', 'Market')})"
+                for _, _, ind in results
+                if ind and ind.get("news")
+                for n in ind["news"][:2]
+                if n.get("url")
+            ]
+            if all_news_links_silent:
+                observation += "\n\n📰 **即時重大新聞來源**：\n" + "\n".join(all_news_links_silent)
+
+            log_event(
+                "stock_query",
+                message_id=message.id,
+                user=message.author.display_name,
+                channel_id=message.channel.id,
+                raw_input=user_query,
+                intent="STOCK",
+                intent_source="dispatch_silent",
+                reply_preview=observation[:120],
+                model_used=settings.PRIMARY_MODEL,
+                latency_ms=elapsed(),
+                extra_ticker=",".join(tickers),
+            )
+            return ToolResult.success(
+                observation,
+                is_direct_rendered=False,
+                extra_data={"tickers": tickers, "indicators": indicator_summaries},
+            )
+
+        wants_analysis = bool(re.search(r"(分析|建議|怎麼看|能買嗎|該買嗎|看法|趨勢|行情|走勢|評價)", user_query))
 
         reply_future: asyncio.Future[str] = bot.loop.create_future()
 
@@ -443,10 +809,23 @@ class StockTool(BaseTool):
         head_persona, _tail = build_dynamic_persona(user_query, self.intent_name, channel_id=message.channel.id)
 
         analysis_instruction = (
-            "使用者希望你給出買賣看法，請以名偵探雪莉的直覺給出簡短的市場觀點，"
-            "並記得加上免責聲明（本內容純屬娛樂，非投資建議）。"
+            "請完全遵循你的人設背景、性格語氣、第一人稱與說話習慣，為使用者產出一份【條理分明、深度詳實且符合你當前人設風格】的完整盤面深度分析！\n\n"
+            "【輸出結構與詳細內容規範】（請嚴格依下列四大重點分段深入剖析，禁止草草帶過）：\n\n"
+            "📌 **一、 盤面背景與情報解析**\n"
+            "• 結合最新新聞情報或該標的產業背景，解讀目前市場正在發酵什麼題材或預期？消息面對多空雙方的心理影響是什麼？（若無重大新聞，則從短中長多週期 1D/5D/20D 漲跌動能切入評估市場人氣與冷熱度）。\n\n"
+            "📊 **二、 量價型態與動能深度推導**\n"
+            "• 均線與趨勢位階：分析 EMA20/EMA60 排列結構、均線扣抵與股價乖離率。\n"
+            "• 量價關係：剖析今日量比（Vol Ratio），是爆量攻擊、量縮洗盤、還是高檔量價背離？主力是否有進出跡象？\n"
+            "• 擺盪動能交叉驗證：詳細比對 KD(9,3,3) 黃金/死亡交叉位階、RSI 超買/超賣強度，以及 MACD 柱狀體擴張或收斂動能。\n\n"
+            "🛡️ **三、 關鍵攻防與支撐壓力位階**\n"
+            "• 標出布林通道（上軌、中軌、下軌）與帶寬收縮/擴張意義（是否即將變盤？）。\n"
+            "• 明確點出上方近 20/60 日高點壓力價位（解套賣壓區）與下方低點支撐防守點，評估當前的風險報酬比。\n\n"
+            "🎯 **四、 綜合研判結論與操作指引**\n"
+            "• 保持你的角色口吻與風格，給出清晰具體的盤勢定性（例如：【強勢順勢進攻】/【回踩支撐逢低佈局】/【高檔過熱減碼警戒】/【破位弱勢整理觀望】）。\n"
+            "• 給出使用者接下來幾天最該留意的「關鍵盤面訊號」（例如：守住某個價位才算真突破）。\n\n"
+            "※ 全文使用繁體中文，內容務必豐富扎實、論據充分，嚴格貫徹當前設定的角色口氣與性格！"
             if wants_analysis else
-            "只需要用輕鬆的語氣播報以下技術指標資料，不要給買賣建議，可以吐槽數字。"
+            "請完全遵循你的人設性格與語氣播報以下技術指標與最新新聞重點，分段條列說明盤面狀態，並給予 2~3 句符合角色的生動短評，不要給予具體買賣指示。"
         )
 
         reply_task = InferenceTask(
@@ -462,9 +841,25 @@ class StockTool(BaseTool):
         try:
             reply_text = await asyncio.wait_for(reply_future, timeout=settings.STOCK_REPLY_TIMEOUT)
         except asyncio.TimeoutError:
-            reply_text = f"嗯嗯，指標我查到了！\n{combined_summary}"
+            setattr(reply_task, "is_cancelled", True)
+            logger.warning(
+                "StockTool: LLM 分析生成超時 (%.1fs)，已標記取消背景推論以釋放 GPU，降級回傳指標快報",
+                float(settings.STOCK_REPLY_TIMEOUT),
+            )
+            reply_text = f"嗯嗯，我已經為你整理好最新情報與技術數據囉！\n\n{combined_summary}"
 
-        DISCLAIMER = "\n\n⚠️ *雪莉僅供參考，不構成投資建議*"
+        # 整理新聞點擊來源區塊（若有）
+        all_news_links: list[str] = []
+        for _ticker, _png, ind in results:
+            if ind and ind.get("news"):
+                for n in ind["news"][:2]:
+                    if n.get("url"):
+                        all_news_links.append(f"• [{n.get('title')}]({n.get('url')}) ({n.get('publisher', 'Market')})")
+
+        if all_news_links and "http" not in reply_text:
+            reply_text += "\n\n📰 **即時重大新聞來源**：\n" + "\n".join(all_news_links)
+
+        DISCLAIMER = "\n\n⚠️ *僅供參考，不構成投資建議*"
         reply_text = reply_text + DISCLAIMER
 
         await remove_hourglass_reaction(message, bot.user)

@@ -19,20 +19,25 @@ Sensitive keys (TOKEN, PASSWORD, KEY, SECRET) are never exposed.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import os
+import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
 import httpx
-from quart import Quart, Response, jsonify, render_template, request, send_file
+from quart import Quart, Response, jsonify, render_template, request
 
 import settings
+from version import APP_VERSION
 
 logger = logging.getLogger(__name__)
+
+_TZ_TW = timezone(timedelta(hours=8))  # 台灣標準時間 UTC+8
 
 app = Quart(__name__)
 app.secret_key = os.urandom(24)
@@ -52,12 +57,23 @@ _locked_ips: dict[str, float] = {}          # IP -> 解鎖時間戳記
 
 
 def _get_client_ip(req: Any) -> str:
-    """Extract client IP addressing reverse proxy headers."""
-    if hasattr(req, "headers"):
+    """提取客戶端真實 IP 位址，僅在連線來源為受信賴的反向代理時信任 X-Forwarded-For。"""
+    remote = str(getattr(req, "remote_addr", "127.0.0.1") or "127.0.0.1")
+    configured_proxies = getattr(settings, "WEB_UI_TRUSTED_PROXIES", None) or [
+        "127.0.0.1", "::1", "localhost", "testclient"
+    ]
+    trusted_proxies = set(configured_proxies)
+    if remote in trusted_proxies and hasattr(req, "headers"):
         forwarded = req.headers.get("X-Forwarded-For")
         if forwarded:
-            return str(forwarded.split(",")[0].strip())
-    return str(getattr(req, "remote_addr", "127.0.0.1") or "127.0.0.1")
+            client_candidate = str(forwarded.split(",")[0].strip())
+            if client_candidate:
+                try:
+                    ipaddress.ip_address(client_candidate)
+                    return client_candidate
+                except ValueError:
+                    pass
+    return remote
 
 
 def _is_ip_locked(ip: str) -> tuple[bool, int]:
@@ -115,7 +131,7 @@ def _get_git_info() -> dict[str, Any]:
 
     try:
         res_log = subprocess.run(
-            ["git", "log", "-1", "--format=%h|%H|%s|%cd|%an"],
+            ["git", "log", "-1", "--date=format:%Y-%m-%d %H:%M:%S", "--format=%h|%H|%s|%cd|%an"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -152,11 +168,26 @@ def _get_git_info() -> dict[str, Any]:
         "commit_author": commit_author,
         "pull_log": pull_log,
         "pull_time": pull_time,
-        "tag": "v1.4.1",
+        "tag": APP_VERSION,
     }
 
 
 _STARTUP_GIT_INFO: dict[str, Any] = _get_git_info()
+_CACHED_GIT_INFO: dict[str, Any] = _STARTUP_GIT_INFO
+_LAST_GIT_INFO_TIME: float = 0.0
+_GIT_INFO_CACHE_TTL: float = 3.0
+
+
+async def _async_get_git_info() -> dict[str, Any]:
+    """Retrieve Git version metadata asynchronously with TTL cache to prevent subprocess blocking."""
+    global _CACHED_GIT_INFO, _LAST_GIT_INFO_TIME
+    now = time.time()
+    if now - _LAST_GIT_INFO_TIME < _GIT_INFO_CACHE_TTL and _CACHED_GIT_INFO:
+        return _CACHED_GIT_INFO
+    info = await asyncio.to_thread(_get_git_info)
+    _CACHED_GIT_INFO = info
+    _LAST_GIT_INFO_TIME = now
+    return info
 
 
 def _get_request_token(req: Any) -> str:
@@ -339,113 +370,396 @@ _LOG_EXTENSIONS = {".jsonl", ".json", ".log"}
 _LOG_BLACKLIST = {"config_override"}
 
 
+_DB_LOG_SOURCES = [
+    {"db": "chat_history.db", "table": "runtime_events", "name": "chat_history.db [runtime_events]", "label": "🔥 系統即時運作日誌 (runtime_events)"},
+    {"db": "chat_history.db", "table": "error_events", "name": "chat_history.db [error_events]", "label": "⚠️ 系統錯誤日誌 (error_events)"},
+    {"db": "chat_history.db", "table": "chat_messages", "name": "chat_history.db [chat_messages]", "label": "💬 對話歷史紀錄 (chat_messages)"},
+    {"db": "chat_history.db", "table": "audit_logs", "name": "chat_history.db [audit_logs]", "label": "🛡️ 管理員審計紀錄 (audit_logs)"},
+    {"db": "chat_history.db", "table": "roast_rules", "name": "chat_history.db [roast_rules]", "label": "🎯 吐槽關鍵字規則 (roast_rules)"},
+    {"db": "sherry_memory.db", "table": "user_profiles", "name": "sherry_memory.db [user_profiles]", "label": "👤 使用者畫像名冊 (user_profiles)"},
+    {"db": "sherry_memory.db", "table": "user_facts", "name": "sherry_memory.db [user_facts]", "label": "🧠 使用者長期記憶庫 (user_facts)"},
+    {"db": "sherry_memory.db", "table": "user_aliases", "name": "sherry_memory.db [user_aliases]", "label": "🏷️ 使用者別名暱稱 (user_aliases)"},
+    {"db": "sherry_memory.db", "table": "user_relations", "name": "sherry_memory.db [user_relations]", "label": "❤️ 使用者好感度關係 (user_relations)"},
+    {"db": "world_memory.db", "table": "world_events", "name": "world_memory.db [world_events]", "label": "🌍 世界記憶重大事件 (world_events)"},
+    {"db": "world_memory.db", "table": "world_summary", "name": "world_memory.db [world_summary]", "label": "📜 世界記憶每日摘要 (world_summary)"},
+    {"db": "sherry_stock/stock_trader.db", "fallback_db": "stock_trader.db", "table": "thought_logs", "name": "stock_trader.db [thought_logs]", "label": "📈 美股量化決策思考 (thought_logs)"},
+    {"db": "sherry_stock/stock_trader.db", "fallback_db": "stock_trader.db", "table": "trades", "name": "stock_trader.db [trades]", "label": "📊 美股交易紀錄 (trades)"},
+    {"db": "sherry_stock/stock_trader.db", "fallback_db": "stock_trader.db", "table": "portfolio", "name": "stock_trader.db [portfolio]", "label": "💰 美股帳戶資產持倉 (portfolio)"},
+    {"db": "deep_search/deep_search.db", "fallback_db": "deep_search.db", "table": "research_sessions", "name": "deep_search.db [research_sessions]", "label": "🔬 深度研究探索歷程 (research_sessions)"},
+    {"db": "dnd/dnd.db", "fallback_db": "dnd.db", "table": "dnd_history", "name": "dnd.db [dnd_history]", "label": "🎲 D&D 跑團冒險世界歷史 (dnd_history)"},
+    {"db": "dnd/dnd.db", "fallback_db": "dnd.db", "table": "characters", "name": "dnd.db [characters]", "label": "🧙 D&D 冒險者角色卡 (characters)"},
+    {"db": "feed_sentinel/feed_sentinel.db", "fallback_db": "feed_sentinel.db", "table": "shared_posts", "name": "feed_sentinel.db [shared_posts]", "label": "📰 AI 情報哨兵文章庫 (shared_posts)"},
+    {"db": "spark/spark.db", "fallback_db": "spark.db", "table": "triggers", "name": "spark.db [triggers]", "label": "⚡ 火花即時推播觸發器 (triggers)"},
+    {"db": "schedules.db", "table": "schedule_tasks", "name": "schedules.db [schedule_tasks]", "label": "⏰ 任務排程提醒清單 (schedule_tasks)"},
+]
+
+
 def _list_log_files() -> list[dict]:
-    """Scan DATA_DIR for log-like files and return metadata list."""
-    files: list[dict] = []
-    if not settings.DATA_DIR.exists():
-        return files
-    for p in sorted(settings.DATA_DIR.iterdir()):
-        if p.is_file() and p.suffix in _LOG_EXTENSIONS:
-            if any(bl in p.stem for bl in _LOG_BLACKLIST):
-                continue
-            files.append(
-                {
+    """掃描可用的日誌來源（包含 SQLite 資料庫表格與純文字日誌）。"""
+    sources: list[dict] = []
+
+    # 1. 加入 SQLite 資料庫來源
+    for src in _DB_LOG_SOURCES:
+        db_path = settings.DATA_DIR / src["db"]
+        if not db_path.exists() and "fallback_db" in src:
+            alt = settings.DATA_DIR / src["fallback_db"]
+            if alt.exists():
+                db_path = alt
+        if db_path.exists():
+            sources.append({
+                "name": src["name"],
+                "stem": src["table"],
+                "size_bytes": db_path.stat().st_size,
+                "modified": db_path.stat().st_mtime,
+                "is_db": True,
+                "label": src["label"],
+            })
+
+    # 2. 加入純文字日誌檔
+    if settings.DATA_DIR.exists():
+        for p in sorted(settings.DATA_DIR.iterdir()):
+            if p.is_file() and p.suffix in _LOG_EXTENSIONS:
+                if any(bl in p.stem for bl in _LOG_BLACKLIST):
+                    continue
+                sources.append({
                     "name": p.name,
                     "stem": p.stem,
                     "size_bytes": p.stat().st_size,
                     "modified": p.stat().st_mtime,
-                }
-            )
-    return files
+                    "is_db": False,
+                    "label": f"📄 {p.name}",
+                })
+    return sources
 
 
 @app.route("/api/logs/files", methods=["GET"])
 async def get_log_files() -> Response | tuple[Response, int] | Any:
-    """Return a list of available log files in DATA_DIR (Filtered for Guest mode)."""
+    """Return a list of available log files and DB sources in DATA_DIR (Filtered for Guest mode)."""
     all_files = _list_log_files()
     if _is_admin_request(request):
         return jsonify(all_files)
 
-    # 訪客模式：僅允許查看 bot.log 與 runtime_log.jsonl
-    guest_files = [f for f in all_files if f.get("name", "").lower() in ("bot.log", "runtime_log.jsonl")]
+    # 訪客模式：僅允許查看即時運作日誌與 bot.log
+    guest_allowed = ("bot.log", "runtime_log.jsonl", "chat_history.db [runtime_events]")
+    guest_files = [f for f in all_files if f.get("name", "").lower() in guest_allowed or f.get("name", "") in guest_allowed]
     return jsonify(guest_files)
+
+
+_LINE_COUNT_CACHE: dict[str, tuple[float, int, int]] = {}
+
+
+def _count_file_lines(path: Path) -> int:
+    """計算文字或 JSONL 檔案之有效非空白行數（支援 mtime/size 快取與串流統計）。
+
+    Args:
+        path: 檔案路徑。
+
+    Returns:
+        int: 檔案中有效非空白行總數。
+    """
+    try:
+        st = path.stat()
+        mtime, size = st.st_mtime, st.st_size
+    except OSError:
+        return 0
+
+    cache_key = str(path.resolve())
+    cached = _LINE_COUNT_CACHE.get(cache_key)
+    if cached is not None and cached[0] == mtime and cached[1] == size:
+        return cached[2]
+
+    cnt = 0
+    with open(path, "rb") as f:
+        for line in f:
+            if line.strip():
+                cnt += 1
+
+    _LINE_COUNT_CACHE[cache_key] = (mtime, size, cnt)
+    return cnt
+
+
+def _read_lines_reversed(path: Path, limit: int, skip: int = 0, block_size: int = 65536) -> list[str]:
+    """從檔案末尾反向讀取指定數量的非空白行（由新到舊，保留行首縮排）。
+
+    Args:
+        path: 檔案路徑。
+        limit: 最多欲讀取的行數。
+        skip: 從檔案末尾算起略過的行數（用於分頁 offset）。
+        block_size: 每次往前反向讀取的緩衝區大小位元組數。
+
+    Returns:
+        list[str]: 反向讀取到的文字行列表（最新記錄在最前）。
+    """
+    lines: list[str] = []
+    skipped = 0
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        file_size = f.tell()
+        if file_size == 0:
+            return []
+
+        buffer = bytearray()
+        pos = file_size
+
+        while pos > 0 and len(lines) < limit:
+            read_size = min(block_size, pos)
+            pos -= read_size
+            f.seek(pos)
+            chunk = f.read(read_size)
+            buffer = bytearray(chunk) + buffer
+
+            while True:
+                last_nl = buffer.rfind(b"\n")
+                if last_nl == -1:
+                    break
+                line_bytes = buffer[last_nl + 1 :]
+                buffer = buffer[:last_nl]
+                if line_bytes.endswith(b"\r"):
+                    line_bytes = line_bytes[:-1]
+                line_str = line_bytes.decode("utf-8", errors="replace")
+                if line_str.strip():
+                    if skipped < skip:
+                        skipped += 1
+                    else:
+                        lines.append(line_str.rstrip("\r\n"))
+                        if len(lines) >= limit:
+                            break
+
+        if pos == 0 and len(lines) < limit and buffer:
+            if buffer.endswith(b"\r"):
+                buffer = buffer[:-1]
+            line_str = buffer.decode("utf-8", errors="replace")
+            if line_str.strip():
+                if skipped < skip:
+                    skipped += 1
+                else:
+                    lines.append(line_str.rstrip("\r\n"))
+
+    return lines
 
 
 @app.route("/api/logs", methods=["GET"])
 async def get_logs() -> Response | tuple[Response, int] | Any:
     """
-    Return log entries from a specified file.
+    線上讀取指定檔案或 SQLite 資料庫表格之日誌紀錄。
 
     Query params:
-      file  — filename (default: runtime_log.jsonl)
+      file  — filename or db table (default: chat_history.db [runtime_events])
       page  — 1-indexed page number (default: 1)
       size  — entries per page (default: 50, max: 200)
     """
-    filename: str = request.args.get("file", "runtime_log.jsonl")
+    raw_filename: str = request.args.get("file", "chat_history.db [runtime_events]")
     page: int = max(1, int(request.args.get("page", 1)))
     size: int = min(200, max(1, int(request.args.get("size", 50))))
 
-    # Safety: strip directory traversal
-    safe_name = Path(filename).name
-
-    # 訪客權限限制：未登入狀態下僅允許查看 bot.log 與 runtime_log.jsonl
+    # 訪客權限限制
+    guest_allowed = ("bot.log", "runtime_log.jsonl", "chat_history.db [runtime_events]")
     if not _is_admin_request(request):
-        if safe_name.lower() not in ("bot.log", "runtime_log.jsonl"):
+        if raw_filename.lower() not in guest_allowed and raw_filename not in guest_allowed:
             return jsonify({
                 "status": "forbidden",
-                "message": f"未登入狀態僅允許查看 bot.log 與 runtime.log！欲查看 '{safe_name}' 請進行管理員登入。",
+                "message": f"未登入狀態僅允許查看即時日誌與 bot.log！欲查看 '{raw_filename}' 請進行管理員登入。",
                 "entries": [],
                 "total": 0,
                 "page": page,
                 "size": size
             }), 403
 
+    # =========================================================================
+    # A. 處理 SQLite 資料庫查詢
+    # =========================================================================
+    db_target = None
+    if "[" in raw_filename and raw_filename.endswith("]"):
+        db_part, table_part = raw_filename.split("[", 1)
+        db_part = db_part.strip()
+        table_part = table_part.rstrip("]").strip()
+        # 尋找比對的 db 設定
+        for src in _DB_LOG_SOURCES:
+            if src["name"] == raw_filename or (src["db"].endswith(db_part) and src["table"] == table_part) or (src.get("fallback_db") and src["fallback_db"].endswith(db_part) and src["table"] == table_part):
+                db_file = settings.DATA_DIR / src["db"]
+                if not db_file.exists() and "fallback_db" in src:
+                    alt = settings.DATA_DIR / src["fallback_db"]
+                    if alt.exists():
+                        db_file = alt
+                db_target = (db_file, src["table"])
+                break
+    elif raw_filename.lower() in ("runtime_log.jsonl", "error_log.jsonl"):
+        tbl = "error_events" if raw_filename.lower().startswith("error") else "runtime_events"
+        db_target = (settings.DATA_DIR / "chat_history.db", tbl)
+
+    if db_target:
+        db_path, table_name = db_target
+        if db_path.exists():
+            conn = None
+            try:
+                from core.db import get_db_connection
+                conn = get_db_connection(db_path)
+                cur = conn.cursor()
+
+                cur.execute(f"SELECT COUNT(*) FROM {table_name}")
+                total_cnt = cur.fetchone()[0]
+
+                if total_cnt == 0:
+                    return jsonify({
+                        "entries": [],
+                        "total": 0,
+                        "page": page,
+                        "size": size,
+                        "pages": 1,
+                    })
+
+                offset = (page - 1) * size
+                # 決定排序欄位
+                cur.execute(f"PRAGMA table_info({table_name})")
+                col_names = [col[1] for col in cur.fetchall()]
+
+                order_col = "id" if "id" in col_names else ("updated_at" if "updated_at" in col_names else ("created_at" if "created_at" in col_names else "rowid"))
+                cur.execute(f"SELECT * FROM {table_name} ORDER BY {order_col} DESC LIMIT ? OFFSET ?", (size, offset))
+                rows = cur.fetchall()
+
+                entries: list[dict] = []
+                for r in rows:
+                    row_dict = dict(r)
+                    # 如果該表格內存有 data_json 或 raw_json，優先反序列化
+                    if "data_json" in row_dict:
+                        try:
+                            parsed = json.loads(row_dict["data_json"])
+                            if isinstance(parsed, dict):
+                                row_dict = {**row_dict, **parsed}
+                        except Exception:
+                            pass
+                    elif "raw_json" in row_dict:
+                        try:
+                            parsed = json.loads(row_dict["raw_json"])
+                            if isinstance(parsed, dict):
+                                row_dict = {**row_dict, **parsed}
+                        except Exception:
+                            pass
+
+                    # 補齊 UI 所需通用欄位
+                    if "ts" not in row_dict and "timestamp" in row_dict:
+                        row_dict["ts"] = row_dict["timestamp"]
+                    elif "ts" not in row_dict and "updated_at" in row_dict:
+                        row_dict["ts"] = row_dict["updated_at"]
+                    elif "ts" not in row_dict and "created_at" in row_dict:
+                        row_dict["ts"] = row_dict["created_at"]
+
+                    # 統一時間格式為 UTC+8
+                    ts_str = str(row_dict.get("ts", "") or "")
+                    if ts_str and ("T" in ts_str or ts_str.endswith("Z") or "+" in ts_str):
+                        try:
+                            dt_obj = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                            if dt_obj.tzinfo is None:
+                                dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+                            row_dict["ts"] = dt_obj.astimezone(_TZ_TW).strftime("%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            pass
+
+                    if "event" not in row_dict:
+                        if table_name == "chat_messages":
+                            row_dict["event"] = "chat_reply"
+                            row_dict["raw_input"] = row_dict.get("content", "")
+                            row_dict["user"] = row_dict.get("display_name", "")
+                        elif table_name == "user_facts":
+                            row_dict["event"] = "user_fact"
+                            row_dict["message"] = f"[{row_dict.get('category')}] {row_dict.get('fact')} (重要度: {row_dict.get('importance')})"
+                            row_dict["user"] = row_dict.get("user_id", "")
+                        elif table_name == "user_relations":
+                            row_dict["event"] = "user_relation"
+                            row_dict["message"] = f"好感度: {row_dict.get('affinity')} ({row_dict.get('tier')}) · 互動: {row_dict.get('interaction_count')} 次"
+                            row_dict["user"] = row_dict.get("user_id", "")
+                        elif table_name == "trades":
+                            row_dict["event"] = "trade"
+                            row_dict["message"] = f"[{row_dict.get('action')}] {row_dict.get('shares')} 股 {row_dict.get('ticker')} @ ${row_dict.get('execution_price')} (損益: ${row_dict.get('realized_pnl')}) - {row_dict.get('reason')}"
+                        elif table_name == "thought_logs":
+                            row_dict["event"] = "thought_log"
+                            row_dict["cot_thought"] = row_dict.get("thought_process", "")
+                            row_dict["reply_preview"] = row_dict.get("decision_summary", "")
+                        elif table_name == "dnd_history":
+                            row_dict["event"] = "dnd"
+                            row_dict["message"] = row_dict.get("description", "")
+                        elif table_name == "characters":
+                            row_dict["event"] = "dnd_character"
+                            row_dict["message"] = f"Lv.{row_dict.get('level')} {row_dict.get('race')} {row_dict.get('character_class')} (HP: {row_dict.get('hp_current')}/{row_dict.get('hp_max')}, AC: {row_dict.get('ac')})"
+                            row_dict["user"] = row_dict.get("name", "")
+                        elif table_name == "shared_posts":
+                            row_dict["event"] = "feed"
+                            row_dict["message"] = f"[{row_dict.get('source')}] {row_dict.get('title')}"
+                            row_dict["reply_preview"] = row_dict.get("sherry_analysis", "")
+                        elif table_name == "triggers":
+                            row_dict["event"] = "trigger"
+                            row_dict["message"] = f"[{row_dict.get('trigger_type')}] {row_dict.get('name', '')} (狀態: {'啟用' if row_dict.get('is_active') else '停用'})"
+                        elif table_name == "schedule_tasks":
+                            row_dict["event"] = "schedule"
+                            row_dict["message"] = f"[{row_dict.get('schedule_type')}] {row_dict.get('content')} (頻道: #{row_dict.get('channel_id')})"
+                            row_dict["user"] = row_dict.get("display_name", "")
+                        else:
+                            row_dict["event"] = table_name
+
+                    entries.append(row_dict)
+
+                return jsonify({
+                    "entries": entries,
+                    "total": total_cnt,
+                    "page": page,
+                    "size": size,
+                    "pages": max(1, (total_cnt + size - 1) // size),
+                })
+            except Exception as sql_err:
+                logger.error("[WebUI] 讀取 SQLite 表格 (%s) 失敗: %s", db_target, sql_err)
+            finally:
+                if conn is not None:
+                    conn.close()
+
+    # =========================================================================
+    # B. 檔案日誌讀取 (備援或純文字日誌如 bot.log)
+    # =========================================================================
+    safe_name = Path(raw_filename).name
     log_path: Path = settings.DATA_DIR / safe_name
 
     if not log_path.exists():
         return jsonify({"entries": [], "total": 0, "page": page, "size": size})
 
-    entries: list[dict] = []
+    entries = []
 
     try:
         suffix = log_path.suffix.lower()
-        content = log_path.read_text(encoding="utf-8")
-
-        if suffix == ".jsonl":
-            # JSONL: each line is a JSON object (may be separated by blank lines)
-            raw_blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
-            # Also handle plain single-object-per-line format
-            if not raw_blocks:
-                raw_blocks = [ln.strip() for ln in content.splitlines() if ln.strip()]
-            for block in raw_blocks:
-                try:
-                    entries.append(json.loads(block))
-                except Exception:
-                    pass
-        elif suffix == ".json":
+        if suffix == ".json":
+            content = await asyncio.to_thread(log_path.read_text, encoding="utf-8")
             obj = json.loads(content)
-            if isinstance(obj, list):
-                entries = obj
-            else:
-                entries = [obj]
+            all_entries = obj if isinstance(obj, list) else [obj]
+            total = len(all_entries)
+            all_entries = list(reversed(all_entries))
+            start = (page - 1) * size
+            entries = all_entries[start : start + size]
         else:
-            # Plain text — wrap each line as a dict
-            for ln in content.splitlines():
-                if ln.strip():
+            # .jsonl, .log, .txt 等純文字/行導向日誌：使用反向分頁讀取
+            start = (page - 1) * size
+            total = await asyncio.to_thread(_count_file_lines, log_path)
+            raw_lines = await asyncio.to_thread(_read_lines_reversed, log_path, size, start)
+            if suffix == ".jsonl":
+                for ln in raw_lines:
+                    try:
+                        parsed = json.loads(ln)
+                        if isinstance(parsed, dict):
+                            entries.append(parsed)
+                        else:
+                            entries.append({"event": "raw", "message": ln})
+                    except Exception:
+                        entries.append({"event": "raw", "message": ln})
+            else:
+                for ln in raw_lines:
                     entries.append({"event": "raw", "message": ln})
+
+            if total < start + len(entries):
+                total = start + len(entries)
 
     except Exception as exc:
         return jsonify({"error": str(exc), "entries": [], "total": 0, "page": page, "size": size})
 
-    total = len(entries)
-    # Newest first
-    entries = list(reversed(entries))
-    start = (page - 1) * size
-    paginated = entries[start : start + size]
-
     return jsonify(
         {
-            "entries": paginated,
+            "entries": entries,
             "total": total,
             "page": page,
             "size": size,
@@ -533,6 +847,16 @@ async def auth_login() -> tuple[Response, int] | Response:
     if is_locked:
         remaining_min = max(1, (remaining_sec + 59) // 60)
         logger.warning("[SECURITY] Blocked login attempt from locked IP: %s (%d sec remaining)", ip, remaining_sec)
+        try:
+            from mod.audit_manager import audit_manager
+            audit_manager.record_security_event(
+                action="IP_BLOCKED_ATTEMPT",
+                ip=ip,
+                username="admin",
+                details=f"已鎖定之 IP 嘗試存取登入介面，尚餘 {remaining_sec} 秒",
+            )
+        except Exception:
+            pass
         return jsonify({
             "status": "error",
             "message": f"登入失敗次數過多，該 IP 已暫時鎖定，請於 {remaining_min} 分鐘後再試！",
@@ -543,9 +867,9 @@ async def auth_login() -> tuple[Response, int] | Response:
     password = str(data.get("password", ""))
     username = str(data.get("username", "admin")).strip() or "admin"
 
-    target_pw = str(getattr(settings, "WEB_UI_PASSWORD", "1919810"))
+    target_pw = str(getattr(settings, "WEB_UI_PASSWORD", ""))
     # 恆定時間密碼比對，徹底消滅時序攻擊 (Timing Attack)
-    is_valid = hmac.compare_digest(password.encode("utf-8"), target_pw.encode("utf-8"))
+    is_valid = bool(target_pw) and hmac.compare_digest(password.encode("utf-8"), target_pw.encode("utf-8"))
 
     if not is_valid:
         now = time.time()
@@ -561,6 +885,16 @@ async def auth_login() -> tuple[Response, int] | Response:
         if len(attempts) >= max_attempts:
             _locked_ips[ip] = now + lockout_mins * 60
             logger.warning("[SECURITY] IP %s triggered brute-force lockout (%d attempts in 1 min)", ip, len(attempts))
+            try:
+                from mod.audit_manager import audit_manager
+                audit_manager.record_security_event(
+                    action="IP_LOCKED",
+                    ip=ip,
+                    username=username,
+                    details=f"密碼連續錯誤達 {max_attempts} 次，觸發安全封鎖 {lockout_mins} 分鐘",
+                )
+            except Exception:
+                pass
             return jsonify({
                 "status": "error",
                 "message": f"密碼錯誤連達 {max_attempts} 次，該 IP 已觸發安全機制封鎖 {lockout_mins} 分鐘！",
@@ -568,6 +902,16 @@ async def auth_login() -> tuple[Response, int] | Response:
             }), 429
 
         logger.warning("[SECURITY] Failed login attempt from IP %s for user '%s' (%d/%d)", ip, username, len(attempts), max_attempts)
+        try:
+            from mod.audit_manager import audit_manager
+            audit_manager.record_security_event(
+                action="LOGIN_FAILED",
+                ip=ip,
+                username=username,
+                details=f"管理員登入密碼錯誤 ({len(attempts)}/{max_attempts})",
+            )
+        except Exception:
+            pass
         return jsonify({
             "status": "error",
             "message": f"管理員密碼錯誤！（警告：連續失敗 {max_attempts} 次將自動鎖定 IP）",
@@ -643,136 +987,184 @@ async def auth_check() -> Response | tuple[Response, int] | Any:
     })
 
 
-@app.route("/api/services/status", methods=["GET"])
-async def get_services_status() -> Response | tuple[Response, int] | Any:
-    """即時檢測 Ollama, LM Studio, Stable Diffusion / ComfyUI 等地端 AI 服務連線狀態與延遲。"""
-    import time
-    services: list[dict[str, Any]] = []
+_SERVICES_CACHE: dict[str, Any] | None = None
+_SERVICES_CACHE_TIME: float = 0.0
+_SERVICES_CACHE_TTL: float = 5.0  # 快取 5 秒，與前端 5 秒輪詢對齊，並避免短時間高頻重複探測
 
-    # 1. Ollama LLM
+
+async def _probe_ollama(client: httpx.AsyncClient) -> dict[str, Any]:
+    """探測 Ollama 服務狀態與可用模型清單。"""
     ollama_url = getattr(settings, "OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
     try:
         t0 = time.time()
-        async with httpx.AsyncClient(timeout=settings.WEB_UI_HTTP_TIMEOUT) as client:
-            resp = await client.get(f"{ollama_url}/api/tags")
-            ping_ms = int((time.time() - t0) * 1000)
-            if resp.status_code == 200:
-                data = resp.json()
-                models = [m.get("name") for m in data.get("models", [])]
-                services.append({
-                    "id": "ollama",
-                    "name": "Ollama LLM 服務",
-                    "icon": "🦙",
-                    "url": ollama_url,
-                    "status": "online",
-                    "ping_ms": ping_ms,
-                    "details": f"服務線上，共偵測到 {len(models)} 個可用模型",
-                    "models": models[:6],
-                })
-            else:
-                services.append({"id": "ollama", "name": "Ollama LLM 服務", "icon": "🦙", "url": ollama_url, "status": "offline", "ping_ms": ping_ms, "details": f"HTTP {resp.status_code}", "models": []})
+        resp = await client.get(f"{ollama_url}/api/tags")
+        ping_ms = int((time.time() - t0) * 1000)
+        if resp.status_code == 200:
+            data = resp.json()
+            models = [m.get("name") for m in data.get("models", [])]
+            return {
+                "id": "ollama",
+                "name": "Ollama LLM 服務",
+                "icon": "🦙",
+                "url": ollama_url,
+                "status": "online",
+                "ping_ms": ping_ms,
+                "details": f"服務線上，共偵測到 {len(models)} 個可用模型",
+                "models": models[:6],
+            }
+        return {"id": "ollama", "name": "Ollama LLM 服務", "icon": "🦙", "url": ollama_url, "status": "offline", "ping_ms": ping_ms, "details": f"HTTP {resp.status_code}", "models": []}
     except Exception:
-        services.append({"id": "ollama", "name": "Ollama LLM 服務", "icon": "🦙", "url": ollama_url, "status": "offline", "ping_ms": 0, "details": "未啟動或連線超時", "models": []})
+        return {"id": "ollama", "name": "Ollama LLM 服務", "icon": "🦙", "url": ollama_url, "status": "offline", "ping_ms": 0, "details": "未啟動或連線超時", "models": []}
 
-    # 2. FreeToken MoE 推理引擎
+
+async def _probe_freetoken(client: httpx.AsyncClient) -> dict[str, Any]:
+    """探測 FreeToken MoE 引擎狀態。"""
     freetoken_url = getattr(settings, "LLM_BASE_URL", getattr(settings, "FREETOKEN_BASE_URL", "http://localhost:1919/v1")).rstrip("/")
     try:
         t0 = time.time()
-        async with httpx.AsyncClient(timeout=settings.WEB_UI_HTTP_TIMEOUT) as client:
-            resp = await client.get(f"{freetoken_url}/models")
-            ping_ms = int((time.time() - t0) * 1000)
-            if resp.status_code == 200:
-                data = resp.json()
-                models = [m.get("id") for m in data.get("data", [])] if isinstance(data, dict) else []
-                services.append({
-                    "id": "freetoken",
-                    "name": "FreeToken MoE 引擎",
-                    "icon": "🧠",
-                    "url": freetoken_url,
-                    "status": "online",
-                    "ping_ms": ping_ms,
-                    "details": f"服務線上，已加載 {len(models)} 個 MoE 專家模型",
-                    "models": models[:6],
-                })
-            else:
-                services.append({"id": "freetoken", "name": "FreeToken MoE 引擎", "icon": "🧠", "url": freetoken_url, "status": "offline", "ping_ms": ping_ms, "details": f"HTTP {resp.status_code}", "models": []})
+        resp = await client.get(f"{freetoken_url}/models")
+        ping_ms = int((time.time() - t0) * 1000)
+        if resp.status_code == 200:
+            data = resp.json()
+            models = [m.get("id") for m in data.get("data", [])] if isinstance(data, dict) else []
+            return {
+                "id": "freetoken",
+                "name": "FreeToken MoE 引擎",
+                "icon": "🧠",
+                "url": freetoken_url,
+                "status": "online",
+                "ping_ms": ping_ms,
+                "details": f"服務線上，已加載 {len(models)} 個 MoE 專家模型",
+                "models": models[:6],
+            }
+        return {"id": "freetoken", "name": "FreeToken MoE 引擎", "icon": "🧠", "url": freetoken_url, "status": "offline", "ping_ms": ping_ms, "details": f"HTTP {resp.status_code}", "models": []}
     except Exception:
-        services.append({"id": "freetoken", "name": "FreeToken MoE 引擎", "icon": "🧠", "url": freetoken_url, "status": "offline", "ping_ms": 0, "details": "未啟動或連線超時 (Port 1919)", "models": []})
+        return {"id": "freetoken", "name": "FreeToken MoE 引擎", "icon": "🧠", "url": freetoken_url, "status": "offline", "ping_ms": 0, "details": "未啟動或連線超時 (Port 1919)", "models": []}
 
-    # 3. LM Studio (向下相容)
+
+async def _probe_lms(client: httpx.AsyncClient) -> dict[str, Any]:
+    """探測 LM Studio 服務狀態。"""
     lms_url = getattr(settings, "LMS_BASE_URL", "http://localhost:1234/v1").rstrip("/")
     try:
         t0 = time.time()
-        async with httpx.AsyncClient(timeout=settings.WEB_UI_HTTP_TIMEOUT) as client:
-            resp = await client.get(f"{lms_url}/models")
-            ping_ms = int((time.time() - t0) * 1000)
-            if resp.status_code == 200:
-                data = resp.json()
-                models = [m.get("id") for m in data.get("data", [])]
-                services.append({
-                    "id": "lms",
-                    "name": "LM Studio 服務",
-                    "icon": "🤖",
-                    "url": lms_url,
-                    "status": "online",
-                    "ping_ms": ping_ms,
-                    "details": f"服務線上，已加載 {len(models)} 個模型",
-                    "models": models[:6],
-                })
-            else:
-                services.append({"id": "lms", "name": "LM Studio 服務", "icon": "🤖", "url": lms_url, "status": "offline", "ping_ms": ping_ms, "details": f"HTTP {resp.status_code}", "models": []})
+        resp = await client.get(f"{lms_url}/models")
+        ping_ms = int((time.time() - t0) * 1000)
+        if resp.status_code == 200:
+            data = resp.json()
+            models = [m.get("id") for m in data.get("data", [])]
+            return {
+                "id": "lms",
+                "name": "LM Studio 服務",
+                "icon": "🤖",
+                "url": lms_url,
+                "status": "online",
+                "ping_ms": ping_ms,
+                "details": f"服務線上，已加載 {len(models)} 個模型",
+                "models": models[:6],
+            }
+        return {"id": "lms", "name": "LM Studio 服務", "icon": "🤖", "url": lms_url, "status": "offline", "ping_ms": ping_ms, "details": f"HTTP {resp.status_code}", "models": []}
     except Exception:
-        services.append({"id": "lms", "name": "LM Studio 服務", "icon": "🤖", "url": lms_url, "status": "offline", "ping_ms": 0, "details": "未啟動或連線超時", "models": []})
+        return {"id": "lms", "name": "LM Studio 服務", "icon": "🤖", "url": lms_url, "status": "offline", "ping_ms": 0, "details": "未啟動或連線超時", "models": []}
 
-    # 3. vLLM Engine
+
+async def _probe_vllm(client: httpx.AsyncClient) -> dict[str, Any]:
+    """探測 vLLM 引擎服務狀態。"""
     vllm_url = getattr(settings, "VLLM_BASE_URL", "http://localhost:8000/v1").rstrip("/")
     try:
         t0 = time.time()
-        async with httpx.AsyncClient(timeout=settings.WEB_UI_HTTP_TIMEOUT) as client:
-            resp = await client.get(f"{vllm_url}/models")
-            ping_ms = int((time.time() - t0) * 1000)
-            if resp.status_code == 200:
-                data = resp.json()
-                models = [m.get("id") for m in data.get("data", [])]
-                services.append({
-                    "id": "vllm",
-                    "name": "vLLM 引擎服務",
-                    "icon": "⚡",
-                    "url": vllm_url,
-                    "status": "online",
-                    "ping_ms": ping_ms,
-                    "details": f"服務線上，已加載 {len(models)} 個模型",
-                    "models": models[:6],
-                })
-            else:
-                services.append({"id": "vllm", "name": "vLLM 引擎服務", "icon": "⚡", "url": vllm_url, "status": "offline", "ping_ms": ping_ms, "details": f"HTTP {resp.status_code}", "models": []})
+        resp = await client.get(f"{vllm_url}/models")
+        ping_ms = int((time.time() - t0) * 1000)
+        if resp.status_code == 200:
+            data = resp.json()
+            models = [m.get("id") for m in data.get("data", [])]
+            return {
+                "id": "vllm",
+                "name": "vLLM 引擎服務",
+                "icon": "⚡",
+                "url": vllm_url,
+                "status": "online",
+                "ping_ms": ping_ms,
+                "details": f"服務線上，已加載 {len(models)} 個模型",
+                "models": models[:6],
+            }
+        return {"id": "vllm", "name": "vLLM 引擎服務", "icon": "⚡", "url": vllm_url, "status": "offline", "ping_ms": ping_ms, "details": f"HTTP {resp.status_code}", "models": []}
     except Exception:
-        services.append({"id": "vllm", "name": "vLLM 引擎服務", "icon": "⚡", "url": vllm_url, "status": "offline", "ping_ms": 0, "details": "未啟動或連線超時 (Port 8000)", "models": []})
+        return {"id": "vllm", "name": "vLLM 引擎服務", "icon": "⚡", "url": vllm_url, "status": "offline", "ping_ms": 0, "details": "未啟動或連線超時 (Port 8000)", "models": []}
 
-    # 4. Stable Diffusion WebUI / ComfyUI 繪圖引擎
-    sd_url = "http://127.0.0.1:7860"
+
+async def _probe_sd_webui(client: httpx.AsyncClient) -> dict[str, Any]:
+    """探測 Stable Diffusion WebUI / ComfyUI 繪圖引擎狀態。"""
+    sd_url = getattr(settings, "SD_WEBUI_URL", "http://127.0.0.1:7860").rstrip("/")
     try:
         t0 = time.time()
-        async with httpx.AsyncClient(timeout=settings.WEB_UI_HTTP_TIMEOUT) as client:
-            resp = await client.get(f"{sd_url}/sdapi/v1/options")
-            ping_ms = int((time.time() - t0) * 1000)
-            if resp.status_code == 200:
-                services.append({
-                    "id": "sd_webui",
-                    "name": "Stable Diffusion WebUI",
-                    "icon": "🎨",
-                    "url": sd_url,
-                    "status": "online",
-                    "ping_ms": ping_ms,
-                    "details": "地端繪圖引擎 API 運作良好",
-                    "models": [],
-                })
-            else:
-                services.append({"id": "sd_webui", "name": "Stable Diffusion WebUI", "icon": "🎨", "url": sd_url, "status": "offline", "ping_ms": ping_ms, "details": f"HTTP {resp.status_code}", "models": []})
+        resp = await client.get(f"{sd_url}/sdapi/v1/options")
+        ping_ms = int((time.time() - t0) * 1000)
+        if resp.status_code == 200:
+            return {
+                "id": "sd_webui",
+                "name": "Stable Diffusion WebUI",
+                "icon": "🎨",
+                "url": sd_url,
+                "status": "online",
+                "ping_ms": ping_ms,
+                "details": "地端繪圖引擎 API 運作良好",
+                "models": [],
+            }
+        return {"id": "sd_webui", "name": "Stable Diffusion WebUI", "icon": "🎨", "url": sd_url, "status": "offline", "ping_ms": ping_ms, "details": f"HTTP {resp.status_code}", "models": []}
     except Exception:
-        services.append({"id": "sd_webui", "name": "Stable Diffusion WebUI", "icon": "🎨", "url": sd_url, "status": "offline", "ping_ms": 0, "details": "未啟動或連線超時 (Port 7860)", "models": []})
+        return {"id": "sd_webui", "name": "Stable Diffusion WebUI", "icon": "🎨", "url": sd_url, "status": "offline", "ping_ms": 0, "details": "未啟動或連線超時 (Port 7860)", "models": []}
 
-    return jsonify({"services": services, "checked_at": time.strftime("%H:%M:%S")})
+
+@app.route("/api/services/status", methods=["GET"])
+async def get_services_status() -> Response | tuple[Response, int] | Any:
+    """即時檢測 Ollama, LM Studio, Stable Diffusion / ComfyUI 等地端 AI 服務連線狀態與延遲（並行探測與快取）。"""
+    global _SERVICES_CACHE, _SERVICES_CACHE_TIME
+    now = time.time()
+    if _SERVICES_CACHE is not None and (now - _SERVICES_CACHE_TIME) < _SERVICES_CACHE_TTL:
+        return jsonify(_SERVICES_CACHE)
+
+    async with httpx.AsyncClient(timeout=settings.WEB_UI_HTTP_TIMEOUT) as client:
+        results = await asyncio.gather(
+            _probe_ollama(client),
+            _probe_freetoken(client),
+            _probe_lms(client),
+            _probe_vllm(client),
+            _probe_sd_webui(client),
+            return_exceptions=True,
+        )
+
+    services: list[dict[str, Any]] = []
+    _probe_defaults: list[tuple[str, str, str]] = [
+        ("ollama", "Ollama LLM 服務", "🦙"),
+        ("freetoken", "FreeToken MoE 引擎", "🧠"),
+        ("lms", "LM Studio 服務", "🤖"),
+        ("vllm", "vLLM 引擎服務", "⚡"),
+        ("sd_webui", "Stable Diffusion WebUI", "🎨"),
+    ]
+    for idx, r in enumerate(results):
+        if isinstance(r, dict):
+            services.append(r)
+        elif isinstance(r, Exception):
+            srv_id, srv_name, srv_icon = _probe_defaults[idx] if idx < len(_probe_defaults) else ("unknown", "未知服務", "❓")
+            logger.warning("[WebUI] 服務狀態探測異常 (%s): %s", srv_id, r)
+            services.append({
+                "id": srv_id,
+                "name": srv_name,
+                "icon": srv_icon,
+                "url": "",
+                "status": "offline",
+                "ping_ms": 0,
+                "details": f"探測異常: {r}",
+                "models": [],
+            })
+
+    response_data = {
+        "services": services,
+        "checked_at": datetime.now(_TZ_TW).strftime("%H:%M:%S"),
+    }
+    _SERVICES_CACHE = response_data
+    _SERVICES_CACHE_TIME = now
+    return jsonify(response_data)
 
 
 @app.route("/api/audit/logs", methods=["GET"])
@@ -786,20 +1178,45 @@ async def get_audit_logs() -> tuple[Response, int] | Response:
 
 
 # ---------------------------------------------------------------------------
-# API: Settings
+# API: Soul Content & Settings
 # ---------------------------------------------------------------------------
+
+@app.route("/api/soul/content", methods=["GET"])
+async def get_soul_content() -> tuple[Response, int] | Response:
+    """讀取特定人設檔之內容，供 Web UI 動態切換預覽。"""
+    filename = request.args.get("file", "").strip()
+    if not filename or not filename.endswith(".md"):
+        return jsonify({"status": "error", "message": "無效的檔名"}), 400
+    safe_name = Path(filename).name
+    target_file = getattr(settings, "SOUL_DIR", Path("file/soul")) / safe_name
+    if not target_file.exists():
+        return jsonify({"status": "error", "message": "檔案不存在"}), 404
+    try:
+        content = target_file.read_text(encoding="utf-8")
+        return jsonify({"status": "success", "filename": safe_name, "content": content})
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 500
+
 
 @app.route("/api/settings", methods=["GET", "POST"])
 async def handle_settings() -> tuple[Response, int] | Response:
     """Get or update editable settings with strict Token/Key exclusion."""
-    sensitive_keywords = ("TOKEN", "PASSWORD", "SECRET", "KEY")
+    if not _is_admin_request(request):
+        return jsonify({"status": "error", "message": "需要登入管理員權限！"}), 401
+
+    sensitive_keywords = ("TOKEN", "PASSWORD", "SECRET", "KEY", "PATH", "DIR")
+    non_sensitive_whitelist = {
+        "LLM_MAX_OUTPUT_TOKENS",
+        "LLM_MAX_CONTEXT_TOKENS",
+        "CONTEXT_COMPRESS_TOKEN_THRESHOLD",
+    }
 
     if request.method == "GET":
         data = settings.get_editable_settings()
         # 資安防護：徹底移除所有含有 TOKEN、KEY、PASSWORD、SECRET 的敏感欄位，完全不輸出在 Web UI
         filtered_data = {
             k: v for k, v in data.items()
-            if not any(kw in k.upper() for kw in sensitive_keywords)
+            if k in non_sensitive_whitelist or not any(kw in k.upper() for kw in sensitive_keywords)
         }
         return jsonify(filtered_data)
 
@@ -814,14 +1231,20 @@ async def handle_settings() -> tuple[Response, int] | Response:
             continue
 
         # 2. 嚴格禁止透過 Web UI POST 修改任何 Token / Key / Password 類變數
-        if any(kw in k_str for kw in sensitive_keywords):
+        if k_str not in non_sensitive_whitelist and any(kw in k_str for kw in sensitive_keywords):
             failures.append(k_str)
             continue
 
         # 3. 防注入過濾：若非基本型別（如試圖傳遞 dict/list 等複雜結構），一律強制轉為純文字 string
         #    若是正常字串也確保以單純 str 型態處理，阻斷任何命令/語法注入
         safe_v: Any = raw_v
-        if isinstance(raw_v, str):
+        if isinstance(raw_v, list):
+            safe_v = [
+                str(item).strip()
+                for item in raw_v
+                if isinstance(item, (str, int, float, bool))
+            ]
+        elif isinstance(raw_v, str):
             safe_v = str(raw_v).strip()
             if safe_v.endswith(":") and any(
                 safe_v == f"{p}:" for p in ("freetoken", "ollama", "lms", "vllm", "openai", "deepseek", "gemini", "openrouter", "claude")
@@ -874,21 +1297,24 @@ async def restart_bot() -> Response | tuple[Response, int]:
         import sys
         logger = logging.getLogger(__name__)
         try:
-            (settings.DATA_DIR / "shutdown.signal").write_text(f"restart:{time.time()}", encoding="utf-8")
+            (settings.DATA_DIR / "shutdown.signal").write_text("restart", encoding="utf-8")
         except Exception:
             pass
         if sys.platform == "win32":
-            logger.info("Launching restart_sherry.bat ...")
-            bat = os.path.join(os.getcwd(), "restart_sherry.bat")
-            try:
-                subprocess.Popen(
-                    ["cmd.exe", "/C", bat],
-                    cwd=os.getcwd(),
-                    creationflags=0x00000010,  # CREATE_NEW_CONSOLE (完全脫離 VS Code 終端)
-                    close_fds=True,
-                )
-            except Exception as e:
-                logger.error("Failed to launch restart_sherry.bat: %s", e)
+            if os.environ.get("SHERRY_TAB_RUNNER") == "1":
+                logger.info("Running under Sherry Tab Runner (run_core.bat), in-place restart will trigger automatically.")
+            else:
+                logger.info("Launching restart_sherry.bat ...")
+                bat = os.path.join(os.getcwd(), "restart_sherry.bat")
+                try:
+                    subprocess.Popen(
+                        ["cmd.exe", "/C", bat],
+                        cwd=os.getcwd(),
+                        creationflags=0x00000010,  # CREATE_NEW_CONSOLE (完全脫離 VS Code 終端)
+                        close_fds=True,
+                    )
+                except Exception as e:
+                    logger.error("Failed to launch restart_sherry.bat: %s", e)
         else:
             logger.info("Launching restart_sherry.sh ...")
             sh = os.path.join(os.getcwd(), "restart_sherry.sh")
@@ -901,6 +1327,11 @@ async def restart_bot() -> Response | tuple[Response, int]:
                 )
             except Exception as e:
                 logger.error("Failed to launch restart_sherry.sh: %s", e)
+        try:
+            from core.db import checkpoint_all_dbs
+            checkpoint_all_dbs()
+        except Exception as cp_err:
+            logger.warning("Checkpoint before restart failed: %s", cp_err)
         logging.shutdown()
         os._exit(0)  # 立即由 OS 釋放 Socket，避免 Python GC 出現 SSL Transport 錯誤
 
@@ -935,6 +1366,11 @@ async def stop_bot() -> Response | tuple[Response, int]:
             (settings.DATA_DIR / "shutdown.signal").write_text(f"stop:{time.time()}", encoding="utf-8")
         except Exception:
             pass
+        try:
+            from core.db import checkpoint_all_dbs
+            checkpoint_all_dbs()
+        except Exception as cp_err:
+            logger.warning("Checkpoint before stop failed: %s", cp_err)
         logging.shutdown()
         os._exit(0)  # 立即終止 Python 程序與 Web UI
 
@@ -957,21 +1393,24 @@ async def update_and_restart() -> Response | tuple[Response, int] | Any:
         import sys
         logger = logging.getLogger(__name__)
         try:
-            (settings.DATA_DIR / "shutdown.signal").write_text(f"update:{time.time()}", encoding="utf-8")
+            (settings.DATA_DIR / "shutdown.signal").write_text("update", encoding="utf-8")
         except Exception:
             pass
         if sys.platform == "win32":
-            logger.info("Launching update_and_restart.bat (git pull + restart)...")
-            bat = os.path.join(os.getcwd(), "update_and_restart.bat")
-            try:
-                subprocess.Popen(
-                    ["cmd.exe", "/C", bat],
-                    cwd=os.getcwd(),
-                    creationflags=0x00000010,  # CREATE_NEW_CONSOLE
-                    close_fds=True,
-                )
-            except Exception as e:
-                logger.error("Failed to launch update_and_restart.bat: %s", e)
+            if os.environ.get("SHERRY_TAB_RUNNER") == "1":
+                logger.info("Running under Sherry Tab Runner (run_core.bat), in-place update will trigger automatically.")
+            else:
+                logger.info("Launching update_and_restart.bat (git pull + restart)...")
+                bat = os.path.join(os.getcwd(), "update_and_restart.bat")
+                try:
+                    subprocess.Popen(
+                        ["cmd.exe", "/C", bat],
+                        cwd=os.getcwd(),
+                        creationflags=0x00000010,  # CREATE_NEW_CONSOLE
+                        close_fds=True,
+                    )
+                except Exception as e:
+                    logger.error("Failed to launch update_and_restart.bat: %s", e)
         else:
             logger.info("Launching update_and_restart.sh (git pull + restart)...")
             sh = os.path.join(os.getcwd(), "update_and_restart.sh")
@@ -984,6 +1423,11 @@ async def update_and_restart() -> Response | tuple[Response, int] | Any:
                 )
             except Exception as e:
                 logger.error("Failed to launch update_and_restart.sh: %s", e)
+        try:
+            from core.db import checkpoint_all_dbs
+            checkpoint_all_dbs()
+        except Exception as cp_err:
+            logger.warning("Checkpoint before update failed: %s", cp_err)
         logging.shutdown()
         os._exit(0)  # 立即由 OS 釋放 Socket，避免 Python GC 出現 SSL Transport 錯誤
 
@@ -1039,19 +1483,19 @@ async def test_chat() -> Response | tuple[Response, int]:
 
     sys_prompt = (
         f"{head_persona}\n\n"
-        + (f"\n{web_context}\n⚠️【情報整合分析指令】：請參考上述『即時網路與實體檢索情報』，結合事實數據與妳的名偵探動態性格，為對方給出深入且充滿特色的解答與分析！\n\n" if web_context else "")
+        + (f"\n{web_context}\n⚠️【情報整合分析指令】：請參考上述『即時網路與實體檢索情報』，結合事實數據與妳的角色性格，為對方給出深入且充滿特色的解答與分析！\n\n" if web_context else "")
         + f"{user_message}\n"
         + (f"\n{tail_lore}\n" if tail_lore else "")
         + "【回覆規則】\n"
         + "1. 🎯 將 100% 注意力集中在『當下必須回應的目標』，給出最直接的回覆。\n"
-        + "2. 【豐富生動的對話】：請像個話多、熱情又愛互動的 15 歲台灣女高中生一樣聊天！可以講 2～4 句話，內容要有情緒起伏與可愛的互動。\n"
+        + "2. 【豐富生動的對話】：請徹底貫徹妳當前的角色人設特質與語氣風格進行對話！可以講 2～4 句話，內容要有情緒起伏與自然互動。\n"
         + "3. 不知道的事請直說，不要臆造資訊。\n"
-        + "4. 只輸出橘雪莉說的話，不要任何標籤、前綴。\n"
+        + "4. 只輸出妳說的話，不要任何標籤、前綴。\n"
         + "5. 絕對禁止使用 Markdown 格式 (包含反引號、粗體等)。"
     )
 
     user_instruct = (
-        f"🎯 對方（Web 穩定性測試員）剛剛對妳說：「{user_message}」\n橘雪莉的回覆（語氣親切活潑，正在協助進行穩定性測試）："
+        f"🎯 對方（Web 穩定性測試員）剛剛對妳說：「{user_message}」\n妳的回覆（正在協助進行穩定性測試）："
     )
 
     loop = asyncio.get_running_loop()
@@ -1109,112 +1553,189 @@ async def test_chat() -> Response | tuple[Response, int]:
 # System Metrics & Tasks APIs
 # ---------------------------------------------------------------------------
 
-_last_net_bytes: tuple[int, int, float] | None = None
-
-
-def _get_system_metrics() -> dict[str, Any]:
-    """Gather CPU, RAM, Network, and GPU metrics without heavy computation."""
-    import subprocess
-    import time
-
-    global _last_net_bytes
-
-    now = time.time()
-    cpu_percent = 0.0
-    cpu_count = 1
-    cpu_freq_mhz = 0.0
-    ram_total_gb = 0.0
-    ram_used_gb = 0.0
-    ram_percent = 0.0
-    sent_rate_kbps = 0.0
-    recv_rate_kbps = 0.0
-    total_sent_mb = 0.0
-    total_recv_mb = 0.0
-
-    # 1~3. CPU, RAM, Net Metrics (with psutil fallback)
-    try:
-        import psutil
-
-        cpu_percent = psutil.cpu_percent(interval=None)
-        cpu_count = psutil.cpu_count(logical=True) or 1
-        cpu_freq = psutil.cpu_freq()
-        cpu_freq_mhz = round(cpu_freq.current, 1) if cpu_freq else 0.0
-
-        mem = psutil.virtual_memory()
-        ram_total_gb = round(mem.total / (1024 ** 3), 2)
-        ram_used_gb = round(mem.used / (1024 ** 3), 2)
-        ram_percent = mem.percent
-
-        net_io = psutil.net_io_counters()
-        total_sent_mb = round(net_io.bytes_sent / (1024 ** 2), 1)
-        total_recv_mb = round(net_io.bytes_recv / (1024 ** 2), 1)
-
-        if _last_net_bytes is not None:
-            prev_sent, prev_recv, prev_time = _last_net_bytes
-            dt = max(0.1, now - prev_time)
-            sent_rate_kbps = round((net_io.bytes_sent - prev_sent) / 1024 / dt, 1)
-            recv_rate_kbps = round((net_io.bytes_recv - prev_recv) / 1024 / dt, 1)
-
-        _last_net_bytes = (net_io.bytes_sent, net_io.bytes_recv, now)
-    except ImportError:
-        # Fallback if psutil is not installed in the environment
-        pass
-
-    # 4. GPU Metrics (via nvidia-smi if available)
-    gpu_info: list[dict[str, Any]] = []
-    try:
-        cmd = [
-            "nvidia-smi",
-            "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
-            "--format=csv,noheader,nounits",
-        ]
-        out = subprocess.check_output(cmd, encoding="utf-8", timeout=1.5).strip()
-        if out:
-            for line in out.splitlines():
-                parts = [p.strip() for p in line.split(",")]
-                if len(parts) >= 5:
-                    gpu_name = parts[0]
-                    gpu_util = int(parts[1]) if parts[1].isdigit() else 0
-                    mem_used = int(parts[2]) if parts[2].isdigit() else 0
-                    mem_total = int(parts[3]) if parts[3].isdigit() else 1
-                    temp = int(parts[4]) if parts[4].isdigit() else 0
-                    gpu_info.append({
-                        "name": gpu_name,
-                        "utilization": gpu_util,
-                        "memory_used_mb": mem_used,
-                        "memory_total_mb": mem_total,
-                        "memory_percent": round((mem_used / mem_total) * 100, 1),
-                        "temperature_c": temp,
-                    })
-    except Exception:
-        pass
-
-    return {
-        "cpu": {
-            "percent": cpu_percent,
-            "count": cpu_count,
-            "freq_mhz": cpu_freq_mhz,
-        },
-        "ram": {
-            "used_gb": ram_used_gb,
-            "total_gb": ram_total_gb,
-            "percent": ram_percent,
-        },
-        "network": {
-            "sent_rate_kbps": sent_rate_kbps,
-            "recv_rate_kbps": recv_rate_kbps,
-            "total_sent_mb": round(net_io.bytes_sent / (1024 ** 2), 1),
-            "total_recv_mb": round(net_io.bytes_recv / (1024 ** 2), 1),
-        },
-        "gpu": gpu_info,
-        "timestamp": now,
-    }
+from core.sys_inspector.sampler import get_system_metrics_async as _async_get_system_metrics
 
 
 @app.route("/api/system/metrics", methods=["GET"])
 async def get_system_metrics() -> Response | tuple[Response, int] | Any:
     """Return real-time system resource metrics."""
-    return jsonify(_get_system_metrics())
+    metrics = await _async_get_system_metrics()
+    return jsonify(metrics)
+
+
+@app.route("/api/system/components/metrics", methods=["GET"])
+async def get_system_components_metrics() -> Response | tuple[Response, int] | Any:
+    """回傳各組件與功能級別之執行統計、延遲分位數與 Token 消耗（僅限管理員）。
+
+    Returns:
+        Response: 包含 components 指標字典之 JSON 物件，未授權則回傳 401。
+    """
+    if not _is_admin_request(request):
+        return jsonify({"status": "error", "message": "需要管理員權限以檢視組件效能指標"}), 401
+
+    from core.sys_inspector.metrics import component_metrics
+    summary = component_metrics.get_summary()
+    return jsonify(summary)
+
+
+@app.route("/api/system/components/metrics/reset", methods=["POST"])
+async def reset_system_components_metrics() -> Response | tuple[Response, int] | Any:
+    """重置所有組件之執行度量計數器（僅限管理員）。
+
+    Returns:
+        Response: 重置操作結果 JSON 物件，未授權則回傳 401。
+    """
+    if not _is_admin_request(request):
+        return jsonify({"status": "error", "message": "需要管理員權限以重置組件指標"}), 401
+
+    from core.sys_inspector.metrics import component_metrics
+    component_metrics.reset()
+    return jsonify({"status": "success", "message": "組件指標計數器已重置"})
+
+
+@app.route("/api/system/incidents", methods=["GET"])
+async def get_system_incidents() -> Response | tuple[Response, int] | Any:
+    """從集中化審計資料庫檢索近期異常與診斷事件（僅限管理員）。
+
+    Returns:
+        Response: 包含 incidents 列表之 JSON 物件，未授權則回傳 401。
+    """
+    if not _is_admin_request(request):
+        return jsonify({"status": "error", "message": "需要管理員權限以檢視異常事件紀錄"}), 401
+
+    from core.sys_inspector.audit_service import audit_service
+    incidents = await asyncio.to_thread(audit_service.get_audit_records, limit=50)
+    return jsonify({"incidents": incidents, "total": len(incidents)})
+
+
+@app.route("/api/system/audit/kpi", methods=["GET"])
+@app.route("/api/self_monitoring/kpi", methods=["GET"])
+@app.route("/api/self_monitoring/stats", methods=["GET"])
+async def get_audit_kpi() -> Response | tuple[Response, int] | Any:
+    """取得系統稽核 KPI 統計摘要。
+
+    Returns:
+        Response: KPI 統計資訊字典 JSON。
+    """
+    from core.sys_inspector.audit_service import audit_service
+    kpi = await asyncio.to_thread(audit_service.get_kpi_summary)
+    return jsonify({"status": "success", "kpi": kpi, "data": kpi})
+
+
+@app.route("/api/system/audit/records", methods=["GET"])
+@app.route("/api/self_monitoring/records", methods=["GET"])
+async def get_audit_records() -> Response | tuple[Response, int] | Any:
+    """分頁與條件查詢歷史稽核紀錄清單。
+
+    Query Args:
+        limit: 每頁筆數（預設 50，上限 100）。
+        offset: 偏移量（預設 0）。
+        severity: 嚴重等級篩選。
+        type: 事故類型篩選。
+
+    Returns:
+        Response: 包含 records 與分頁資訊之 JSON。
+    """
+    from core.sys_inspector.audit_service import audit_service
+
+    limit = min(max(request.args.get("limit", default=50, type=int), 1), 100)
+    offset = max(request.args.get("offset", default=0, type=int), 0)
+    severity = request.args.get("severity", default=None, type=str)
+    inc_type = request.args.get("type", default=None, type=str)
+
+    records = await asyncio.to_thread(
+        audit_service.get_audit_records,
+        limit=limit,
+        offset=offset,
+        severity=severity,
+        incident_type=inc_type,
+    )
+    return jsonify({
+        "status": "success",
+        "records": records,
+        "data": records,
+        "count": len(records),
+        "limit": limit,
+        "offset": offset,
+    })
+
+
+@app.route("/api/system/audit/records/<int:record_id>", methods=["GET"])
+@app.route("/api/self_monitoring/records/<int:record_id>", methods=["GET"])
+async def get_audit_record_detail(record_id: int) -> Response | tuple[Response, int] | Any:
+    """依 ID 查詢單筆稽核紀錄完整細節與診斷報告（需管理員權限）。
+
+    Args:
+        record_id: 紀錄主鍵 ID。
+
+    Returns:
+        Response: 單筆紀錄字典 JSON，未授權則回傳 401。
+    """
+    if not _is_admin_request(request):
+        return jsonify({
+            "status": "error",
+            "message": "查看詳細技術稽核報告與日誌跡證需要管理員權限，請先登入管理員帳號。",
+        }), 401
+
+    from core.sys_inspector.audit_service import audit_service
+    record = await asyncio.to_thread(audit_service.get_audit_record_by_id, record_id)
+    if not record:
+        return jsonify({"status": "error", "message": "查無此稽核紀錄"}), 404
+
+    return jsonify({"status": "success", "record": record})
+
+
+@app.route("/api/system/audit/diagnose", methods=["POST"])
+@app.route("/api/self_monitoring/diagnose", methods=["POST"])
+async def trigger_manual_audit() -> Response | tuple[Response, int] | Any:
+    """線上手動觸發 5 分鐘日誌技術稽核（需管理員權限）。
+
+    Returns:
+        Response: 診斷結果 JSON 物件，未授權則回傳 401。
+    """
+    if not _is_admin_request(request):
+        return jsonify({
+            "status": "error",
+            "message": "手動觸發技術稽核需要管理員權限，請先登入管理員帳號。",
+        }), 401
+
+    from core.sys_inspector.audit_service import audit_service
+
+    req_data: dict[str, Any] = {}
+    try:
+        req_data = await request.get_json(silent=True) or {}
+    except Exception:
+        pass
+
+    window_min = req_data.get("window_minutes", 5)
+    incident = audit_service.create_manual_check_incident(
+        user_name="WebUI-Admin",
+        extra_metrics={"source": "web_console_trigger"},
+    )
+
+    try:
+        diag, snapshot = await audit_service.diagnose_incident(incident, window_minutes=window_min)
+        return jsonify({
+            "status": "success",
+            "message": "技術稽核完成並已存入資料庫！",
+            "diagnosis": {
+                "bottleneck_category": diag.bottleneck_category,
+                "root_cause": diag.root_cause,
+                "key_evidence": diag.key_evidence,
+                "recommendations": diag.recommendations,
+                "model_name": diag.model_name,
+                "latency_ms": diag.diagnosis_latency_ms,
+            },
+            "snapshot_stats": {
+                "error_count": snapshot.error_count,
+                "warning_count": snapshot.warning_count,
+                "total_lines": snapshot.total_lines,
+            },
+        })
+    except Exception as exc:
+        logger.error("WebUI 手動執行技術稽核失敗: %s", exc)
+        return jsonify({"status": "error", "message": f"執行技術稽核失敗: {exc}"}), 500
+
 
 
 @app.route("/api/system/tasks", methods=["GET"])
@@ -1259,7 +1780,10 @@ async def delete_scheduled_task(task_id: str) -> Response | tuple[Response, int]
 async def get_dashboard_data() -> Response | tuple[Response, int] | Any:
     """Return unified dashboard summary payload (git info, bot summary, system summary, queues)."""
     try:
-        disk_git = _get_git_info()
+        disk_git, sys_metrics = await asyncio.gather(
+            _async_get_git_info(),
+            _async_get_system_metrics(),
+        )
         running_git = _STARTUP_GIT_INFO
         r_hash = running_git.get("commit_hash", "unknown")
         d_hash = disk_git.get("commit_hash", "unknown")
@@ -1273,7 +1797,6 @@ async def get_dashboard_data() -> Response | tuple[Response, int] | Any:
         voice_count = len(bot.voice_clients) if (bot and hasattr(bot, "voice_clients")) else 0
 
         # System summary
-        sys_metrics = _get_system_metrics()
         cpu_percent = sys_metrics.get("cpu", {}).get("percent", 0)
         ram_data = sys_metrics.get("ram", {})
         mem_used_gb = ram_data.get("used_gb", 0)
@@ -1332,7 +1855,7 @@ async def get_dashboard_data() -> Response | tuple[Response, int] | Any:
                 "brain_llm": brain_queue_count,
                 "schedule": schedule_count,
             },
-            "version": "v1.4.1",
+            "version": APP_VERSION,
         })
     except Exception as exc:
         logger.error("get_dashboard_data error: %s", exc)
@@ -1510,24 +2033,67 @@ def _discover_and_mount_mod_plugins(app_instance: Quart, bot_inst: Any = None) -
         except Exception as exc:
             logger.warning("Failed to auto-mount Web UI Blueprint for mod [%s]: %s", mod_key, exc)
 
+    # ── Mount handlers.spark Web UI Blueprint ───────────
+    try:
+        from handlers.spark.web import set_bot_instance as set_spark_bot_instance, spark_bp
+        if bot_inst is not None:
+            set_spark_bot_instance(bot_inst)
+        if hasattr(spark_bp, "name") and "spark" not in _mounted_mod_blueprints:
+            app_instance.register_blueprint(spark_bp)
+            _mounted_mod_blueprints["spark"] = spark_bp
+            logger.info("✅ Mounted Web UI Blueprint for core handler: [spark]")
+    except Exception as exc:
+        logger.warning("Failed to mount Web UI Blueprint for handlers.spark: %s", exc)
+
 
 # Initial mount of available mod blueprints
 _discover_and_mount_mod_plugins(app)
 
 
-# ── Static Asset & Dynamic View Routes for Mods ────────────
+# ── Static Asset & Dynamic View Routes for Mods & Handlers ─
 
-@app.route("/mod/<mod_key>/static/<path:filename>")
-async def serve_mod_static(mod_key: str, filename: str) -> Response | tuple[Response, int] | Any:
-    """Serve static files (JS, CSS, images) from mod/<mod_key>/static/ directory."""
+@app.route("/handlers/<handler_key>/static/<path:filename>")
+@app.route("/mod/<handler_key>/static/<path:filename>")
+async def serve_handler_or_mod_static(handler_key: str, filename: str) -> Response | tuple[Response, int] | Any:
+    """安全提供 handlers/<key>/static/ 或 mod/<key>/static/ 目錄下的靜態資源。
+
+    全面防禦 Windows 磁碟代號絕對路徑 (C:/...)、路徑遍歷 (..) 與目錄逃逸。
+    """
     from quart import send_file
 
-    if ".." in mod_key or ".." in filename or mod_key.startswith("_"):
+    # 嚴格校驗 handler_key 與 filename 字元合法性，阻擋任何絕對路徑或目錄逃逸
+    if (
+        not handler_key
+        or handler_key.startswith("_")
+        or ".." in handler_key
+        or "/" in handler_key
+        or "\\" in handler_key
+        or not re.match(r"^[a-zA-Z0-9_-]+$", handler_key)
+        or not filename
+        or ".." in filename
+        or "\\" in filename
+        or ":" in filename
+        or "\0" in filename
+        or filename.startswith("/")
+        or filename.startswith("\\")
+        or Path(filename).is_absolute()
+    ):
         return Response("Forbidden", status=403)
 
-    static_file = Path("mod") / mod_key / "static" / filename
-    if static_file.is_file():
-        return await send_file(static_file)
+    base_dir_handlers = (Path("handlers") / handler_key / "static").resolve()
+    base_dir_mod = (Path("mod") / handler_key / "static").resolve()
+
+    for base_dir in (base_dir_handlers, base_dir_mod):
+        if not base_dir.is_dir():
+            continue
+        try:
+            target_file = (base_dir / filename).resolve()
+            # 確保檔案解析後的完整真實路徑嚴格隸屬於 base_dir 目錄之下
+            if target_file.is_relative_to(base_dir) and target_file.is_file():
+                return await send_file(target_file)
+        except (ValueError, Exception):
+            continue
+
     return Response("Not Found", status=404)
 
 
@@ -1678,6 +2244,33 @@ async def toggle_module() -> tuple[Response, int] | Response:
     mod_config[mod_key] = enable
     _save_mod_config(mod_config)
 
+    # Dynamic hot-load / hot-unload Cog on Discord Bot instance
+    ext_name = f"mod.{mod_key}.cog"
+    if _bot_instance is not None:
+        try:
+            bot_extensions = getattr(_bot_instance, "extensions", {})
+            if not enable:
+                if ext_name in bot_extensions:
+                    await _bot_instance.unload_extension(ext_name)
+                    logger.info("✅ Dynamically unloaded extension [%s] on bot instance.", ext_name)
+                    if hasattr(_bot_instance, "tree") and hasattr(_bot_instance.tree, "sync"):
+                        try:
+                            await _bot_instance.tree.sync()
+                        except Exception as sync_err:
+                            logger.debug("Tree sync after unload [%s]: %s", ext_name, sync_err)
+            else:
+                cog_file = Path("mod") / mod_key / "cog.py"
+                if cog_file.exists() and ext_name not in bot_extensions:
+                    await _bot_instance.load_extension(ext_name)
+                    logger.info("✅ Dynamically loaded extension [%s] on bot instance.", ext_name)
+                    if hasattr(_bot_instance, "tree") and hasattr(_bot_instance.tree, "sync"):
+                        try:
+                            await _bot_instance.tree.sync()
+                        except Exception as sync_err:
+                            logger.debug("Tree sync after load [%s]: %s", ext_name, sync_err)
+        except Exception as bot_exc:
+            logger.warning("Failed to dynamically toggle extension [%s] on bot: %s", ext_name, bot_exc)
+
     # Audit log
     try:
         from mod.audit_manager import audit_manager
@@ -1697,7 +2290,7 @@ async def toggle_module() -> tuple[Response, int] | Response:
         "status": "success",
         "mod_key": mod_key,
         "enabled": enable,
-        "message": f"模組「{mod_key}」已{action_zh}，請重啟雪莉以套用變更。",
+        "message": f"模組「{mod_key}」已{action_zh}！",
     })
 
 
@@ -1984,6 +2577,12 @@ async def start_server_async(bot: Any = None) -> None:
     if bot is not None:
         _discover_and_mount_mod_plugins(app, bot)
     import uvicorn
+
+    if getattr(settings, "_WEB_UI_PASSWORD_GENERATED", False):
+        logger.warning(
+            "⚠️ [SECURITY] 未配置環境變數 WEB_UI_PASSWORD，系統已動態生成隨機一次性管理員密碼：%s",
+            settings.WEB_UI_PASSWORD,
+        )
 
     ssl_certfile = settings.WEB_UI_SSL_CERT
     ssl_keyfile = settings.WEB_UI_SSL_KEY

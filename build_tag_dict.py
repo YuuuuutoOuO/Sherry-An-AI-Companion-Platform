@@ -25,7 +25,6 @@ import os
 import re
 import urllib.request
 import urllib.error
-from pathlib import Path
 from typing import Iterator
 
 import settings
@@ -220,7 +219,10 @@ _CC = _make_converter()
 
 def to_traditional(text: str) -> str:
     """簡轉繁工具。"""
-    return _CC.convert(text) if _CC else text
+    if _CC is None:
+        return text
+    converted: str = _CC.convert(text)
+    return converted
 
 
 def _clean_zh(raw: str) -> str:
@@ -237,7 +239,8 @@ def _get(url: str, timeout: int = 30) -> str:
         headers={"User-Agent": "build_tag_dict/3.0 (anime companion platform)"},
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8", errors="ignore")
+        raw: bytes = resp.read()
+    return raw.decode("utf-8", errors="ignore")
 
 
 def _parse_danbooru_csv(

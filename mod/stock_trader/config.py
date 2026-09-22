@@ -13,6 +13,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+try:
+    import settings as _settings
+except ImportError:
+    _settings = None  # type: ignore[assignment]
+
 # ---------------------------------------------------------------------------
 # Module Root & Project Root
 # ---------------------------------------------------------------------------
@@ -37,6 +42,12 @@ THOUGHTS_JSONL_PATH: Path = STOCK_DATA_DIR / "thoughts.jsonl"
 INITIAL_CAPITAL_USD: float = 10000.0   # 初始 10,000 美金
 FEE_RATE: float = 0.001                 # 常規手續費 0.1%
 MIN_SHARES: float = 0.01                # 至少交易 0.01 股
+
+# 由 Web UI 設定覆寫 (config_override.json)
+if _settings is not None:
+    INITIAL_CAPITAL_USD = float(getattr(_settings, "STOCK_TRADER_INITIAL_CAPITAL_USD", INITIAL_CAPITAL_USD))
+    FEE_RATE = float(getattr(_settings, "STOCK_TRADER_FEE_RATE", FEE_RATE))
+    MIN_SHARES = float(getattr(_settings, "STOCK_TRADER_MIN_SHARES", MIN_SHARES))
 
 # 美股盤中交易時段（台灣時間 23:00 ~ 04:00）
 TRADING_START_HOUR: int = 23

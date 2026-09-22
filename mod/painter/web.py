@@ -77,8 +77,16 @@ async def list_paintings() -> Response | tuple[Response, int] | Any:
         return jsonify({"paintings": [], "total": 0})
 
     paintings: list[dict[str, Any]] = []
-    for jpg_file in sorted(painting_dir.glob("*.jpg"), key=lambda p: p.stat().st_mtime, reverse=True):
-        json_file = jpg_file.with_suffix(".json")
+    seen_stems: set[str] = set()
+
+    # 1. 掃描所有圖片檔案 (*.jpg, *.jpeg, *.png, *.webp)
+    img_files: list[Path] = []
+    for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
+        img_files.extend(painting_dir.glob(ext))
+
+    for img_file in sorted(img_files, key=lambda p: p.stat().st_mtime, reverse=True):
+        seen_stems.add(img_file.stem)
+        json_file = img_file.with_suffix(".json")
         meta_data: dict[str, Any] = {}
         if json_file.exists():
             try:
@@ -87,17 +95,41 @@ async def list_paintings() -> Response | tuple[Response, int] | Any:
             except Exception:
                 pass
 
-        stat = jpg_file.stat()
+        stat = img_file.stat()
         created_iso = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
         paintings.append({
-            "filename": jpg_file.name,
-            "url": f"/api/painter/paintings/{jpg_file.name}",
-            "prompt": meta_data.get("prompt", jpg_file.stem),
+            "filename": img_file.name,
+            "url": f"/api/painter/paintings/{img_file.name}",
+            "prompt": meta_data.get("prompt", img_file.stem),
             "style": meta_data.get("style", "freestyle"),
             "author_name": meta_data.get("author_name", "雪莉"),
             "created_at": meta_data.get("created_at", created_iso),
             "duration_sec": meta_data.get("duration_sec", 0.0),
             "command_count": meta_data.get("command_count", 0),
+            "size_bytes": stat.st_size,
+        })
+
+    # 2. 掃描尚未生成對應圖片的獨立 .json 繪畫檔
+    for json_file in sorted(painting_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if json_file.stem in seen_stems:
+            continue
+        meta_data = {}
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                meta_data = json.load(f)
+        except Exception:
+            continue
+        stat = json_file.stat()
+        created_iso = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
+        paintings.append({
+            "filename": json_file.name,
+            "url": f"/api/painter/paintings/{json_file.name}",
+            "prompt": meta_data.get("prompt", json_file.stem),
+            "style": meta_data.get("style", "freestyle"),
+            "author_name": meta_data.get("author_name", "雪莉"),
+            "created_at": meta_data.get("created_at", created_iso),
+            "duration_sec": meta_data.get("duration_sec", 0.0),
+            "command_count": meta_data.get("command_count", len(meta_data.get("commands", []))),
             "size_bytes": stat.st_size,
         })
 

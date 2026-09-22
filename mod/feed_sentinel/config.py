@@ -29,6 +29,25 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 # ---------------------------------------------------------------------------
 ENABLED: bool = os.getenv("SENTINEL_ENABLED", "True").lower() in ("true", "1", "yes")
 
+
+def is_enabled() -> bool:
+    """動態判斷情報哨兵模組是否啟用（優先讀取 data/mod_config.json，其次環境變數）。
+
+    Returns:
+        bool: 若啟用回傳 True，否則回傳 False。
+    """
+    config_path = PROJECT_ROOT / "data" / "mod_config.json"
+    if config_path.exists():
+        try:
+            import json
+            raw = config_path.read_text(encoding="utf-8")
+            data = json.loads(raw)
+            if isinstance(data, dict) and "feed_sentinel" in data:
+                return bool(data["feed_sentinel"])
+        except Exception:
+            pass
+    return os.getenv("SENTINEL_ENABLED", "True").lower() in ("true", "1", "yes")
+
 # ---------------------------------------------------------------------------
 # 推播時段與頻率控制
 # ---------------------------------------------------------------------------

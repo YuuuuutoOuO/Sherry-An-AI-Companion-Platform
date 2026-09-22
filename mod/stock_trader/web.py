@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from quart import Blueprint, Response, jsonify, request
+from quart import Blueprint, Response, jsonify
 
 logger = logging.getLogger(__name__)
 
@@ -221,8 +221,7 @@ async def get_stock_trader_targets() -> Response | tuple[Response, int] | Any:
             if hasattr(cog, "get_watch_tickers"):
                 tickers = cog.get_watch_tickers()
 
-        loop = asyncio.get_running_loop()
-        indicators = await loop.run_in_executor(None, fetcher.get_stock_info_raw, tickers)
+        indicators = await asyncio.to_thread(fetcher.get_stock_info_raw, tickers)
 
         return jsonify({
             "status": "success",
@@ -261,8 +260,7 @@ async def refresh_stock_trader_prices() -> Response | tuple[Response, int] | Any
     try:
         if cog and hasattr(cog, "fetcher"):
             tickers = cog.get_watch_tickers()
-            loop = asyncio.get_running_loop()
-            indicators = await loop.run_in_executor(None, cog.fetcher.get_stock_info_raw, tickers)
+            indicators = await asyncio.to_thread(cog.fetcher.get_stock_info_raw, tickers)
             price_map = {item["ticker"]: item["close"] for item in indicators} if indicators else {}
             account = cog.algo.update_prices(price_map)
             return jsonify({
@@ -279,8 +277,7 @@ async def refresh_stock_trader_prices() -> Response | tuple[Response, int] | Any
             algo = AlgoTrader(repository=repo)
             fetcher = DataFetcher()
             tickers = ["NVDA", "AAPL", "MSFT", "GOOG", "AMZN", "META", "TSLA", "TSM", "AVGO", "AMD"]
-            loop = asyncio.get_running_loop()
-            indicators = await loop.run_in_executor(None, fetcher.get_stock_info_raw, tickers)
+            indicators = await asyncio.to_thread(fetcher.get_stock_info_raw, tickers)
             price_map = {item["ticker"]: item["close"] for item in indicators} if indicators else {}
             account = algo.update_prices(price_map)
             return jsonify({

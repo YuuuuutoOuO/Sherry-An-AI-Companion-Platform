@@ -1,7 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
 import io
-import json
 import logging
 import time
 from typing import Any, Literal
@@ -11,6 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 
 import settings
+from handlers.social.utils import is_admin_user
 
 logger = logging.getLogger(__name__)
 
@@ -57,14 +57,37 @@ class ConfigSelect(discord.ui.Select):
         await interaction.response.send_modal(ConfigModal(key, current_value))
 
 class ConfigView(discord.ui.View):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, author_id: int | None = None):
+        super().__init__(timeout=180)
+        self.author_id = author_id
+        self.message: discord.Message | None = None
         self.add_item(ConfigSelect())
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self.author_id and interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ 權限不足，你不能操作此設定面板！", ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
 
 class MemoryControlView(discord.ui.View):
     def __init__(self, target_user_id: int):
         super().__init__(timeout=settings.DISCORD_UI_VIEW_TIMEOUT)
         self.target_user_id = target_user_id
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                item.disabled = True
 
     @discord.ui.button(label="✅ 沒錯，很準", style=discord.ButtonStyle.success)
     async def correct_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -97,11 +120,7 @@ class AdminCog(commands.Cog):
         self.bot = bot
 
     def _is_admin(self, interaction: discord.Interaction) -> bool:
-        if not settings.ADMIN_ROLE_IDS:
-            return True
-        if isinstance(interaction.user, discord.Member):
-            return any(r.id in settings.ADMIN_ROLE_IDS for r in interaction.user.roles)
-        return False
+        return is_admin_user(interaction)
 
     def _is_super_admin(self, interaction: discord.Interaction) -> bool:
         if not settings.ADMIN_USER_IDS:
@@ -155,24 +174,88 @@ class AdminCog(commands.Cog):
                 await interaction.response.send_message(f"{target_mention} 目前沒有任何氛圍記憶可以清除。")
 
     # ── /memory ────────────────────────────────────────────────
-    @app_commands.command(name="memory", description="🧠 檢視或清除成員的長期記憶")
+    @app_commands.command(name="memory", description="🧠 檢視或清除成員長期記憶 / 查看世界記憶")
     @app_commands.describe(
         action="選擇執行的動作",
-        user="選擇目標成員",
+        user="選擇目標成員（show/clear 適用；world 時可略）",
     )
     @app_commands.choices(action=[
         app_commands.Choice(name="👀 檢視記憶 (show) — 檢視成員長期記憶 (僅自己可見)", value="show"),
         app_commands.Choice(name="🧹 清除記憶 (clear) — 清除成員長期記憶 (管理員)", value="clear"),
+        app_commands.Choice(name="🌍 世界記憶 (world) — 查看當前伺服器世界記憶", value="world"),
     ])
     async def memory_command(
         self,
         interaction: discord.Interaction,
         action: app_commands.Choice[str],
-        user: discord.Member,
+        user: discord.Member | None = None,
     ) -> None:
+        """處理 /memory 斜線指令（檢視/清除成員長期記憶或查看伺服器世界記憶）。
+
+        Args:
+            interaction: Discord 互動事件物件。
+            action: 選擇執行的動作（show/clear/world）。
+            user: 目標成員（show/clear 適用，world 時可省略）。
+
+        Returns:
+            None
+        """
         mem_mgr: Any = self.bot.get_cog("MemoryManager")
-        if not mem_mgr:
+        if not mem_mgr and action.value != "world":
             await interaction.response.send_message("記憶管理器未加載！", ephemeral=True)
+            return
+
+        if action.value == "world":
+            # ── 查看當前伺服器世界記憶 ────────────────────────────────
+            defer_func = getattr(interaction.response, "defer", None)
+            deferred = False
+            if asyncio.iscoroutinefunction(defer_func):
+                await interaction.response.defer(ephemeral=True)
+                deferred = True
+            elif callable(defer_func):
+                try:
+                    res = defer_func(ephemeral=True)
+                    if asyncio.iscoroutine(res):
+                        await res
+                        deferred = True
+                except TypeError:
+                    pass
+
+            async def _reply_world(content: str) -> None:
+                if deferred:
+                    await interaction.followup.send(content, ephemeral=True)
+                else:
+                    await interaction.response.send_message(content, ephemeral=True)
+
+            guild = interaction.guild
+            if guild is None:
+                await _reply_world("無法取得當前伺服器資訊。")
+                return
+            try:
+                from handlers.memory.world_memory import get_world_memory_snippet
+                server_id = str(guild.id)
+                snippet = await asyncio.to_thread(
+                    get_world_memory_snippet, days=7, min_importance=1, server_id=server_id, limit=25
+                )
+                if not snippet:
+                    await _reply_world(
+                        f"🌍 目前伺服器 **(ID: `{server_id}`)** 尚無世界記憶摘要。\n"
+                        "> 密集對話會在**深夜**自動濃縮沉澱為世界記憶。"
+                    )
+                    return
+                guild_name = guild.name
+                msg_content = f"**🌍 {guild_name} 世界記憶（最近 7 天）:**\n```\n{snippet}\n```"
+                if len(msg_content) > 1950:
+                    available = 1950 - len(f"**🌍 {guild_name} 世界記憶（最近 7 天）:**\n```\n\n...(篇幅過長截斷)\n```")
+                    msg_content = f"**🌍 {guild_name} 世界記憶（最近 7 天）:**\n```\n{snippet[:available]}\n...(篇幅過長截斷)\n```"
+                await _reply_world(msg_content)
+            except Exception as exc:
+                logger.warning("/memory world 查詢失敗: %s", exc)
+                await _reply_world("❌ 查詢世界記憶失敗。")
+            return
+
+        if user is None:
+            await interaction.response.send_message("❌ 此動作需要指定目標成員 (`user`)。", ephemeral=True)
             return
 
         if action.value == "show":
@@ -226,7 +309,7 @@ class AdminCog(commands.Cog):
             if not self._is_super_admin(interaction):
                 await interaction.response.send_message("你沒有權限執行此指令！", ephemeral=True)
                 return
-            await interaction.response.send_message("⚙️ **系統動態設定面板**\n請選擇欲修改的參數（修改後將即刻生效並保存）", view=ConfigView(), ephemeral=True)
+            await interaction.response.send_message("⚙️ **系統動態設定面板**\n請選擇欲修改的參數（修改後將即刻生效並保存）", view=ConfigView(author_id=interaction.user.id), ephemeral=True)
             return
 
         if not self._is_admin(interaction):
@@ -255,8 +338,7 @@ class AdminCog(commands.Cog):
             await interaction.response.defer(ephemeral=True)
             try:
                 await self.bot.reload_extension(target)
-                synced = await self.bot.tree.sync()
-                await interaction.followup.send(f"✅ 已成功重新加載 `{target}`，並完成 `{len(synced)}` 個指令樹同步！")
+                await interaction.followup.send(f"✅ 已成功重新加載模組 `{target}`！")
             except Exception as e:
                 await interaction.followup.send(f"❌ 重新加載失敗：{e}")
 
@@ -323,6 +405,10 @@ class AdminCog(commands.Cog):
         enable: bool | None = None,
         context: str | None = None,
     ) -> None:
+        if not self._is_admin(interaction):
+            await interaction.response.send_message("❌ 權限不足！此除錯指令僅限管理員使用。", ephemeral=True)
+            return
+
         action_val = action.value if action else "status"
 
         if action_val == "status":
@@ -458,9 +544,8 @@ class AdminCog(commands.Cog):
         from handlers.social.memory_builder import build_user_memory_block
         from handlers.social.persona import build_dynamic_persona
 
-        context_script = await fetch_context_script(channel, None) if channel else ""
-        trigger_line = f"🎯 【當下必須回應的目標】：[{display_name}] 正在對妳說：「{user_query}」"
-        full_context = f"{context_script}\n\n{trigger_line}" if context_script else trigger_line
+        context_script = await fetch_context_script(channel, None, bot=self.bot) if channel else ""
+        full_context = context_script
 
         # 2. 擷取頻道話題氛圍與長期記憶
         vibe_mgr: Any = self.bot.get_cog("VibeManager")
@@ -547,6 +632,7 @@ class AdminCog(commands.Cog):
             now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             planned_tasks_text = "\n".join([f"- **工具**: `{t.tool}` | **參數**: `{t.input}`" for t in plan.tasks]) or "- (無規劃任何工具)"
             tool_obs_text = "\n".join([f"- **[{name}]**:\n```\n{obs}\n```" for name, obs in obs_pairs]) or "- (未調用任何工具回傳)"
+            trigger_line = f"**{display_name}** (`{user_id}`): {user_query}"
 
             report_md = (
                 f"# 🐞 雪莉除錯流程分析報告 (Sherry Full Prompt & Pipeline Dump)\n\n"

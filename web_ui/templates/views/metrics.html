@@ -85,4 +85,203 @@
             </div>
         </div>
     </div>
+
+    <!-- ===== ENTERPRISE AI APM & OBSERVABILITY CENTER (ADMIN ONLY) ===== -->
+    <div class="metrics-section-title" style="margin: 2.5rem 0 1rem 0; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <span style="font-size: 1.4rem;">📊</span>
+            <div>
+                <span style="font-weight: 700; font-size: 1.15rem; color: var(--text-main, #fff);">全景組件 APM 效能與可觀測性中心</span>
+                <div style="font-size: 0.78rem; color: var(--text-muted, #888); margin-top: 2px;">Enterprise AI APM · 延遲分佈 · Token 成本 · 實時鏈路追蹤</div>
+            </div>
+        </div>
+        <div id="component-metrics-actions" class="hidden" style="display: flex; gap: 0.5rem; align-items: center;">
+            <span class="apm-status-pill" style="display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; background: rgba(0, 230, 118, 0.1); border: 1px solid rgba(0, 230, 118, 0.3); border-radius: 20px; font-size: 0.78rem; color: #00e676;">
+                <span class="pulse-dot" style="width: 7px; height: 7px; border-radius: 50%; background: #00e676;"></span>
+                APM 實時採樣中
+            </span>
+            <button class="btn-restart" onclick="resetComponentMetrics()" title="重置組件度量計數器" style="border-radius: 8px;">🧹 重置統計</button>
+            <button class="btn-update" onclick="loadComponentMetrics()" title="重新整理" style="border-radius: 8px;">🔄 重新整理</button>
+        </div>
+    </div>
+
+    <!-- Admin Required Notice -->
+    <div id="component-metrics-auth-notice" class="metric-card" style="padding: 1.5rem; text-align: center; color: var(--text-muted, #888);">
+        <span>🔒 需要管理員登入以檢視各組件（SEARCH, STOCK, PIXIV, DRAW, LLM 等）詳細效能與資源消耗數據。</span>
+    </div>
+
+    <!-- Component Metrics Container (Hidden if not admin) -->
+    <div id="component-metrics-container" class="hidden">
+        <!-- 1. Executive APM Summary Cards -->
+        <div class="apm-kpi-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+            <!-- KPI 1: System Health -->
+            <div class="metric-card" style="padding: 1rem 1.25rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                    <span style="font-size: 0.8rem; color: var(--text-muted, #aaa); font-weight: 600; text-transform: uppercase;">系統可用性 SLO</span>
+                    <span style="font-size: 1.1rem;">🛡️</span>
+                </div>
+                <div id="apm-kpi-health-val" style="font-size: 1.6rem; font-weight: 700; color: #00e676;">100.0%</div>
+                <div id="apm-kpi-health-sub" style="font-size: 0.75rem; color: var(--text-muted, #888); margin-top: 4px;">全組件健康運行</div>
+            </div>
+
+            <!-- KPI 2: Total Throughput & RPM -->
+            <div class="metric-card" style="padding: 1rem 1.25rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                    <span style="font-size: 0.8rem; color: var(--text-muted, #aaa); font-weight: 600; text-transform: uppercase;">總吞吐量 / 負載</span>
+                    <span style="font-size: 1.1rem;">⚡</span>
+                </div>
+                <div id="apm-kpi-calls-val" style="font-size: 1.6rem; font-weight: 700; color: var(--text-main, #fff);">0 次</div>
+                <div id="apm-kpi-calls-sub" style="font-size: 0.75rem; color: var(--text-muted, #888); margin-top: 4px;">0.0 RPM · 活躍: 0 / 18</div>
+            </div>
+
+            <!-- KPI 3: Global P95 Latency -->
+            <div class="metric-card" style="padding: 1rem 1.25rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                    <span style="font-size: 0.8rem; color: var(--text-muted, #aaa); font-weight: 600; text-transform: uppercase;">全域 P95 尾部延遲</span>
+                    <span style="font-size: 1.1rem;">⏱️</span>
+                </div>
+                <div id="apm-kpi-latency-val" style="font-size: 1.6rem; font-weight: 700; color: #40c4ff;">0 ms</div>
+                <div id="apm-kpi-latency-sub" style="font-size: 0.75rem; color: var(--text-muted, #888); margin-top: 4px;">平均耗時: 0 ms</div>
+            </div>
+
+            <!-- KPI 4: Total LLM Tokens -->
+            <div class="metric-card" style="padding: 1rem 1.25rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                    <span style="font-size: 0.8rem; color: var(--text-muted, #aaa); font-weight: 600; text-transform: uppercase;">LLM Token 總吞吐</span>
+                    <span style="font-size: 1.1rem;">🪙</span>
+                </div>
+                <div id="apm-kpi-tokens-val" style="font-size: 1.6rem; font-weight: 700; color: #ffd740;">0</div>
+                <div id="apm-kpi-tokens-sub" style="font-size: 0.75rem; color: var(--text-muted, #888); margin-top: 4px;">P: 0 | C: 0 (~$0.00)</div>
+            </div>
+
+            <!-- KPI 5: Concurrency -->
+            <div class="metric-card" style="padding: 1rem 1.25rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                    <span style="font-size: 0.8rem; color: var(--text-muted, #aaa); font-weight: 600; text-transform: uppercase;">並行活躍負載</span>
+                    <span style="font-size: 1.1rem;">🔄</span>
+                </div>
+                <div id="apm-kpi-concurrency-val" style="font-size: 1.6rem; font-weight: 700; color: #e040fb;">0</div>
+                <div id="apm-kpi-concurrency-sub" style="font-size: 0.75rem; color: var(--text-muted, #888); margin-top: 4px;">系統工作執行緒閒置中</div>
+            </div>
+        </div>
+
+        <!-- 2. Controls & Segment Filters -->
+        <div class="apm-controls-bar" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem;">
+            <!-- Category Pills -->
+            <div class="apm-pills" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                <button class="apm-pill-btn active" data-cat="all" onclick="setApmCategory('all')">全部 (<span id="count-all">18</span>)</button>
+                <button class="apm-pill-btn" data-cat="core_engine" onclick="setApmCategory('core_engine')">🧠 AI 推論核心 (<span id="count-core_engine">2</span>)</button>
+                <button class="apm-pill-btn" data-cat="core_tool" onclick="setApmCategory('core_tool')">🛠️ 常用工具 (<span id="count-core_tool">7</span>)</button>
+                <button class="apm-pill-btn" data-cat="mod_plugin" onclick="setApmCategory('mod_plugin')">🧩 外掛哨兵 (<span id="count-mod_plugin">9</span>)</button>
+            </div>
+
+            <!-- Right Controls: Hide Inactive & Search -->
+            <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+                <label style="display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--text-main, #eee); cursor: pointer; user-select: none;">
+                    <input type="checkbox" id="apm-hide-inactive-toggle" onchange="toggleApmHideInactive()" style="accent-color: var(--sherry-blue, #2979ff);">
+                    <span>僅顯示活躍組件</span>
+                </label>
+                <div style="position: relative;">
+                    <input type="text" id="apm-search-input" placeholder="🔍 快速篩選模組..." oninput="filterApmSearch()" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 5px 12px; font-size: 0.85rem; color: #fff; width: 180px;">
+                </div>
+            </div>
+        </div>
+
+        <!-- 3. Enterprise APM Grid Table -->
+        <div class="table-responsive" style="background: var(--card-bg, rgba(255,255,255,0.03)); border-radius: 8px; border: 1px solid var(--border-color, rgba(255,255,255,0.08)); overflow-x: auto;">
+            <table class="table apm-table" style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.88rem;">
+                <thead>
+                    <tr style="border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.1)); background: rgba(255,255,255,0.02); color: var(--text-muted, #aaa);">
+                        <th style="padding: 12px 14px;">組件 / 模組名稱</th>
+                        <th style="padding: 12px 14px;">調用吞吐 (次數 / RPM)</th>
+                        <th style="padding: 12px 14px;">延遲分佈 (P50 / P95 / Max)</th>
+                        <th style="padding: 12px 14px; min-width: 110px;">近 15 次耗時走勢</th>
+                        <th style="padding: 12px 14px;">LLM Tokens (Prompt / Comp)</th>
+                        <th style="padding: 12px 14px;">可用性 SLO (健康度)</th>
+                        <th style="padding: 12px 14px;">狀態 / 活躍</th>
+                        <th style="padding: 12px 14px; text-align: center;">鏈路診斷</th>
+                    </tr>
+                </thead>
+                <tbody id="component-metrics-tbody">
+                    <!-- Populated dynamically by app.js -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- 4. Component Trace Deep-Dive Modal (鏈路下鑽診斷視窗) -->
+    <div id="apm-trace-modal" class="modal-overlay hidden" style="position: fixed; inset: 0; background: rgba(0,0,0,0.75); backdrop-filter: blur(4px); z-index: 9999; display: flex; align-items: center; justify-content: center;">
+        <div class="modal-card" style="background: #181c24; border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; width: 90%; max-width: 860px; max-height: 85vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.6);">
+            <!-- Modal Header -->
+            <div style="padding: 1.25rem 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.02);">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <span id="apm-modal-icon" style="font-size: 1.4rem;">⚙️</span>
+                    <div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span id="apm-modal-title" style="font-size: 1.15rem; font-weight: 700; color: #fff;">組件名稱</span>
+                            <span id="apm-modal-cat-badge" class="task-type-badge badge-neutral" style="font-size: 0.75rem;">類別</span>
+                            <span id="apm-modal-health-badge" class="task-type-badge badge-ok" style="font-size: 0.75rem;">HEALTHY</span>
+                        </div>
+                        <div id="apm-modal-subtitle" style="font-size: 0.78rem; color: #888; margin-top: 2px;">組件近 20 筆真實執行鏈路 (Traces) 與分位數診斷</div>
+                    </div>
+                </div>
+                <button class="btn-cancel" onclick="closeApmTraceModal()" style="padding: 4px 10px; font-size: 1rem; border-radius: 6px;">✕</button>
+            </div>
+
+            <!-- Modal Body: Metrics Summary + Recent Traces -->
+            <div style="padding: 1.5rem; overflow-y: auto; flex: 1;">
+                <!-- Mini Stats Bar inside Modal -->
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem;">
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); padding: 0.75rem; border-radius: 8px; text-align: center;">
+                        <div style="font-size: 0.75rem; color: #888;">總調用次數</div>
+                        <div id="apm-modal-calls" style="font-size: 1.2rem; font-weight: 700; color: #fff; margin-top: 2px;">0 次</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); padding: 0.75rem; border-radius: 8px; text-align: center;">
+                        <div style="font-size: 0.75rem; color: #888;">平均延遲 (Avg)</div>
+                        <div id="apm-modal-avg" style="font-size: 1.2rem; font-weight: 700; color: #40c4ff; margin-top: 2px;">0 ms</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); padding: 0.75rem; border-radius: 8px; text-align: center;">
+                        <div style="font-size: 0.75rem; color: #888;">P50 中位數</div>
+                        <div id="apm-modal-p50" style="font-size: 1.2rem; font-weight: 700; color: #69f0ae; margin-top: 2px;">0 ms</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); padding: 0.75rem; border-radius: 8px; text-align: center;">
+                        <div style="font-size: 0.75rem; color: #888;">P95 尾部延遲</div>
+                        <div id="apm-modal-p95" style="font-size: 1.2rem; font-weight: 700; color: #ffd740; margin-top: 2px;">0 ms</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); padding: 0.75rem; border-radius: 8px; text-align: center;">
+                        <div style="font-size: 0.75rem; color: #888;">極端峰值 (Max)</div>
+                        <div id="apm-modal-max" style="font-size: 1.2rem; font-weight: 700; color: #ff5252; margin-top: 2px;">0 ms</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); padding: 0.75rem; border-radius: 8px; text-align: center;">
+                        <div style="font-size: 0.75rem; color: #888;">總消耗 Token</div>
+                        <div id="apm-modal-tokens" style="font-size: 1.2rem; font-weight: 700; color: #e040fb; margin-top: 2px;">0</div>
+                    </div>
+                </div>
+
+                <!-- Recent Traces Table inside Modal -->
+                <div style="font-size: 0.9rem; font-weight: 600; color: #ddd; margin-bottom: 0.75rem; display: flex; justify-content: space-between; align-items: center;">
+                    <span>近 20 筆調用鏈路記錄 (Execution Traces)</span>
+                    <span style="font-size: 0.75rem; color: #777;">倒序排列 (最新在前)</span>
+                </div>
+                <div class="table-responsive" style="background: rgba(0,0,0,0.2); border-radius: 8px; border: 1px solid rgba(255,255,255,0.06);">
+                    <table class="table" style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.84rem;">
+                        <thead>
+                            <tr style="border-bottom: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.02); color: #888;">
+                                <th style="padding: 8px 12px;">調用時間</th>
+                                <th style="padding: 8px 12px;">Trace ID</th>
+                                <th style="padding: 8px 12px;">執行耗時</th>
+                                <th style="padding: 8px 12px;">Tokens (P / C)</th>
+                                <th style="padding: 8px 12px;">結果狀態</th>
+                                <th style="padding: 8px 12px;">錯誤 / 備註</th>
+                            </tr>
+                        </thead>
+                        <tbody id="apm-modal-traces-tbody">
+                            <!-- Populated dynamically by app.js -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
+

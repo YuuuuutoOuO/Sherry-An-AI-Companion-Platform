@@ -1,0 +1,15 @@
+services:
+  sherry:
+    build: .
+    image: sherry:latest
+    container_name: sherry
+    env_file:
+      - .env
+    environment:
+      WEB_UI_HOST: 0.0.0.0
+      WEB_UI_PORT: "8763"
+    ports:
+      - "8763:8763"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

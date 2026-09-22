@@ -21,7 +21,7 @@ import discord
 from discord.ext import commands
 
 import settings
-from handlers.bot_brain import BotBrain, InferenceTask
+from handlers.bot_brain import InferenceTask
 from handlers.roast.manager import roast_manager
 from handlers.roast.models import RoastRule
 from handlers.roast.utils import clean_roast_reply, extract_fallback_roast
@@ -231,6 +231,7 @@ class RoastCog(commands.Cog, name="RoastCog"):
                 if cleaned:
                     reply_text = cleaned
             except (asyncio.TimeoutError, Exception) as exc:
+                setattr(task, "is_cancelled", True)
                 logger.warning("Roast LLM inference timed out or failed: %s; using safe guide fallback", exc)
 
         # 若 LLM 未回傳或失敗，採用安全提取的兜底台詞（絕不暴露 Prompt / 方括號指令）
@@ -253,7 +254,12 @@ class RoastCog(commands.Cog, name="RoastCog"):
 
         # 🚀 依使用者指定規範：不使用 Discord 訊息引用回覆 (reference=None)，直接留言在頻道下方！
         try:
-            await simulate_typing_and_send_to_channel(channel, reply_text)
+            await simulate_typing_and_send_to_channel(
+                channel,
+                reply_text,
+                intent_name="ROAST",
+                target_user_id=message.author.id,
+            )
         except Exception as exc:
             logger.error("Failed to send roast message to channel: %s", exc)
 

@@ -1,19 +1,21 @@
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, Literal
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 
 import settings
 from handlers.memory.storage import (
-    load_user_memory, save_user_memory,
-    UserProfile, UserMemoryStore, UserFact, make_fact,
+    load_user_memory, save_single_user_memory, delete_user_memory,
+    UserProfile, UserMemoryStore, UserFact,
     sanitize_aliases, sanitize_and_merge_facts,
+    deduplicate_facts,
     get_diverse_facts_for_context,
     MAX_FACTS_IN_CONTEXT, MAX_FACTS_PER_USER,
 )
-from handlers.bot_brain import BotBrain, InferenceTask
+from handlers.bot_brain import InferenceTask
 from handlers.memory.relationship import RelationshipManager
 from handlers.memory.chat_logger import flush_chat_logs
 
@@ -62,8 +64,13 @@ class MemoryManager(commands.Cog):
     @tasks.loop(seconds=60.0)
     async def _flush_loop(self) -> None:
         """週期性（每 60 秒）檢查並落盤好感度與聊天緩衝。"""
-        self.relations.flush()
-        flush_chat_logs()
+        # 把同步磁碟寫入丟到背景執行緒，避免卡住事件迴圈（延遲優化 C）
+        import asyncio
+        try:
+            await asyncio.to_thread(self.relations.flush)
+            await asyncio.to_thread(flush_chat_logs)
+        except Exception as exc:
+            logger.warning("MemoryManager: 背景落盤異常: %s", exc)
 
     # ==========================
     # 🔄 記憶庫重載（供 NightlyDigest 完成後同步 RAM）
@@ -83,11 +90,18 @@ class MemoryManager(commands.Cog):
     # ==========================
     # 給其他單位/子系統 公開查尋介接區的檢索系統
     # ==========================
-    def get_user_memory_snippet(self, user_id: int) -> str:
-        """產生注入 LLM Prompt 的使用者記憶片段（結合類別多樣性選取）。
+    def get_user_memory_snippet(
+        self,
+        user_id: int,
+        max_facts: int | None = None,
+        query_text: str = "",
+    ) -> str:
+        """產生注入 LLM Prompt 的使用者記憶片段（結合類別多樣性與 Query 相關性選取）。
 
         Args:
             user_id: Discord 使用者 ID。
+            max_facts: 注入的事實數量上限（若為 None 則使用 MAX_FACTS_IN_CONTEXT）。
+            query_text: 當前使用者輸入文字，用於關鍵字相關性打分（可選）。
 
         Returns:
             格式化後的長期記憶字串。
@@ -99,10 +113,12 @@ class MemoryManager(commands.Cog):
         clean_aliases = sanitize_aliases(profile.get("aliases", []))
         known_aliases = "、".join(clean_aliases) if clean_aliases else "查無特定曾用別稱"
 
-        # 採用類別多樣性輪替取樣，防止單一話題霸佔 Context
+        # 採用類別多樣性與關鍵字相關性取樣，防止單一話題霸佔 Context
+        limit_facts = max_facts if max_facts is not None else MAX_FACTS_IN_CONTEXT
         diverse_facts: list[UserFact] = get_diverse_facts_for_context(
             profile["facts"],
-            max_count=MAX_FACTS_IN_CONTEXT,
+            max_count=limit_facts,
+            query_text=query_text,
         )
         if not diverse_facts:
             return ""
@@ -142,7 +158,7 @@ class MemoryManager(commands.Cog):
         clean_aliases = sanitize_aliases(profile.get("aliases", []))
         known_aliases = "、".join(clean_aliases) if clean_aliases else "查無特定曾用別稱"
 
-        all_facts = profile.get("facts", [])
+        all_facts = deduplicate_facts(profile.get("facts", []))
         rule_facts = [f for f in all_facts if f.get("category") == "rule"]
         other_facts = [f for f in all_facts if f.get("category") != "rule"]
 
@@ -161,6 +177,35 @@ class MemoryManager(commands.Cog):
             + "\n\n".join(parts)
         )
         return snippet
+
+    # ==========================
+    # 隱私與記憶管理 Slash 指令 (/forget)
+    # ==========================
+    @app_commands.command(name="forget", description="清除或檢視雪莉對你的個人長期記憶 (GDPR/隱私規範)")
+    @app_commands.describe(action="操作項目：view (檢視) 或 clear_all (全部抹除)")
+    async def cmd_forget(
+        self,
+        interaction: discord.Interaction,
+        action: Literal["view", "clear_all"] = "view",
+    ) -> None:
+        """供使用者自主檢視或刪除在雪莉大腦中的個人特徵事實。"""
+        user_id = interaction.user.id
+        uid_str = str(user_id)
+
+        if action == "view":
+            snippet = self.get_full_user_memory_snippet(user_id)
+            if not snippet:
+                await interaction.response.send_message("雪莉目前沒有記錄關於你的特定長期事實喔！", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"🧠 **雪莉對你的記憶特徵：**\n\n{snippet}", ephemeral=True)
+        elif action == "clear_all":
+            if uid_str in self._store:
+                self._store.pop(uid_str, None)
+                delete_user_memory(user_id)
+                await interaction.response.send_message("已成功清除雪莉對你的所有長期記憶特徵！", ephemeral=True)
+            else:
+                delete_user_memory(user_id)
+                await interaction.response.send_message("查無你的長期記憶紀錄，已確保清除乾淨。", ephemeral=True)
 
     # ==========================
     # 不斷聆聽頻道廢水（背景吸收者 Listener）
@@ -222,7 +267,7 @@ class MemoryManager(commands.Cog):
 
         # 請 LLM 返回帶有 category 與 importance 的新格式
         prompt = (
-            "【全網段唯一靈魂資訊整理引擎(Reflection AI)】\n"
+            "【全網段唯一靈魂資訊整理引擎 (Reflection AI)】\n"
             f"這是一份來自群友「{author.display_name}」的過往發言紀錄：\n\n{texts}\n\n"
             "---神經指引手冊規定要求---\n"
             f"該群友目前已知的長期屬性：\n{current_facts_text}\n\n"
@@ -231,24 +276,27 @@ class MemoryManager(commands.Cog):
             "1. 【嚴格禁止主客體顛倒】：發話者對其他人說的話（例如：叫別人吃大便、罵別人、開玩笑說『你只能...』、『你去死』），"
             "是發話者對『其他人』的祈使或嘴砲句，絕對不可記為發話者本人的喜好或特質！\n"
             "2. 【嚴格過濾嘴砲與幹話】：群聊中的打鬧、互相嘲諷、無厘頭幹話或情緒發洩，請一律忽略，留下空陣列，寧缺勿濫！\n"
-            "3. 【嚴格別名判定】：只有發話者明確自我介紹（例如：『我叫XX』、『可以叫我XX』）才記入 aliases。"
+            "3. 【禁止公文套話與抽離元描述】：嚴禁使用『進行文字創作測試』、『進行日常對話』、『與特定角色互動』等抽象公文詞彙，必須精確記錄具體角色、情境設定與話題焦點！\n"
+            "4. 【嚴格別名判定】：只有發話者明確自我介紹（例如：『我叫XX』、『可以叫我XX』）才記入 aliases。"
             "絕對禁止將遊戲名稱（如賽爾號）、伺服器房號、動漫名、代號、泛稱（如群友、大家）或整句話記為 aliases！\n"
-            "4. 發言紀錄中出現的「[某群友]」是發話者在訊息中 TAG 的其他人，絕對不是發話者本人！\n"
-            "5. 分類規範（category）：\n"
+            "5. 發言紀錄中出現的「[某群友]」是發話者在訊息中 TAG 的其他人，絕對不是發話者本人！\n"
+            "6. 分類規範（category）：\n"
             "   - identity: 真實身份/職業/居住地/個人自稱\n"
-            "   - preference: 明確熱愛的遊戲/動漫/技術/興趣/食物\n"
+            "   - preference: 明確熱愛的遊戲/動漫/技術/食物，以及特定角色扮演情境偏好（如兄妹/主僕 RP）、性癖或情色互動喜好\n"
             "   - habit: 穩固生活作息/口頭禪/反覆出現的行為\n"
             "   - social: 與其他人（群友、家人、朋友）的關係，或他正在進行的長期項目\n"
-            "   - rule: 【最重要】他對雪莉（橘雪莉）的明確要求或溝通規則，如『叫我OO』『不要用模糊詞』『說話要直接』\n"
-            "6. 每條 fact 必須附上 importance（1~5整數）：\n"
-            "   1=短暫狀態  2=一般偏好  3=穩固習慣  4=重要特質  5=核心身份或最高規則\n\n"
+            "   - rule: 【嚴格限定】他對雪莉（橘雪莉）的明確溝通硬規則（如『叫我OO』『不要用模糊詞』『說話要直接』『禁止某稱呼』）。注意：個人性癖、情境愛好或角色扮演偏好一律歸入 preference，絕對不是 rule！\n"
+            "7. 每條 fact 必須附上 importance（1~5整數）：\n"
+            "   1=短暫狀態  2=一般偏好  3=穩固習慣  4=重要特質  5=核心身份或最高規則\n"
+            "8. 【合併與去重原則】：請參照既有屬性，若有相同話題或情境（如同一遊戲或按摩/角色設定），請整合成一條完整精練的事實，勿拆散為破碎多條！\n\n"
             "請只返回 JSON 格式，不可有任何其他文字：\n"
             '```json\n'
             '{"aliases": ["真實的綽號或自稱(若無則空陣列)"],\n'
             ' "facts": [\n'
-            '   {"fact": "他平時喜歡寫Python", "importance": 3, "category": "preference"},\n'
-            '   {"fact": "請叫他歐潤吉", "importance": 5, "category": "rule"},\n'
-            '   {"fact": "他正在開發雪莉 Discord 機器人", "importance": 4, "category": "social"}\n'
+            '   {"fact": "在角色扮演情境中偏好兄妹設定與沉浸式互動", "importance": 4, "category": "preference"},\n'
+            '   {"fact": "要求雪莉對話時必須直接稱呼他為主人", "importance": 5, "category": "rule"},\n'
+            '   {"fact": "偏好純愛互動並強烈排斥 NTR 題材", "importance": 4, "category": "preference"},\n'
+            '   {"fact": "正在深入玩韓版楓之谷並專注於裝備洗鍊", "importance": 3, "category": "preference"}\n'
             ' ]}\n'
             '```'
         )
@@ -282,7 +330,7 @@ class MemoryManager(commands.Cog):
                     facts=final_facts,
                 )
                 self._store[uid_str] = new_profile
-                save_user_memory(self._store, settings.USER_MEMORY_PATH)
+                save_single_user_memory(uid_str, new_profile, self._store, settings.USER_MEMORY_PATH)
                 logger.debug(
                     "[靈魂知識拓源] 使用者 [%s] 記憶更新完畢，共 %d 條 facts。",
                     author.display_name, len(final_facts),

@@ -48,4 +48,11 @@ class TextToSpeech:
                 os.remove(tmp_name)
 
     def unload(self) -> None:
+        """卸載 TTS 語音模型並釋放 GPU 快取顯存。"""
         self._model = None
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass

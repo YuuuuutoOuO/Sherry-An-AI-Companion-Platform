@@ -7,23 +7,28 @@
 discord.py>=2.4.0
 
 # Async HTTP client (Ollama + YouTube API calls)
-aiohttp>=3.9.0
+aiohttp>=3.14.3
 yt-dlp>=2024.0.0
 
 # Environment variable loader
-python-dotenv>=1.0.0
+python-dotenv>=1.2.3
 
-# Image generation
-pydantic>=2.0.0
+# Core AI & LLM Inference
+google-genai>=1.0.0
+
+# Web Scraping & Content Extraction (Deep Search, Feeds)
+beautifulsoup4>=4.12.0
+trafilatura>=2.2.0
+
+# Image & Multimedia Processing
+Pillow>=12.3.0
+imageio-ffmpeg>=0.6.0
 
 # Voice system (STT / TTS)
 transformers>=4.40.0
 huggingface_hub>=0.23.0
-librosa>=0.10.0
-soundfile>=0.12.1
 TTS>=0.22.0
 torch>=2.0.0
-torchaudio>=2.0.0
 numpy>=1.24.0,<2.0.0
 # silero-vad is typically downloaded via torch.hub, but we can add its dependencies if needed.
 
@@ -38,14 +43,13 @@ psutil>=5.9.0           # Web UI server: system CPU / RAM / Network metrics
 
 # --- Optional Modules Dependencies (mod/market_plugin) ---
 # 若不使用股票分析與 PTCG 卡片追蹤功能，可略過以下套件
-google-genai>=1.0.0
-apscheduler>=3.10.0
 finnhub-python>=2.4.19
 selenium>=4.18.0
-webdriver-manager>=4.0.1
-beautifulsoup4>=4.12.0
 # 修正與 TTS 套件的相依性衝突，鎖定為 2.0 以下的版本
 pandas>=1.4.0,<2.0.0
 
-davey
-PyNaCl
+# --- Discord Voice & E2EE Support ---
+# Discord 語音端對端加密（DAVE Protocol）與語音封包加解密（NaCl）
+PyNaCl>=1.6.2
+cryptography>=50.0.1
+davey>=0.1.6

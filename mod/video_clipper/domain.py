@@ -5,7 +5,6 @@ Domain entities and data models for video clip to GIF conversion.
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass(frozen=True)

@@ -6,9 +6,30 @@ warn_return_any = true
 no_implicit_optional = true
 ignore_missing_imports = true
 explicit_package_bases = true
+exclude = ["^Deprecated/", "^tests/"]
 
 [tool.coverage.report]
 fail_under = 80
 
 [tool.ruff]
 required-version = "0.6.9"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"settings.py" = ["F401", "E402"]
+"main.py" = ["E402"]
+"core/contracts.py" = ["E402"]
+"handlers/music/config.py" = ["E402"]
+"handlers/roast/manager.py" = ["E402"]
+"handlers/social/observability.py" = ["E402"]
+"handlers/social/utils.py" = ["E402"]
+"web_ui/server.py" = ["E402"]
+"tests/**" = ["E402"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+

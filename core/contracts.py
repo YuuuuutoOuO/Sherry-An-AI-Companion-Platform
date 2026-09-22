@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Literal
+from typing import Any, Awaitable, Callable, Literal, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,7 @@ class SherryRequest:
     source_type: Literal[
         "chat_message",
         "slash_command",
+        "context_menu",
         "component_interaction",
         "modal_submit",
         "system_heartbeat",
@@ -92,3 +93,52 @@ class MindSnapshot:
     current_mood: str
     system_health_score: float
     uptime_seconds: int
+
+
+@runtime_checkable
+class CloudInferenceProtocol(Protocol):
+    """雲端推論客戶端抽象協定 (Protocol)。
+
+    定義微核心 (SherryCore) 與系統稽核所依賴之雲端模型多模態分析介面，
+    實現乾淨架構 (Clean Architecture)，解除 core 對外部 mod.clients 之反向依賴。
+    """
+
+    async def summarize_text(
+        self,
+        text: str = "",
+        image_bytes: bytes = b"",
+        mime_type: str = "image/png",
+        image_url: str = "",
+    ) -> str:
+        """全能多模態摘要：自動識別純文字、網址/YouTube 與圖片，產出結構化繁中摘要。"""
+        ...
+
+    async def translate_text(self, text: str, target_lang: str = "繁體中文") -> str:
+        """將目標文字訊息翻譯為指定語言（預設繁體中文）。"""
+        ...
+
+    async def analyze_image(
+        self,
+        image_bytes: bytes = b"",
+        mime_type: str = "image/png",
+        user_prompt: str = "",
+        image_url: str = "",
+    ) -> str:
+        """對圖片進行多模態視覺辨識、程式報錯截圖診斷與圖表分析。"""
+        ...
+
+    async def summarize_url(self, raw_content: str) -> str:
+        """從文字中萃取 URL，並依類型進行內容深度摘要。"""
+        ...
+
+    async def extend_ask(
+        self,
+        target_text: str,
+        question: str = "",
+        context_history: str = "",
+        user_name: str = "",
+    ) -> str:
+        """針對指定訊息進行延伸追問。"""
+        ...
+
+

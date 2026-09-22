@@ -1,77 +1,103 @@
 """
 handlers/schedule_storage.py
 =============================
-排程 JSON 檔案讀寫模組 — 使用 asyncio.Lock 保護寫入競爭。
-
-所有 schedule.json 的存取均必須透過此模組，確保資料完整性。
+排程任務 SQLite 資料庫讀寫模組。
+所有 schedule 任務均持久化儲存於 data/schedules.db。
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import settings
+from core.db import db_transaction, get_db_connection
 
 logger = logging.getLogger(__name__)
 
+DB_PATH: Path = settings.DATA_DIR / "schedules.db"
 _lock = asyncio.Lock()
 
 
-def _default_schema() -> dict[str, Any]:
-    return {"tasks": []}
-
-
-async def _read_raw() -> dict[str, Any]:
-    """讀取 schedule.json 原始字典（不鎖定，供內部使用）。"""
-    path: Path = settings.SCHEDULE_PATH
-    if not path.exists():
-        return _default_schema()
+def _init_schedule_db() -> None:
+    """初始化 schedules.db 資料表與索引。"""
     try:
-        content = await asyncio.to_thread(path.read_text, encoding="utf-8")
-        data = json.loads(content) if content.strip() else _default_schema()
-        if not isinstance(data, dict) or "tasks" not in data:
-            return _default_schema()
-        return data
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.error("schedule_storage: 無法讀取 schedule.json: %s", exc)
-        return _default_schema()
+        with db_transaction(DB_PATH) as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS schedule_tasks (
+                    task_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    schedule_type TEXT NOT NULL,
+                    trigger_time INTEGER,
+                    cron_expr TEXT,
+                    content TEXT NOT NULL,
+                    is_active INTEGER NOT NULL DEFAULT 1
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_sched_user ON schedule_tasks(user_id);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_sched_trigger ON schedule_tasks(trigger_time);")
+    except Exception as e:
+        logger.error("[ScheduleStorage] 初始化 schedules.db 失敗: %s", e)
 
 
-async def _write_raw(data: dict[str, Any]) -> None:
-    """寫入 schedule.json（不鎖定，供內部使用）。"""
-    path: Path = settings.SCHEDULE_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    try:
-        content = json.dumps(data, ensure_ascii=False, indent=2)
-        await asyncio.to_thread(tmp.write_text, content, encoding="utf-8")
-        await asyncio.to_thread(tmp.replace, path)
-    except OSError as exc:
-        logger.error("schedule_storage: 寫入 schedule.json 失敗: %s", exc)
+_init_schedule_db()
+
+
+def _row_to_dict(r: Any) -> dict[str, Any]:
+    return {
+        "task_id": str(r["task_id"]),
+        "user_id": str(r["user_id"]),
+        "display_name": str(r["display_name"]),
+        "channel_id": str(r["channel_id"]),
+        "schedule_type": str(r["schedule_type"]),
+        "trigger_time": int(r["trigger_time"]) if r["trigger_time"] is not None else None,
+        "cron_expr": str(r["cron_expr"]) if r["cron_expr"] is not None else None,
+        "content": str(r["content"]),
+        "is_active": bool(r["is_active"]),
+    }
 
 
 async def load_all_tasks() -> list[dict[str, Any]]:
-    """取得所有排程任務（執行緒安全讀取）。"""
-    async with _lock:
-        data = await _read_raw()
-        tasks = data.get("tasks", [])
-        return tasks if isinstance(tasks, list) else []
+    """取得所有排程任務（WAL 模式多連線並發讀取）。"""
+    def _fetch() -> list[dict[str, Any]]:
+        try:
+            conn = get_db_connection(DB_PATH)
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM schedule_tasks")
+                rows = cur.fetchall()
+                return [_row_to_dict(r) for r in rows]
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error("[ScheduleStorage] 讀取任務清單失敗: %s", e)
+            return []
+
+    return await asyncio.to_thread(_fetch)
 
 
 async def load_tasks_by_user(user_id: str) -> list[dict[str, Any]]:
-    """取得指定使用者的所有排程任務（執行緒安全讀取）。"""
-    async with _lock:
-        data = await _read_raw()
-        tasks = data.get("tasks", [])
-        if isinstance(tasks, list):
-            return [t for t in tasks if isinstance(t, dict) and t.get("user_id") == user_id]
-        return []
+    """取得指定使用者的所有排程任務（WAL 模式多連線並發讀取）。"""
+    def _fetch() -> list[dict[str, Any]]:
+        try:
+            conn = get_db_connection(DB_PATH)
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM schedule_tasks WHERE user_id = ?", (str(user_id),))
+                rows = cur.fetchall()
+                return [_row_to_dict(r) for r in rows]
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error("[ScheduleStorage] 依使用者讀取任務失敗: %s", e)
+            return []
+
+    return await asyncio.to_thread(_fetch)
 
 
 async def add_task(
@@ -84,36 +110,12 @@ async def add_task(
     trigger_time: int | None = None,
     cron_expr: str | None = None,
 ) -> dict[str, Any]:
-    """
-    新增一個排程任務。
-
-    Parameters
-    ----------
-    user_id : str
-        使用者 Discord ID。
-    channel_id : str
-        要發送提醒的頻道 ID。
-    schedule_type : str
-        "once" 或 "cron"。
-    content : str
-        提醒事項內容。
-    display_name : str
-        使用者顯示名稱（建立時記錄，觸發時直接使用，避免快取失效）。
-    trigger_time : int | None
-        Unix timestamp，單次提醒用，僅 schedule_type == "once" 時有效。
-    cron_expr : str | None
-        Cron 表達式，週期提醒用，僅 schedule_type == "cron" 時有效。
-
-    Returns
-    -------
-    dict
-        新增完成的任務資料。
-    """
+    """新增一個排程任務。"""
     task_entry: dict[str, Any] = {
         "task_id": uuid.uuid4().hex,
-        "user_id": user_id,
+        "user_id": str(user_id),
         "display_name": display_name,
-        "channel_id": channel_id,
+        "channel_id": str(channel_id),
         "schedule_type": schedule_type,
         "trigger_time": trigger_time,
         "cron_expr": cron_expr,
@@ -122,9 +124,25 @@ async def add_task(
     }
 
     async with _lock:
-        data = await _read_raw()
-        data.setdefault("tasks", []).append(task_entry)
-        await _write_raw(data)
+        def _insert() -> None:
+            with db_transaction(DB_PATH) as cur:
+                cur.execute("""
+                    INSERT INTO schedule_tasks (
+                        task_id, user_id, display_name, channel_id, schedule_type, trigger_time, cron_expr, content, is_active
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+                """, (
+                    task_entry["task_id"],
+                    task_entry["user_id"],
+                    task_entry["display_name"],
+                    task_entry["channel_id"],
+                    task_entry["schedule_type"],
+                    task_entry["trigger_time"],
+                    task_entry["cron_expr"],
+                    task_entry["content"],
+                ))
+
+        await asyncio.to_thread(_insert)
 
     logger.info(
         "schedule_storage: added %s task=%s trigger=%s",
@@ -134,56 +152,45 @@ async def add_task(
 
 
 async def remove_task(task_id: str) -> bool:
-    """
-    移除指定排程任務。
-
-    Returns
-    -------
-    bool
-        True 表示成功刪除，False 表示找不到該 task_id。
-    """
+    """移除指定排程任務。"""
     async with _lock:
-        data = await _read_raw()
-        tasks = data.get("tasks", [])
-        before = len(tasks)
-        data["tasks"] = [t for t in tasks if t.get("task_id") != task_id]
-        after = len(data["tasks"])
-        if before == after:
-            return False
-        await _write_raw(data)
-    logger.info("schedule_storage: removed task=%s", task_id)
-    return True
+        def _delete() -> bool:
+            try:
+                with db_transaction(DB_PATH) as cur:
+                    cur.execute("DELETE FROM schedule_tasks WHERE task_id = ?", (str(task_id),))
+                    return cur.rowcount > 0
+            except Exception as e:
+                logger.error("[ScheduleStorage] 刪除任務失敗: %s", e)
+                return False
 
-
-async def deactivate_task(task_id: str) -> bool:
-    """將任務設為非活躍（is_active=False），用於暫停而非刪除。"""
-    async with _lock:
-        data = await _read_raw()
-        for t in data.get("tasks", []):
-            if t.get("task_id") == task_id:
-                t["is_active"] = False
-                await _write_raw(data)
-                logger.info("schedule_storage: deactivated task=%s", task_id)
-                return True
-    return False
+        success = await asyncio.to_thread(_delete)
+        if success:
+            logger.info("schedule_storage: removed task=%s", task_id)
+        return success
 
 
 async def purge_once_tasks_before(ts: int) -> list[dict[str, Any]]:
-    """
-    移除所有 trigger_time <= ts 的單次任務。
-    回傳被移除的任務清單以便觸發提醒。
-    """
-    triggered: list[dict[str, Any]] = []
+    """移除所有 trigger_time <= ts 的單次任務並回傳（單一原子交易）。"""
     async with _lock:
-        data = await _read_raw()
-        remaining: list[dict[str, Any]] = []
-        for t in data.get("tasks", []):
-            if t.get("schedule_type") == "once" and t.get("trigger_time", 0) <= ts:
-                triggered.append(t)
-            else:
-                remaining.append(t)
-        if triggered:
-            data["tasks"] = remaining
-            await _write_raw(data)
-            logger.info("schedule_storage: purged %d once tasks (ts<=%s)", len(triggered), ts)
-    return triggered
+        def _purge() -> list[dict[str, Any]]:
+            triggered: list[dict[str, Any]] = []
+            try:
+                with db_transaction(DB_PATH) as cur:
+                    cur.execute("""
+                        SELECT * FROM schedule_tasks
+                        WHERE schedule_type = 'once' AND trigger_time <= ?
+                    """, (ts,))
+                    rows = cur.fetchall()
+                    triggered = [_row_to_dict(r) for r in rows]
+
+                    if triggered:
+                        cur.execute("""
+                            DELETE FROM schedule_tasks
+                            WHERE schedule_type = 'once' AND trigger_time <= ?
+                        """, (ts,))
+                        logger.info("schedule_storage: purged %d once tasks (ts<=%s)", len(triggered), ts)
+            except Exception as e:
+                logger.error("[ScheduleStorage] 清理到期單次任務失敗: %s", e)
+            return triggered
+
+        return await asyncio.to_thread(_purge)

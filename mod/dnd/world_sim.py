@@ -19,11 +19,10 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands, tasks
 
-from mod.dnd import config
 from mod.dnd.storage import append_world_history, load_world_state, save_world_state
 
 if TYPE_CHECKING:
-    from handlers.bot_brain import BotBrain
+    pass
 
 logger = logging.getLogger(__name__)
 

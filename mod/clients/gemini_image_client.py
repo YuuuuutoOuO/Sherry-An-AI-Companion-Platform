@@ -6,9 +6,7 @@ Uses the official `google-genai` SDK with `client.models.generate_content`.
 """
 
 import asyncio
-import io
 import logging
-from typing import Any
 
 from google import genai
 from google.genai import types

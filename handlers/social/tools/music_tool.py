@@ -4,10 +4,10 @@ from discord.ext import commands
 import re
 import json
 
-from typing import Any, cast
+from typing import Any
 
 import settings
-from handlers.bot_brain import BotBrain, InferenceTask
+from handlers.bot_brain import InferenceTask
 from handlers.social.contracts import ToolResult
 from handlers.social.tool_base import BaseTool, ToolResponseMode
 from handlers.social.utils import simulate_typing_and_send

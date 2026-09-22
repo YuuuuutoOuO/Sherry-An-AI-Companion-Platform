@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import random
 import uuid
-from typing import Any
 
 from mod.game_center.models import BlackjackState, Card, GameResultStatus
 

@@ -8,16 +8,45 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import settings
+from core.db import get_db_connection, db_transaction
 
 logger = logging.getLogger(__name__)
 
 AUDIT_LOG_PATH: Path = settings.DATA_DIR / "admin_audit.jsonl"
+AUDIT_DB_PATH: Path = settings.DATA_DIR / "chat_history.db"
+
+_AUDIT_DB_INITIALIZED: bool = False
+
+
+def _init_audit_db() -> None:
+    """初始化 chat_history.db 中的 audit_logs 資料表 (僅首次執行)。"""
+    global _AUDIT_DB_INITIALIZED
+    if _AUDIT_DB_INITIALIZED:
+        return
+    try:
+        with db_transaction(AUDIT_DB_PATH) as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS audit_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    session_id TEXT,
+                    username TEXT,
+                    action TEXT NOT NULL,
+                    ip TEXT,
+                    device TEXT,
+                    data_json TEXT NOT NULL
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_logs(timestamp DESC);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_logs(session_id);")
+        _AUDIT_DB_INITIALIZED = True
+    except Exception as exc:
+        logger.debug("audit_manager: 初始化 SQLite 審計表失敗: %s", exc)
 
 
 def parse_user_agent(ua_str: str) -> str:
@@ -49,43 +78,40 @@ def parse_user_agent(ua_str: str) -> str:
         browser_name = "Chrome"
     elif "firefox/" in ua:
         browser_name = "Firefox"
-    elif "safari/" in ua and "chrome/" not in ua:
+    elif "safari/" in ua and "chrome" not in ua:
         browser_name = "Safari"
+    elif "curl" in ua or "python" in ua:
+        browser_name = "API Client"
 
     return f"{os_name} / {browser_name}"
 
 
 def parse_ip_location(ip: str) -> str:
-    """判斷 IP 位址的網路位置標籤。
+    """判斷 IP 來源屬性（本機、局域網或外網）。
 
     Args:
-        ip (str): IP 位址字串。
+        ip (str): IP 位址。
 
     Returns:
-        str: 位置標籤（本地機器 / Radmin VPN / 區域網路 / 外部網頁）。
+        str: 簡短的來源位置標籤。
     """
-    if not ip or ip in ("127.0.0.1", "::1", "localhost"):
-        return "本地機器 (Localhost)"
-    if ip.startswith("26."):
-        return "Radmin VPN 網路"
-    if ip.startswith("192.168.") or ip.startswith("10."):
+    if not ip or ip == "127.0.0.1" or ip == "::1" or ip == "localhost":
+        return "本機端 (Localhost)"
+    if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172.16."):
         return "區域網路 (LAN)"
-    if ip.startswith("172."):
-        try:
-            second_octet = int(ip.split(".")[1])
-            if 16 <= second_octet <= 31:
-                return "區域網路 (LAN)"
-        except (IndexError, ValueError):
-            pass
+    if ip.startswith("26."):
+        return "虛擬區域網路 (Radmin VPN)"
     return "外部網際網路 (Public IP)"
 
 
 class AdminAuditManager:
-    """管理員審計紀錄管理器。"""
+    """管理員審計紀錄管理器 (支援 SQLite chat_history.db 與 JSONL 備援)。"""
 
-    def __init__(self, log_path: Path = AUDIT_LOG_PATH) -> None:
+    def __init__(self, log_path: Path = AUDIT_LOG_PATH, db_path: Path = AUDIT_DB_PATH) -> None:
         self.log_path = log_path
+        self.db_path = db_path
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        _init_audit_db()
 
     def record_login(
         self, session_id: str, username: str, ip: str, user_agent: str
@@ -118,6 +144,18 @@ class AdminAuditManager:
             "actions": [],
         }
 
+        # 1. 寫入 SQLite
+        self._write_db_record(
+            timestamp=now_str,
+            session_id=session_id,
+            username=username or "admin",
+            action="LOGIN",
+            ip=ip,
+            device=device,
+            data=record,
+        )
+
+        # 2. 寫入 JSONL 備援
         self._append_record(record)
         logger.info(
             "[AUDIT] 管理員登入成功: 帳號=%s, IP=%s, 裝置=%s",
@@ -145,6 +183,18 @@ class AdminAuditManager:
             "detail": detail,
         }
 
+        # 1. 寫入 SQLite
+        self._write_db_record(
+            timestamp=now_str,
+            session_id=session_id,
+            username="admin",
+            action=action_type,
+            ip="",
+            device="",
+            data=action_item,
+        )
+
+        # 2. 更新 JSONL 備援
         records = self._read_all_records()
         updated = False
         for rec in records:
@@ -167,6 +217,19 @@ class AdminAuditManager:
             return
 
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # 1. 寫入 SQLite
+        self._write_db_record(
+            timestamp=now_str,
+            session_id=session_id,
+            username="admin",
+            action="LOGOUT",
+            ip="",
+            device="",
+            data={"session_id": session_id, "logout_time": now_str, "status": "logged_out"},
+        )
+
+        # 2. 更新 JSONL 備援
         records = self._read_all_records()
         updated = False
         for rec in records:
@@ -180,8 +243,44 @@ class AdminAuditManager:
             self._write_all_records(records)
             logger.info("[AUDIT] 管理員登出: Session=%s", session_id[:8])
 
+    def record_security_event(
+        self, action: str, ip: str, username: str = "admin", details: str = ""
+    ) -> None:
+        """紀錄安全審計事件（登入失敗、IP 封鎖、未授權存取等）。
+
+        Args:
+            action: 安全事件名稱（如 "LOGIN_FAILED"、"IP_LOCKED"）。
+            ip: 來源 IP 位址。
+            username: 嘗試登入之使用者名稱。
+            details: 詳細描述資訊。
+        """
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        record: dict[str, Any] = {
+            "session_id": "",
+            "username": username or "admin",
+            "login_time": now_str,
+            "logout_time": now_str,
+            "ip": ip,
+            "device": "Security Alert",
+            "location": parse_ip_location(ip),
+            "user_agent": "",
+            "status": "failed",
+            "actions": [{"timestamp": now_str, "action": action, "detail": details}],
+        }
+        self._write_db_record(
+            timestamp=now_str,
+            session_id="",
+            username=username or "admin",
+            action=action,
+            ip=ip,
+            device="Security Alert",
+            data=record,
+        )
+        self._append_record(record)
+        logger.warning("[AUDIT-SECURITY] %s: IP=%s, User=%s, Details=%s", action, ip, username, details)
+
     def get_audit_history(self, limit: int = 50) -> list[dict[str, Any]]:
-        """讀取歷史審計紀錄列表（依登入時間倒序排列）。
+        """讀取歷史審計紀錄列表（依登入時間倒序排列，優先讀取 SQLite）。
 
         Args:
             limit (int): 最大回傳筆數。
@@ -189,9 +288,60 @@ class AdminAuditManager:
         Returns:
             list[dict[str, Any]]: 審計紀錄列表。
         """
+        # 1. 優先嘗試由 SQLite 讀取
+        try:
+            _init_audit_db()
+            conn = get_db_connection(self.db_path)
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT timestamp, session_id, username, action, ip, device, data_json
+                FROM audit_logs
+                WHERE action IN ('LOGIN', 'LOGIN_FAILED', 'IP_LOCKED', 'IP_BLOCKED_ATTEMPT')
+                ORDER BY id DESC
+                LIMIT ?
+            """, (limit,))
+            rows = cur.fetchall()
+            conn.close()
+
+            if rows:
+                results = []
+                for r in rows:
+                    try:
+                        rec = json.loads(r["data_json"])
+                        results.append(rec)
+                    except Exception:
+                        pass
+                if results:
+                    return results
+        except Exception as exc:
+            logger.debug("audit_manager: 讀取 SQLite audit_logs 失敗: %s", exc)
+
+        # 2. 向下相容回退至 JSONL
         records = self._read_all_records()
         records.reverse()
         return records[:limit]
+
+    def _write_db_record(
+        self,
+        timestamp: str,
+        session_id: str,
+        username: str,
+        action: str,
+        ip: str,
+        device: str,
+        data: dict[str, Any],
+    ) -> None:
+        """寫入單筆審計紀錄至 SQLite audit_logs 資料表。"""
+        try:
+            _init_audit_db()
+            data_json = json.dumps(data, ensure_ascii=False)
+            with db_transaction(self.db_path) as cur:
+                cur.execute("""
+                    INSERT INTO audit_logs (timestamp, session_id, username, action, ip, device, data_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (timestamp, session_id, username, action, ip, device, data_json))
+        except Exception as exc:
+            logger.debug("audit_manager: 寫入 SQLite audit_logs 失敗: %s", exc)
 
     def _append_record(self, record: dict[str, Any]) -> None:
         """以 JSONL 格式追加單筆紀錄至檔案。"""

@@ -10,11 +10,10 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Any, Sequence
+from typing import Any
 from PIL import Image, ImageDraw, ImageFilter
 
 from mod.painter.canvas import VirtualCanvas
-from mod.painter.palette import PaletteManager, RGBAColor
 
 
 class CharacterRenderer:
@@ -626,7 +625,6 @@ class WeatherFxRenderer:
         fx_type = str(params.get("type", "sakura_blizzard")).lower().strip()
         count = int(params.get("count", 35))
         color = str(params.get("color", "#FFB7B2"))
-        opacity = float(params.get("opacity", 0.85))
 
         layer = canvas.get_layer(layer_name)
         draw = ImageDraw.Draw(layer)

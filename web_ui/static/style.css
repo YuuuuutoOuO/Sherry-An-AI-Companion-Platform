@@ -473,6 +473,47 @@ html, body {
   cursor: pointer;
 }
 
+/* Universal Button Base & System */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.85rem;
+  font-family: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  border-radius: var(--radius-sm, 8px);
+  cursor: pointer;
+  transition: all var(--duration, 0.2s);
+  user-select: none;
+  text-decoration: none;
+  outline: none;
+  border: 1px solid transparent;
+}
+
+.btn-sm {
+  padding: 0.3rem 0.65rem;
+  font-size: 0.78rem;
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--text-secondary, #cbd5e1);
+  border-radius: var(--radius-sm, 8px);
+  cursor: pointer;
+  transition: all var(--duration, 0.2s);
+  font-family: inherit;
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: translateY(-1px);
+}
+
 /* Primary Action Buttons */
 .btn-primary {
   display: inline-flex;
@@ -1780,6 +1821,159 @@ html, body {
 }
 
 .settings-category.open .category-body { display: flex; }
+
+/* ── Settings Search / Reset Bar ─────────────────────── */
+.settings-header-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+  flex-shrink: 0;
+}
+
+.settings-search-box {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.settings-search-icon {
+  position: absolute;
+  left: 0.7rem;
+  font-size: 0.8rem;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.settings-search-input {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 2rem 0.5rem 2.1rem;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  outline: none;
+  transition: border-color var(--duration);
+}
+
+.settings-search-input:focus { border-color: var(--border-hover); }
+
+.settings-search-clear {
+  position: absolute;
+  right: 0.45rem;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 1.05rem;
+  line-height: 1;
+  padding: 0 0.25rem;
+}
+
+.settings-search-clear:hover { color: var(--text-primary); }
+
+.settings-reset-btn {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  padding: 0.5rem 0.9rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color var(--duration);
+}
+
+.settings-reset-btn:hover { border-color: var(--border-hover); }
+
+.settings-match-hint {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  padding: 0 0.1rem 0.25rem;
+  flex-shrink: 0;
+}
+
+.setting-label-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.setting-badge-restart {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  border-radius: 20px;
+  padding: 0.05rem 0.45rem;
+  white-space: nowrap;
+}
+
+.changed-hint.needs-restart { color: #fbbf24; }
+
+/* ── List Editor ──────────────────────────────────────── */
+.list-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.list-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.list-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 20px;
+  padding: 0.2rem 0.3rem 0.2rem 0.65rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.78rem;
+  color: var(--text-primary);
+}
+
+.list-chip-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 0 0.25rem;
+}
+
+.list-chip-remove:hover { color: #f87171; }
+
+.list-add-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.list-add-input { flex: 1; }
+
+.list-add-btn {
+  background: var(--cyan-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--sherry-blue);
+  padding: 0.5rem 0.9rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color var(--duration);
+}
+
+.list-add-btn:hover { border-color: var(--border-hover); }
+
 
 .setting-item {
   display: flex;
@@ -4682,5 +4876,119 @@ html, body {
   font-weight: 600;
   color: #94a3b8;
 }
+
+/* ===== ENTERPRISE APM & OBSERVABILITY STYLES ===== */
+.apm-pill-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-muted, #94a3b8);
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.apm-pill-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.apm-pill-btn.active {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border-color: #38bdf8;
+  font-weight: 600;
+}
+
+.apm-table tr:hover td {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.sparkline-container {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 24px;
+  width: 105px;
+  padding: 2px 0;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+
+.sparkline-bar {
+  flex: 1;
+  background: #38bdf8;
+  border-radius: 1px;
+  min-height: 2px;
+  transition: height 0.3s ease, background-color 0.2s;
+}
+
+.sparkline-bar.slow {
+  background: #f59e0b;
+}
+
+.sparkline-bar.danger {
+  background: #ef4444;
+}
+
+.slo-bar-bg {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.slo-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.slo-bar-fill.healthy {
+  background: #10b981;
+}
+
+.slo-bar-fill.degraded {
+  background: #f59e0b;
+}
+
+.slo-bar-fill.critical {
+  background: #ef4444;
+}
+
+.token-progress {
+  display: flex;
+  height: 5px;
+  width: 90px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.token-prompt-fill {
+  background: #38bdf8;
+}
+
+.token-comp-fill {
+  background: #fbbf24;
+}
+
+.pulse-dot {
+  animation: apm-pulse 2s infinite;
+}
+
+@keyframes apm-pulse {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
 
 

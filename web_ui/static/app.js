@@ -8,7 +8,7 @@
 // ── State ────────────────────────────────────────────────
 const state = {
   currentView: 'dashboard',
-  currentLogFile: 'runtime_log.jsonl',
+  currentLogFile: 'chat_history.db [runtime_events]',
   currentPage: 1,
   totalPages: 1,
   totalEntries: 0,
@@ -20,6 +20,7 @@ const state = {
   dashboardTimer: null,
   autoRefreshEnabled: true,
   currentSettingsTab: 'tab-ai',
+  settingsSearch: '',
   settingsData: {},       // { key: { value, label, description, type, ... } }
   dirtyKeys: new Set(),   // keys that have been changed but not saved
   ollamaModels: [],
@@ -249,6 +250,13 @@ function switchView(view) {
     if (mmTb) mmTb.classList.remove('hidden');
     document.getElementById('view-title').textContent = '🧩 功能模組管理中心';
     loadModManager();
+  } else if (view === 'self-monitoring') {
+    const navSM = document.getElementById('nav-self-monitoring');
+    if (navSM) navSM.classList.add('active');
+    const viewSM = document.getElementById('view-self-monitoring');
+    if (viewSM) viewSM.classList.remove('hidden');
+    document.getElementById('view-title').textContent = '🛡️ 系統自我監控與延遲稽核主控台';
+    loadSelfMonitoringData();
   } else if (view === 'roast') {
     const navRoast = document.getElementById('nav-roast');
     if (navRoast) navRoast.classList.add('active');
@@ -258,12 +266,25 @@ function switchView(view) {
     if (rTb) rTb.classList.remove('hidden');
     document.getElementById('view-title').textContent = '🎯 關鍵字吐槽管理中心';
     loadRoastConfig();
+  } else if (view === 'spark') {
+    const navSpark = document.getElementById('nav-spark');
+    if (navSpark) navSpark.classList.add('active');
+    const viewSpark = document.getElementById('view-spark');
+    if (viewSpark) viewSpark.classList.remove('hidden');
+    document.getElementById('view-title').textContent = '📡 Spark 泛用條件推播主控台';
+    if (window.SparkApp) {
+      SparkApp.init();
+    }
   } else if (view === 'settings') {
     document.getElementById('nav-settings').classList.add('active');
     document.getElementById('view-settings').classList.remove('hidden');
     document.getElementById('settings-toolbar').classList.remove('hidden');
     document.getElementById('view-title').textContent = '系統設定';
-    if (Object.keys(state.settingsData).length === 0) loadSettings();
+    if (!state.settingsData || Object.keys(state.settingsData).length === 0) {
+      loadSettings();
+    } else {
+      renderSettings();
+    }
   } else {
     // Dynamic Mod Plugin View activation
     const navBtn = document.getElementById(`nav-${view}`) || document.getElementById(`nav-mod-${view}`);
@@ -309,11 +330,11 @@ async function loadLogFiles() {
     if (!resp.ok) return;
     const files = await resp.json();
     const sel = document.getElementById('log-file-select');
-    sel.innerHTML = '<option value="">— 選擇日誌檔案 —</option>';
+    sel.innerHTML = '<option value="">— 選擇日誌/資料庫 —</option>';
     files.forEach(f => {
       const opt = document.createElement('option');
       opt.value = f.name;
-      opt.textContent = `${f.name} (${formatBytes(f.size_bytes)})`;
+      opt.textContent = f.label || `${f.name} (${formatBytes(f.size_bytes)})`;
       if (f.name === state.currentLogFile) opt.selected = true;
       sel.appendChild(opt);
     });
@@ -393,7 +414,7 @@ function renderLogs(entries) {
 }
 
 function buildLogHTML(log, event) {
-  const ts = log.ts || log.timestamp || '—';
+  const ts = formatToUtc8(log.ts || log.timestamp || '—');
   const badgeClass = {
     chat_reply:            'badge-chat',
     react_agent_done:      'badge-chat',
@@ -532,9 +553,32 @@ function closeModal() {
 // =========================================================
 
 async function loadSettings() {
+  const wrapper = document.getElementById('settings-wrapper');
   try {
-    const resp = await fetch('/api/settings');
-    if (resp.status === 401) return;
+    const resp = await fetch('/api/settings', {
+      headers: getAuthHeaders(),
+      credentials: 'same-origin',
+    });
+    if (!resp.ok) {
+      if (resp.status === 401) {
+        state.settingsData = {};
+        if (wrapper) {
+          wrapper.innerHTML = `
+            <div class="placeholder-msg" style="padding: 3.5rem 1rem; text-align: center;">
+              <div style="font-size: 2.2rem; margin-bottom: 12px;">🔒</div>
+              <div style="font-size: 1.15rem; font-weight: 600; color: #fff; margin-bottom: 8px;">系統設定僅限管理員查看與編輯</div>
+              <div style="font-size: 0.88rem; color: var(--text-muted, #888); margin-bottom: 20px;">請先點擊右上角「管理員登入」或下方按鈕輸入管理員密碼以解鎖控制台。</div>
+              <button class="btn-primary" onclick="openLoginModal()" style="padding: 8px 24px; font-size: 0.95rem; cursor: pointer;">
+                🔑 立即登入管理員
+              </button>
+            </div>
+          `;
+        }
+      } else {
+        if (wrapper) wrapper.innerHTML = '<div class="placeholder-msg">載入設定失敗，請檢查伺服器狀態。</div>';
+      }
+      return;
+    }
     state.settingsData = await resp.json();
     state.dirtyKeys.clear();
     state.dirtyValues = {};
@@ -542,6 +586,7 @@ async function loadSettings() {
     renderSettings();
   } catch (e) {
     console.error('Failed to load settings:', e);
+    if (wrapper) wrapper.innerHTML = '<div class="placeholder-msg">無法連線至設定 API，請確認伺服器已正常啟動。</div>';
   }
 }
 
@@ -551,7 +596,7 @@ const TAB_CATEGORY_MAP = {
   'tab-voice': ['語音辨識與合成'],
   'tab-art': ['圖片生成', '二次元圖庫 API'],
   'tab-search': ['Web 爬蟲', '外部資訊檢索', 'YouTube 爬蟲'],
-  'tab-advanced': ['任務佇列優先級', '音樂播放與隊列', '系統與網路', '深夜記憶整合', '健康監控', '氛圍系統', '速率限制', '後端連線設定', '其他']
+  'tab-advanced': ['任務佇列優先級', '音樂播放與隊列', '系統與網路', '深夜記憶整合', '健康監控', '氛圍系統', '速率限制', '後端連線設定', '模組與排程', '其他']
 };
 
 function switchSettingsTab(tabId) {
@@ -564,8 +609,29 @@ function switchSettingsTab(tabId) {
 
 function renderSettings() {
   const wrapper = document.getElementById('settings-wrapper');
+  if (!wrapper) return;
+
+  if (!state.settingsData || Object.keys(state.settingsData).length === 0) {
+    if (!state.isAdmin && !state.adminToken) {
+      wrapper.innerHTML = `
+        <div class="placeholder-msg" style="padding: 3.5rem 1rem; text-align: center;">
+          <div style="font-size: 2.2rem; margin-bottom: 12px;">🔒</div>
+          <div style="font-size: 1.15rem; font-weight: 600; color: #fff; margin-bottom: 8px;">系統設定僅限管理員查看與編輯</div>
+          <div style="font-size: 0.88rem; color: var(--text-muted, #888); margin-bottom: 20px;">請先點擊右上角「管理員登入」或下方按鈕輸入管理員密碼以解鎖控制台。</div>
+          <button class="btn-primary" onclick="openLoginModal()" style="padding: 8px 24px; font-size: 0.95rem; cursor: pointer;">
+            🔑 立即登入管理員
+          </button>
+        </div>
+      `;
+    } else {
+      wrapper.innerHTML = '<div class="placeholder-msg">正在載入設定...</div>';
+    }
+    return;
+  }
+
   wrapper.innerHTML = '';
 
+  const search = (state.settingsSearch || '').trim().toLowerCase();
   const allowedCategories = TAB_CATEGORY_MAP[state.currentSettingsTab || 'tab-ai'] || TAB_CATEGORY_MAP['tab-ai'];
   const allMappedCategories = new Set(Object.values(TAB_CATEGORY_MAP).flat());
 
@@ -578,11 +644,26 @@ function renderSettings() {
     if (!isAllowed && (state.currentSettingsTab === 'tab-advanced') && !allMappedCategories.has(cat)) {
       isAllowed = true;
     }
+    // 搜尋模式：跨分頁比對鍵名 / 標籤 / 說明
+    if (search) {
+      const hay = `${key} ${meta.label || ''} ${meta.description || ''}`.toLowerCase();
+      isAllowed = hay.includes(search);
+    }
     if (!isAllowed) continue;
 
     if (!categories[cat]) categories[cat] = [];
     const currentValue = (state.dirtyValues && key in state.dirtyValues) ? state.dirtyValues[key] : meta.value;
     categories[cat].push({ key, ...meta, value: currentValue });
+  }
+
+  if (search) {
+    const total = Object.values(categories).reduce((n, arr) => n + arr.length, 0);
+    const info = document.createElement('div');
+    info.className = 'settings-match-hint';
+    info.textContent = total
+      ? `🔎 找到 ${total} 項符合「${state.settingsSearch}」的設定`
+      : `🔎 找不到符合「${state.settingsSearch}」的設定`;
+    wrapper.appendChild(info);
   }
 
   // Category display order preference
@@ -593,7 +674,7 @@ function renderSettings() {
     '圖片生成', '二次元圖庫 API',
     'Web 爬蟲', '外部資訊檢索', 'YouTube 爬蟲',
     '任務佇列優先級', '音樂播放與隊列', '系統與網路', '深夜記憶整合',
-    '健康監控', '氛圍系統', '速率限制', '後端連線設定', '其他',
+    '健康監控', '氛圍系統', '速率限制', '後端連線設定', '模組與排程', '其他',
   ];
   const sortedCats = Object.keys(categories).sort((a, b) => {
     const ai = ORDER.indexOf(a); const bi = ORDER.indexOf(b);
@@ -626,10 +707,40 @@ function renderSettings() {
   });
 }
 
-function buildSettingItem({ key, value, label, description, type, min, max, step, options }) {
+async function onSoulNameChange(newSoulName) {
+  markDirty('CURRENT_SOUL_NAME', newSoulName);
+  try {
+    const resp = await fetch(`/api/soul/content?file=${encodeURIComponent(newSoulName)}`, {
+      headers: getAuthHeaders()
+    });
+    if (!resp.ok) {
+      console.warn('載入人設檔案失敗:', resp.statusText);
+      return;
+    }
+    const data = await resp.json();
+    if (data.status === 'success' && typeof data.content === 'string') {
+      const textarea = document.getElementById('inp-SOUL_CONTENT');
+      if (textarea) {
+        textarea.value = data.content;
+        markDirty('SOUL_CONTENT', data.content);
+      }
+      const labelEl = document.querySelector('#si-SOUL_CONTENT .setting-label');
+      if (labelEl) {
+        labelEl.textContent = `當前人設內容預覽與編輯 (${newSoulName})`;
+      }
+    }
+  } catch (err) {
+    console.error('onSoulNameChange error:', err);
+  }
+}
+
+function buildSettingItem({ key, value, label, description, type, min, max, step, options, item_type, restart_required }) {
   const keyAttr = `data-key="${escAttr(key)}"`;
   const descHtml = description
     ? `<div class="setting-desc">${escHtml(description)}</div>`
+    : '';
+  const restartBadge = restart_required
+    ? '<span class="setting-badge-restart" title="此設定需重新啟動雪莉才會生效">需重啟</span>'
     : '';
 
   let control = '';
@@ -653,13 +764,18 @@ function buildSettingItem({ key, value, label, description, type, min, max, step
       const selected = String(optVal).toUpperCase() === String(value).toUpperCase() ? 'selected' : '';
       return `<option value="${escAttr(optVal)}" ${selected}>${escHtml(optLabel)}</option>`;
     }).join('');
+    const onchangeAttr = key === 'CURRENT_SOUL_NAME'
+      ? `onchange="onSoulNameChange(this.value)"`
+      : `onchange="markDirty('${escAttr(key)}', this.value)"`;
     control = `
       <select class="setting-input setting-select" id="inp-${escAttr(key)}" ${keyAttr}
-        onchange="markDirty('${escAttr(key)}', this.value)">
+        ${onchangeAttr}>
         ${optHtml}
       </select>`;
   } else if (type === 'model') {
     control = buildModelPicker(key, value);
+  } else if (type === 'list') {
+    control = buildListEditor(key, value, item_type);
   } else if (type === 'float' || type === 'int') {
     const stepVal = step || (type === 'float' ? 0.1 : 1);
     const minVal = min !== undefined ? min : '';
@@ -679,10 +795,11 @@ function buildSettingItem({ key, value, label, description, type, min, max, step
   } else {
     // str / url
     const valStr = String(value ?? '');
-    const isMultiline = valStr.length > 50 || valStr.includes('\n') || key === 'CORE_PERSONA' || key.includes('PROMPT') || key.includes('PERSONA');
+    const isMultiline = valStr.length > 50 || valStr.includes('\n') || key === 'SOUL_CONTENT' || key === 'CORE_PERSONA' || key.includes('PROMPT') || key.includes('PERSONA') || key.includes('SOUL');
     if (isMultiline) {
+      const rows = key === 'SOUL_CONTENT' ? 12 : 5;
       control = `
-        <textarea class="setting-textarea" rows="5"
+        <textarea class="setting-textarea" rows="${rows}"
           id="inp-${escAttr(key)}" ${keyAttr}
           oninput="markDirty('${escAttr(key)}', this.value)">${escHtml(valStr)}</textarea>`;
     } else {
@@ -693,11 +810,22 @@ function buildSettingItem({ key, value, label, description, type, min, max, step
     }
   }
 
+  let displayLabel = label;
+  if (key === 'SOUL_CONTENT') {
+    const activeSoul = (state.dirtyValues && state.dirtyValues.CURRENT_SOUL_NAME)
+      || (state.settingsData?.CURRENT_SOUL_NAME?.value)
+      || 'sherry_default.md';
+    displayLabel = `當前人設內容預覽與編輯 (${activeSoul})`;
+  }
+
   return `
     <div class="setting-item" id="si-${escAttr(key)}">
       <div class="setting-label-row">
-        <label class="setting-label" for="inp-${escAttr(key)}">${escHtml(label)}</label>
-        <span class="setting-key">${escHtml(key)}</span>
+        <label class="setting-label" for="inp-${escAttr(key)}">${escHtml(displayLabel)}</label>
+        <span class="setting-label-badges">
+          ${restartBadge}
+          <span class="setting-key">${escHtml(key)}</span>
+        </span>
       </div>
       ${descHtml}
       ${control}
@@ -737,6 +865,87 @@ function buildModelPicker(key, value) {
       <button class="model-fetch-btn" title="從伺服器取得模型列表"
         onclick="fetchModelsForPicker('${escAttr(key)}')">⟳</button>
     </div>`;
+}
+
+// ── List Editor (channel / role ID arrays) ──────────────
+function buildListEditor(key, value, itemType) {
+  const items = Array.isArray(value) ? value : [];
+  const chips = items.map(v => listChipHtml(v)).join('');
+  const isInt = (itemType || 'str') === 'int';
+  const placeholder = isInt ? '輸入數字 ID 後按 Enter' : '輸入內容後按 Enter';
+  return `
+    <div class="list-editor" id="list-${escAttr(key)}" data-item-type="${escAttr(itemType || 'str')}">
+      <div class="list-chips" id="list-chips-${escAttr(key)}">${chips}</div>
+      <div class="list-add-row">
+        <input type="text" class="setting-input list-add-input" id="list-input-${escAttr(key)}"
+          placeholder="${escAttr(placeholder)}"
+          onkeydown="onListInputKeydown(event, '${escAttr(key)}')">
+        <button type="button" class="list-add-btn" onclick="addListItem('${escAttr(key)}')">＋ 新增</button>
+      </div>
+    </div>`;
+}
+
+function listChipHtml(v) {
+  return `<span class="list-chip" data-val="${escAttr(v)}">
+    <span class="list-chip-text">${escHtml(v)}</span>
+    <button type="button" class="list-chip-remove" onclick="removeListItem(this)" aria-label="移除">×</button>
+  </span>`;
+}
+
+function onListInputKeydown(event, key) {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    addListItem(key);
+  }
+}
+
+function addListItem(key) {
+  const input = document.getElementById(`list-input-${key}`);
+  const editor = document.getElementById(`list-${key}`);
+  const chips = document.getElementById(`list-chips-${key}`);
+  if (!input || !editor || !chips) return;
+  const raw = input.value.trim();
+  if (raw === '') return;
+
+  const itemType = editor.dataset.itemType || 'str';
+  if (itemType === 'int' && !/^-?\d+$/.test(raw)) {
+    showToast('此欄位僅接受整數 ID', 'error');
+    return;
+  }
+  const exists = Array.from(chips.querySelectorAll('.list-chip')).some(c => c.dataset.val === raw);
+  if (exists) {
+    showToast('此項目已存在', 'info');
+    input.value = '';
+    return;
+  }
+  chips.insertAdjacentHTML('beforeend', listChipHtml(raw));
+  input.value = '';
+  input.focus();
+  syncListDirty(key);
+}
+
+function removeListItem(btn) {
+  const editor = btn.closest('.list-editor');
+  if (!editor) return;
+  btn.closest('.list-chip')?.remove();
+  syncListDirty(editor.id.replace(/^list-/, ''));
+}
+
+function collectListValues(key) {
+  const editor = document.getElementById(`list-${key}`);
+  const itemType = editor?.dataset.itemType || 'str';
+  const chips = document.querySelectorAll(`#list-chips-${key} .list-chip`);
+  return Array.from(chips).map(c => {
+    const val = c.dataset.val;
+    if (itemType === 'int') return parseInt(val, 10);
+    if (itemType === 'float') return parseFloat(val);
+    if (itemType === 'bool') return val === 'true';
+    return val;
+  });
+}
+
+function syncListDirty(key) {
+  markDirty(key, collectListValues(key));
 }
 
 // ── Category Accordion ──────────────────────────────────
@@ -874,7 +1083,10 @@ function markDirty(key, newValue) {
     if (lbl) lbl.textContent = newValue ? 'ON' : 'OFF';
   }
 
-  if (newValue !== original) {
+  const isChanged = (Array.isArray(original) || Array.isArray(newValue))
+    ? JSON.stringify(original) !== JSON.stringify(newValue)
+    : newValue !== original;
+  if (isChanged) {
     state.dirtyKeys.add(key);
     if (el) el.classList.add('dirty');
     const slider = document.getElementById(`slider-${key}`);
@@ -892,7 +1104,20 @@ function markDirty(key, newValue) {
 function updateChangedHint() {
   const hint = document.getElementById('changed-hint');
   if (!hint) return;
-  hint.classList.toggle('hidden', state.dirtyKeys.size === 0);
+  const n = state.dirtyKeys.size;
+  if (n === 0) {
+    hint.classList.add('hidden');
+    hint.classList.remove('needs-restart');
+    hint.textContent = '';
+    return;
+  }
+  const restartCount = Array.from(state.dirtyKeys)
+    .filter(k => state.settingsData[k]?.restart_required).length;
+  hint.classList.remove('hidden');
+  hint.classList.toggle('needs-restart', restartCount > 0);
+  hint.textContent = restartCount > 0
+    ? `● 有 ${n} 項未儲存的變更（${restartCount} 項需重啟生效）`
+    : `● 有 ${n} 項未儲存的變更`;
 }
 
 // ── Save ────────────────────────────────────────────────
@@ -914,6 +1139,9 @@ async function saveSettings() {
       if (picker) {
         currentVal = getModelValue(key);
       }
+    } else if (type === 'list') {
+      const editor = document.getElementById(`list-${key}`);
+      if (editor) currentVal = collectListValues(key);
     } else if (type === 'float') {
       const el = document.getElementById(`inp-${key}`);
       if (el) currentVal = parseFloat(el.value) || 0;
@@ -941,11 +1169,18 @@ async function saveSettings() {
     const resp = await fetch('/api/settings', {
       method: 'POST',
       headers: getAuthHeaders(),
+      credentials: 'same-origin',
       body: JSON.stringify(payload),
     });
 
     if (resp.ok) {
-      showToast('設定已儲存！請點擊「🔄 重啟雪莉」套用變更', 'success');
+      const restartCount = Array.from(state.dirtyKeys)
+        .filter(k => state.settingsData[k]?.restart_required).length;
+      if (restartCount > 0) {
+        showToast(`設定已儲存！有 ${restartCount} 項需點擊「🔄 重啟雪莉」才會生效`, 'info');
+      } else {
+        showToast('設定已儲存！', 'success');
+      }
       await loadSettings(); // reload to sync
     } else {
       const err = await resp.json().catch(() => ({}));
@@ -956,6 +1191,32 @@ async function saveSettings() {
     showToast('儲存時發生錯誤', 'error');
     console.error(e);
   }
+}
+
+// ── Settings Search & Reset ─────────────────────────────
+function onSettingsSearch(value) {
+  state.settingsSearch = value || '';
+  renderSettings();
+}
+
+function clearSettingsSearch() {
+  const el = document.getElementById('settings-search-input');
+  if (el) el.value = '';
+  state.settingsSearch = '';
+  renderSettings();
+}
+
+function resetSettingsChanges() {
+  if (state.dirtyKeys.size === 0) {
+    showToast('目前沒有未儲存的變更', 'info');
+    return;
+  }
+  const n = state.dirtyKeys.size;
+  state.dirtyKeys.clear();
+  state.dirtyValues = {};
+  updateChangedHint();
+  renderSettings();
+  showToast(`已還原 ${n} 項未儲存的變更`, 'info');
 }
 
 // =========================================================
@@ -1056,6 +1317,35 @@ function formatBytes(b) {
   return (b / 1048576).toFixed(1) + ' MB';
 }
 
+function formatToUtc8(val) {
+  if (val === null || val === undefined || val === '' || val === '—' || val === '--') return '—';
+  if (typeof val === 'number') {
+    const ms = val > 1e11 ? val : val * 1000;
+    const d = new Date(ms);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleString('zh-TW', {
+        timeZone: 'Asia/Taipei',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false
+      }).replace(/\//g, '-');
+    }
+  }
+  const str = String(val).trim();
+  if (str.includes('T') || str.endsWith('Z') || str.includes('+00:00') || str.includes('+08:00')) {
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleString('zh-TW', {
+        timeZone: 'Asia/Taipei',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false
+      }).replace(/\//g, '-');
+    }
+  }
+  return str;
+}
+
 // =========================================================
 // SYSTEM METRICS & TASKS
 // =========================================================
@@ -1127,9 +1417,734 @@ async function loadMetrics() {
       gpuBody.innerHTML = html;
     }
 
+    // 5. Component Metrics (Admin Only)
+    await loadComponentMetrics();
   } catch (e) {
     console.warn('Failed to fetch system metrics:', e);
   }
+}
+
+// =========================================================
+// ENTERPRISE AI APM & OBSERVABILITY CENTER
+// =========================================================
+
+const apmState = {
+  components: {},
+  kpi: {},
+  selectedCategory: 'all',
+  hideInactive: false,
+  searchQuery: '',
+};
+
+const _APM_ICONS = {
+  BOT_BRAIN: '🧠',
+  CHAT: '💬',
+  SEARCH: '🔍',
+  STOCK: '📈',
+  PIXIV: '🎨',
+  DRAW: '🖌️',
+  MUSIC: '🎵',
+  SCHEDULE: '📅',
+  SYSTEM_INSPECT: '💻',
+  SUMMARY: '📑',
+  MEMORY: '💾',
+  PAINTER: '🖼️',
+  DEEP_SEARCH: '🌐',
+  FEED_SENTINEL: '🛡️',
+  LIVESTREAM: '🔴',
+  DND: '🎲',
+  ROAST: '🔥',
+  MARKET_PLUGIN: '📊',
+};
+
+function formatLatency(ms) {
+  if (ms === undefined || ms === null || ms <= 0) return '0 ms';
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  return `${(ms / 1000).toFixed(2)} s`;
+}
+
+function getLatencyColor(ms) {
+  if (!ms || ms <= 0) return 'var(--text-muted, #888)';
+  if (ms < 1000) return '#10b981';
+  if (ms < 5000) return '#38bdf8';
+  if (ms < 15000) return '#f59e0b';
+  return '#ef4444';
+}
+
+function renderSparklineHtml(trend) {
+  if (!trend || trend.length === 0) {
+    return '<span style="color: var(--text-muted); font-size: 0.78rem;">— 無採樣 —</span>';
+  }
+  const maxVal = Math.max(...trend, 1);
+  let bars = '';
+  for (const val of trend) {
+    const heightPercent = Math.max(8, Math.round((val / maxVal) * 100));
+    const hPx = Math.max(3, Math.round((heightPercent / 100) * 20));
+    let cls = 'sparkline-bar';
+    if (val >= 15000) cls += ' danger';
+    else if (val >= 5000) cls += ' slow';
+    bars += `<div class="${cls}" style="height: ${hPx}px;" title="${formatLatency(val)}"></div>`;
+  }
+  return `<div class="sparkline-container" title="近 ${trend.length} 次耗時微型走勢">${bars}</div>`;
+}
+
+function setApmCategory(cat) {
+  apmState.selectedCategory = cat;
+  document.querySelectorAll('.apm-pill-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-cat') === cat);
+  });
+  renderApmGrid();
+}
+
+function toggleApmHideInactive() {
+  const toggle = document.getElementById('apm-hide-inactive-toggle');
+  if (toggle) {
+    apmState.hideInactive = toggle.checked;
+    renderApmGrid();
+  }
+}
+
+function filterApmSearch() {
+  const input = document.getElementById('apm-search-input');
+  if (input) {
+    apmState.searchQuery = (input.value || '').trim().toLowerCase();
+    renderApmGrid();
+  }
+}
+
+async function loadComponentMetrics() {
+  const container = document.getElementById('component-metrics-container');
+  const notice = document.getElementById('component-metrics-auth-notice');
+  const actions = document.getElementById('component-metrics-actions');
+  const tbody = document.getElementById('component-metrics-tbody');
+  if (!container || !tbody) return;
+
+  try {
+    const headers = typeof getAuthHeaders === 'function' ? getAuthHeaders() : {};
+    const resp = await fetch('/api/system/components/metrics', {
+      headers,
+      credentials: 'same-origin',
+    });
+    if (resp.status === 401) {
+      if (!state.isAdmin && !state.adminToken) {
+        if (notice) notice.classList.remove('hidden');
+        container.classList.add('hidden');
+        if (actions) actions.classList.add('hidden');
+      }
+      return;
+    }
+    if (!resp.ok) return;
+
+    const data = await resp.json();
+    if (notice) notice.classList.add('hidden');
+    container.classList.remove('hidden');
+    if (actions) actions.classList.remove('hidden');
+
+    apmState.components = data.components || {};
+    apmState.kpi = data.kpi || {};
+
+    // 更新頂部 5 大全景 KPI 卡片
+    const kpi = apmState.kpi;
+    const healthEl = document.getElementById('apm-kpi-health-val');
+    const healthSubEl = document.getElementById('apm-kpi-health-sub');
+    if (healthEl) healthEl.textContent = `${(kpi.health_score ?? 100.0).toFixed(1)}%`;
+    if (healthSubEl) {
+      const errs = kpi.total_errors || 0;
+      healthSubEl.textContent = errs === 0 ? '全組件健康運行 (0 異常)' : `${errs} 次異常需關注`;
+      healthSubEl.style.color = errs === 0 ? '#00e676' : '#ff5252';
+    }
+
+    const callsEl = document.getElementById('apm-kpi-calls-val');
+    const callsSubEl = document.getElementById('apm-kpi-calls-sub');
+    if (callsEl) callsEl.textContent = `${(kpi.total_calls || 0).toLocaleString()} 次`;
+    if (callsSubEl) callsSubEl.textContent = `${kpi.total_rpm || 0.0} RPM · 活躍: ${kpi.active_components_count || 0} / ${kpi.total_components_count || 18}`;
+
+    const latEl = document.getElementById('apm-kpi-latency-val');
+    const latSubEl = document.getElementById('apm-kpi-latency-sub');
+    if (latEl) {
+      latEl.textContent = formatLatency(kpi.global_p95_ms);
+      latEl.style.color = getLatencyColor(kpi.global_p95_ms);
+    }
+    if (latSubEl) latSubEl.textContent = `平均耗時: ${formatLatency(kpi.global_avg_ms)}`;
+
+    const tokEl = document.getElementById('apm-kpi-tokens-val');
+    const tokSubEl = document.getElementById('apm-kpi-tokens-sub');
+    if (tokEl) tokEl.textContent = `${(kpi.total_tokens || 0).toLocaleString()}`;
+    if (tokSubEl) tokSubEl.textContent = `P: ${(kpi.prompt_tokens || 0).toLocaleString()} | C: ${(kpi.completion_tokens || 0).toLocaleString()} (~$${(kpi.total_cost_usd || 0).toFixed(3)})`;
+
+    const concEl = document.getElementById('apm-kpi-concurrency-val');
+    const concSubEl = document.getElementById('apm-kpi-concurrency-sub');
+    if (concEl) concEl.textContent = `${kpi.active_tasks || 0}`;
+    if (concSubEl) concSubEl.textContent = (kpi.active_tasks || 0) > 0 ? `${kpi.active_tasks} 個任務並行處理中` : '系統工作執行緒閒置中';
+
+    // 更新各分類數量計數器
+    updateApmCategoryCounts();
+
+    // 渲染表格
+    renderApmGrid();
+  } catch (err) {
+    console.warn('Failed to load component metrics:', err);
+  }
+}
+
+function updateApmCategoryCounts() {
+  const comps = Object.values(apmState.components);
+  const countAll = comps.length;
+  const countCoreEngine = comps.filter(c => c.category === 'core_engine').length;
+  const countCoreTool = comps.filter(c => c.category === 'core_tool').length;
+  const countModPlugin = comps.filter(c => c.category === 'mod_plugin').length;
+
+  const elAll = document.getElementById('count-all');
+  const elEngine = document.getElementById('count-core_engine');
+  const elTool = document.getElementById('count-core_tool');
+  const elPlugin = document.getElementById('count-mod_plugin');
+
+  if (elAll) elAll.textContent = countAll;
+  if (elEngine) elEngine.textContent = countCoreEngine;
+  if (elTool) elTool.textContent = countCoreTool;
+  if (elPlugin) elPlugin.textContent = countModPlugin;
+}
+
+function renderApmGrid() {
+  const tbody = document.getElementById('component-metrics-tbody');
+  if (!tbody) return;
+
+  const components = apmState.components || {};
+  let keys = Object.keys(components);
+
+  if (keys.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 2.5rem; color: var(--text-muted);">尚未記錄到任何組件執行紀錄。</td></tr>';
+    return;
+  }
+
+  // 依調用次數降序排列
+  keys.sort((a, b) => (components[b].call_count || 0) - (components[a].call_count || 0));
+
+  // 過濾分類
+  if (apmState.selectedCategory !== 'all') {
+    keys = keys.filter(k => components[k].category === apmState.selectedCategory);
+  }
+
+  // 過濾閒置
+  if (apmState.hideInactive) {
+    keys = keys.filter(k => (components[k].call_count || 0) > 0);
+  }
+
+  // 搜尋過濾
+  if (apmState.searchQuery) {
+    keys = keys.filter(k => k.toLowerCase().includes(apmState.searchQuery));
+  }
+
+  if (keys.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 2rem; color: var(--text-muted);">無符合篩選條件的組件。</td></tr>';
+    return;
+  }
+
+  let html = '';
+  for (const key of keys) {
+    const c = components[key];
+    const icon = _APM_ICONS[key] || '⚙️';
+    const failRate = c.call_count > 0 ? ((c.error_count / c.call_count) * 100).toFixed(1) + '%' : '0.0%';
+    const p50Str = formatLatency(c.p50_latency_ms);
+    const p95Str = formatLatency(c.p95_latency_ms);
+    const maxStr = formatLatency(c.max_latency_ms);
+
+    // 狀態點
+    let dotColor = '#64748b'; // 灰色 idle
+    let dotClass = '';
+    if (c.active_tasks > 0) {
+      dotColor = '#00e5ff';
+      dotClass = 'pulse-dot';
+    } else if (c.call_count > 0) {
+      dotColor = '#10b981';
+    }
+
+    // 類別徽章
+    let catText = '外掛';
+    let catBadgeClass = 'badge-neutral';
+    if (c.category === 'core_engine') {
+      catText = 'AI 核心';
+      catBadgeClass = 'badge-chat';
+    } else if (c.category === 'core_tool') {
+      catText = '工具';
+      catBadgeClass = 'badge-system';
+    }
+
+    // Token 進度條
+    const totTok = (c.prompt_tokens || 0) + (c.completion_tokens || 0);
+    const pTok = c.prompt_tokens || 0;
+    const cTok = c.completion_tokens || 0;
+    let pWidth = 0;
+    let cWidth = 0;
+    if (totTok > 0) {
+      pWidth = Math.round((pTok / totTok) * 100);
+      cWidth = 100 - pWidth;
+    }
+
+    // SLO 健康條樣式
+    const healthLvl = (c.health_level || 'HEALTHY').toLowerCase();
+    const healthScore = c.health_score ?? 100.0;
+
+    // 狀態標籤
+    const statusText = c.active_tasks > 0 ? '執行中' : (c.call_count > 0 ? '在席' : '閒置');
+    const badgeClass = c.active_tasks > 0 ? 'badge-primary' : (c.error_count > 0 ? 'badge-warn' : 'badge-ok');
+
+    html += `
+      <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+        <!-- 組件名稱 -->
+        <td style="padding: 12px 14px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: ${dotColor};" class="${dotClass}"></span>
+            <span style="font-size: 1.1rem;">${icon}</span>
+            <div>
+              <div style="font-weight: 700; color: #fff; font-size: 0.92rem;">${escHtml(key)}</div>
+              <span class="task-type-badge ${catBadgeClass}" style="font-size: 0.68rem; padding: 1px 6px; margin-top: 2px;">${catText}</span>
+            </div>
+          </div>
+        </td>
+
+        <!-- 調用吞吐 -->
+        <td style="padding: 12px 14px;">
+          <div style="font-weight: 600; color: #eee;">${c.call_count} 次</div>
+          <div style="font-size: 0.75rem; color: var(--text-muted);">${c.rpm || 0.0} RPM</div>
+        </td>
+
+        <!-- 延遲分佈 -->
+        <td style="padding: 12px 14px;">
+          <div style="display: flex; gap: 8px; font-size: 0.82rem;">
+            <span title="P50 中位數" style="color: ${getLatencyColor(c.p50_latency_ms)}; font-weight: 600;">${p50Str}</span>
+            <span style="color: var(--text-muted);">/</span>
+            <span title="P95 尾部延遲" style="color: ${getLatencyColor(c.p95_latency_ms)}; font-weight: 600;">${p95Str}</span>
+            <span style="color: var(--text-muted);">/</span>
+            <span title="Max 極大耗時" style="color: ${getLatencyColor(c.max_latency_ms)}; font-size: 0.78rem; color: #888;">${maxStr}</span>
+          </div>
+          <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 2px;">P50 / P95 / Max</div>
+        </td>
+
+        <!-- 近 15 次走勢 Sparkline -->
+        <td style="padding: 12px 14px;">
+          ${renderSparklineHtml(c.recent_latencies_trend)}
+        </td>
+
+        <!-- Tokens -->
+        <td style="padding: 12px 14px;">
+          <div style="font-size: 0.84rem; font-weight: 600; color: #ffd740;">
+            ${totTok > 0 ? totTok.toLocaleString() : '<span style="color:var(--text-muted);">0</span>'}
+          </div>
+          ${totTok > 0 ? `
+            <div class="token-progress" title="Prompt: ${pTok.toLocaleString()} | Comp: ${cTok.toLocaleString()}">
+              <div class="token-prompt-fill" style="width: ${pWidth}%;"></div>
+              <div class="token-comp-fill" style="width: ${cWidth}%;"></div>
+            </div>
+            <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 2px;">${pTok}P / ${cTok}C ${c.tps > 0 ? `· ${c.tps} t/s` : ''}</div>
+          ` : '<div style="font-size: 0.7rem; color: var(--text-muted);">—</div>'}
+        </td>
+
+        <!-- 可用性 SLO -->
+        <td style="padding: 12px 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; width: 95px;">
+            <span style="font-weight: 600; font-size: 0.82rem; color: ${healthScore >= 98 ? '#10b981' : (healthScore >= 90 ? '#f59e0b' : '#ef4444')};">${healthScore.toFixed(1)}%</span>
+            <span style="font-size: 0.72rem; color: ${c.error_count > 0 ? '#ef4444' : 'var(--text-muted)'};">${c.error_count > 0 ? `(${c.error_count} 錯)` : '健全'}</span>
+          </div>
+          <div class="slo-bar-bg" style="width: 95px;">
+            <div class="slo-bar-fill ${healthLvl}" style="width: ${healthScore}%;"></div>
+          </div>
+        </td>
+
+        <!-- 狀態 -->
+        <td style="padding: 12px 14px;">
+          <span class="task-type-badge ${badgeClass}" style="padding: 2px 8px; font-size: 0.75rem;">${statusText}</span>
+          ${c.active_tasks > 0 ? `<div style="font-size: 0.72rem; color: #00e5ff; margin-top: 2px;">${c.active_tasks} 任務進行中</div>` : ''}
+        </td>
+
+        <!-- 鏈路診斷按鈕 -->
+        <td style="padding: 12px 14px; text-align: center;">
+          <button class="btn-update" onclick="openApmTraceModal('${escHtml(key)}')" style="padding: 3px 10px; font-size: 0.75rem; border-radius: 6px;">
+            🔍 鏈路詳情
+          </button>
+        </td>
+      </tr>
+    `;
+  }
+  tbody.innerHTML = html;
+}
+
+function openApmTraceModal(componentKey) {
+  const modal = document.getElementById('apm-trace-modal');
+  if (!modal) return;
+
+  const c = apmState.components[componentKey];
+  if (!c) return;
+
+  const icon = _APM_ICONS[componentKey] || '⚙️';
+  document.getElementById('apm-modal-icon').textContent = icon;
+  document.getElementById('apm-modal-title').textContent = componentKey;
+
+  const catBadge = document.getElementById('apm-modal-cat-badge');
+  if (catBadge) catBadge.textContent = c.category;
+
+  const healthBadge = document.getElementById('apm-modal-health-badge');
+  if (healthBadge) {
+    healthBadge.textContent = c.health_level || 'HEALTHY';
+    healthBadge.className = `task-type-badge ${c.health_level === 'HEALTHY' ? 'badge-ok' : 'badge-warn'}`;
+  }
+
+  // Mini stats in modal
+  document.getElementById('apm-modal-calls').textContent = `${c.call_count} 次`;
+  document.getElementById('apm-modal-avg').textContent = formatLatency(c.avg_latency_ms);
+  document.getElementById('apm-modal-p50').textContent = formatLatency(c.p50_latency_ms);
+  document.getElementById('apm-modal-p95').textContent = formatLatency(c.p95_latency_ms);
+  document.getElementById('apm-modal-max').textContent = formatLatency(c.max_latency_ms);
+  document.getElementById('apm-modal-tokens').textContent = `${(c.total_tokens || 0).toLocaleString()} (~$${(c.estimated_cost_usd || 0).toFixed(4)})`;
+
+  // Traces table
+  const tracesTbody = document.getElementById('apm-modal-traces-tbody');
+  if (tracesTbody) {
+    const traces = c.recent_traces || [];
+    if (traces.length === 0) {
+      tracesTbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 1.5rem; color: #888;">暫無近期執行鏈路資料。</td></tr>';
+    } else {
+      // 倒序
+      const reversed = [...traces].reverse();
+      let html = '';
+      for (const tr of reversed) {
+        const timeStr = tr.timestamp ? new Date(tr.timestamp * 1000).toLocaleTimeString() : '—';
+        const statusBadge = tr.success ? '<span class="task-type-badge badge-ok" style="font-size:0.7rem; padding: 1px 6px;">成功</span>' : '<span class="task-type-badge badge-warn" style="font-size:0.7rem; padding: 1px 6px;">失敗</span>';
+        const tidStr = tr.trace_id && tr.trace_id !== '-' ? `<span style="font-family: monospace; color: #38bdf8;">${escHtml(tr.trace_id)}</span>` : '<span style="color:#666;">-</span>';
+        const tokStr = (tr.total_tokens > 0) ? `${tr.prompt_tokens} / ${tr.completion_tokens}` : '—';
+        const errStr = tr.error_msg ? `<span style="color: #ef4444;" title="${escHtml(tr.error_msg)}">${escHtml(tr.error_msg.substring(0, 35))}...</span>` : '<span style="color:#666;">—</span>';
+
+        html += `
+          <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+            <td style="padding: 7px 12px; color: #aaa;">${timeStr}</td>
+            <td style="padding: 7px 12px;">${tidStr}</td>
+            <td style="padding: 7px 12px; font-weight: 600; color: ${getLatencyColor(tr.latency_ms)};">${formatLatency(tr.latency_ms)}</td>
+            <td style="padding: 7px 12px; color: #ffd740;">${tokStr}</td>
+            <td style="padding: 7px 12px;">${statusBadge}</td>
+            <td style="padding: 7px 12px;">${errStr}</td>
+          </tr>
+        `;
+      }
+      tracesTbody.innerHTML = html;
+    }
+  }
+
+  modal.classList.remove('hidden');
+}
+
+function closeApmTraceModal() {
+  const modal = document.getElementById('apm-trace-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+async function resetComponentMetrics() {
+  if (!confirm('確定要重置所有組件的效能統計數據嗎？')) return;
+  try {
+    const headers = typeof getAuthHeaders === 'function' ? getAuthHeaders() : {};
+    const resp = await fetch('/api/system/components/metrics/reset', {
+      method: 'POST',
+      headers,
+      credentials: 'same-origin',
+    });
+    if (resp.ok) {
+      await loadComponentMetrics();
+    } else {
+      alert('重置失敗：權限不足或系統錯誤');
+    }
+  } catch (err) {
+    alert('重置失敗：' + err);
+  }
+}
+
+// =========================================================
+// SELF MONITORING & DELAY AUDIT CONTROLLER
+// =========================================================
+let selfMonCurrentFilter = 'ALL';
+let selfMonRecordsCache = [];
+
+async function loadSelfMonitoringData() {
+  const headers = typeof getAuthHeaders === 'function' ? getAuthHeaders() : {};
+
+  // 1. 載入 KPI 統計
+  try {
+    const statsRes = await fetch('/api/system/audit/kpi', {
+      headers,
+      credentials: 'same-origin',
+    });
+    if (statsRes.ok) {
+      const statsJson = await statsRes.json();
+      const d = statsJson.kpi || statsJson.data;
+      if (statsJson.status === 'success' && d) {
+        const elTotal = document.getElementById('stat-total-audits');
+        const elAvg = document.getElementById('stat-avg-latency');
+        const elWarn = document.getElementById('stat-warning-count');
+        const elCrit = document.getElementById('stat-critical-count');
+        if (elTotal) elTotal.textContent = d.total_audits || 0;
+        if (elAvg) elAvg.textContent = (d.avg_latency_ms / 1000.0).toFixed(1) + 's';
+        if (elWarn) elWarn.textContent = d.warning_count || 0;
+        if (elCrit) elCrit.textContent = (d.critical_count || 0) + (d.blocking_count || 0);
+      }
+    }
+  } catch (err) {
+    console.warn('[SelfMonitoring] 載入統計失敗:', err);
+  }
+
+  // 2. 載入稽核紀錄列表
+  try {
+    let url = '/api/system/audit/records?limit=60';
+    if (selfMonCurrentFilter === 'WARNING') {
+      url += '&severity=WARNING';
+    } else if (selfMonCurrentFilter === 'CRITICAL') {
+      url += '&severity=CRITICAL';
+    } else if (selfMonCurrentFilter === 'SLOW_TTFT_WARNING') {
+      url += '&type=SLOW_TTFT_WARNING';
+    } else if (selfMonCurrentFilter === 'ACTION_LOOP') {
+      url += '&type=ACTION_LOOP';
+    } else if (selfMonCurrentFilter === 'QUALITY_ANOMALY') {
+      url += '&type=QUALITY_ANOMALY';
+    } else if (selfMonCurrentFilter === 'INFERENCE_FAILURE') {
+      url += '&type=INFERENCE_FAILURE';
+    } else if (selfMonCurrentFilter === 'SYSTEM_BLOCKING') {
+      url += '&type=SYSTEM_BLOCKING';
+    } else if (selfMonCurrentFilter === 'MANUAL_CHECK') {
+      url += '&type=MANUAL_CHECK';
+    }
+
+    const recRes = await fetch(url, {
+      headers,
+      credentials: 'same-origin',
+    });
+    const tbody = document.getElementById('self-mon-table-body');
+    const updatedEl = document.getElementById('self-mon-last-updated');
+
+    if (updatedEl) {
+      const now = new Date();
+      updatedEl.textContent = `最後更新: ${now.toLocaleTimeString()}`;
+    }
+
+    if (recRes.ok) {
+      const recJson = await recRes.json();
+      const records = recJson.records || recJson.data || [];
+      if (recJson.status === 'success' && Array.isArray(records)) {
+        selfMonRecordsCache = records;
+        renderSelfMonTable(selfMonRecordsCache);
+      } else if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="7" style="padding: 30px; text-align: center; color: #f87171;">資料格式異常: ${escHtml(recJson.message || '無效的紀錄清單結構')}</td></tr>`;
+      }
+    } else if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="7" style="padding: 30px; text-align: center; color: #f87171;">載入紀錄失敗 (HTTP ${recRes.status})</td></tr>`;
+    }
+  } catch (err) {
+    console.warn('[SelfMonitoring] 載入紀錄失敗:', err);
+    const tbody = document.getElementById('self-mon-table-body');
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="7" style="padding: 30px; text-align: center; color: #f87171;">載入紀錄異常: ${escHtml(err.message || err)}</td></tr>`;
+    }
+  }
+}
+
+function renderSelfMonTable(records) {
+  const tbody = document.getElementById('self-mon-table-body');
+  if (!tbody) return;
+
+  if (!records || records.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" style="padding: 35px; text-align: center; color: #64748b;">暫無符合條件之技術稽核紀錄</td></tr>`;
+    return;
+  }
+
+  let html = '';
+  records.forEach((r) => {
+    let sevBadge = '';
+    if (r.severity === 'CRITICAL') {
+      sevBadge = '<span style="background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700;">CRITICAL</span>';
+    } else if (r.severity === 'WARNING') {
+      sevBadge = '<span style="background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700;">WARNING</span>';
+    } else {
+      sevBadge = '<span style="background: rgba(45, 212, 191, 0.2); color: #2dd4bf; border: 1px solid rgba(45, 212, 191, 0.4); padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700;">INFO</span>';
+    }
+
+    const latStr = r.latency_ms > 0 ? (r.latency_ms / 1000.0).toFixed(1) + 's' : '-';
+    const preview = r.root_cause ? r.root_cause.slice(0, 60) + (r.root_cause.length > 60 ? '...' : '') : '無根因說明';
+
+    html += `
+      <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+        <td style="padding: 12px 16px; white-space: nowrap; font-family: monospace; font-size: 0.8rem; color: #94a3b8;">${escHtml(r.created_at)}</td>
+        <td style="padding: 12px 16px; white-space: nowrap;">${sevBadge}</td>
+        <td style="padding: 12px 16px; white-space: nowrap; font-weight: 600; color: #f1f5f9;">${escHtml(r.incident_type)}</td>
+        <td style="padding: 12px 16px; white-space: nowrap; color: #38bdf8; font-weight: 600;">${latStr}</td>
+        <td style="padding: 12px 16px; white-space: nowrap;"><code style="background: rgba(255,255,255,0.06); padding: 2px 6px; border-radius: 4px; color: #a5b4fc; font-size: 0.8rem;">${escHtml(r.bottleneck_category || 'UNKNOWN')}</code></td>
+        <td style="padding: 12px 16px; color: #cbd5e1; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escHtml(preview)}</td>
+        <td style="padding: 12px 16px; text-align: center; white-space: nowrap;">
+          <button onclick="openAuditDetail(${r.id})" class="btn btn-secondary btn-sm" style="padding: 3px 8px; font-size: 0.75rem;">
+            查看報告
+          </button>
+        </td>
+      </tr>
+    `;
+  });
+
+  tbody.innerHTML = html;
+}
+
+function filterSelfMonRecords(filterType, btnEl) {
+  selfMonCurrentFilter = filterType;
+  const filterBtns = document.querySelectorAll('#self-mon-filters .filter-tab');
+  filterBtns.forEach((b) => {
+    b.style.background = '#334155';
+    b.style.color = '#cbd5e1';
+  });
+  if (btnEl) {
+    btnEl.style.background = '#3b82f6';
+    btnEl.style.color = '#fff';
+  }
+  loadSelfMonitoringData();
+}
+
+async function triggerManualAudit() {
+  const btn = document.getElementById('btn-self-mon-trigger');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '⏳ 正在執行稽核剖析...';
+  }
+
+  try {
+    const headers = typeof getAuthHeaders === 'function' ? getAuthHeaders() : {};
+    headers['Content-Type'] = 'application/json';
+
+    const res = await fetch('/api/system/audit/diagnose', {
+      method: 'POST',
+      headers,
+    });
+
+    const json = await res.json();
+    if (res.status === 401 || res.status === 403) {
+      alert('🔒 手動觸發技術稽核需要管理員權限，請先登入管理員帳號。');
+      return;
+    }
+
+    if (res.ok && json.status === 'success') {
+      alert('✅ 技術稽核完成並已存入資料庫！');
+      await loadSelfMonitoringData();
+    } else {
+      alert(`❌ 稽核失敗: ${json.message || '未知錯誤'}`);
+    }
+  } catch (err) {
+    alert(`❌ 網路異常: ${err.message}`);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '🚀 立即執行技術稽核';
+    }
+  }
+}
+
+async function openAuditDetail(recordId) {
+  const modal = document.getElementById('self-mon-detail-modal');
+  const content = document.getElementById('modal-audit-content');
+  if (!modal || !content) return;
+
+  modal.style.display = 'flex';
+  content.innerHTML = '<div style="padding: 30px; text-align: center; color: #94a3b8;">正在載入稽核報告...</div>';
+
+  try {
+    const headers = typeof getAuthHeaders === 'function' ? getAuthHeaders() : {};
+    const res = await fetch(`/api/system/audit/records/${recordId}`, { headers });
+
+    if (res.status === 401 || res.status === 403) {
+      content.innerHTML = `
+        <div style="padding: 35px 20px; text-align: center; color: #f87171;">
+          <div style="font-size: 3rem; margin-bottom: 12px;">🔒</div>
+          <h3 style="margin: 0 0 10px 0; color: #f87171; font-size: 1.25rem; font-weight: 700;">需要管理員登入權限</h3>
+          <p style="color: #cbd5e1; font-size: 0.9rem; line-height: 1.6; max-width: 480px; margin: 0 auto 20px auto;">
+            自我監控之完整根因剖析、關鍵日誌跡證與系統快照涉及後台核心管理與資安資訊。<br>
+            一般訪客僅可檢視清單概覽，請登入管理員帳號以解鎖詳細報告。
+          </p>
+        </div>
+      `;
+      return;
+    }
+
+    if (!res.ok) {
+      content.innerHTML = `<div style="color: #f87171; text-align: center; padding: 20px;">無法讀取紀錄 (HTTP ${res.status})</div>`;
+      return;
+    }
+    const json = await res.json();
+    const r = json.record;
+    if (!r) {
+      content.innerHTML = '<div style="color: #f87171; text-align: center; padding: 20px;">查無此紀錄。</div>';
+      return;
+    }
+
+    const recsHtml = Array.isArray(r.recommendations) && r.recommendations.length > 0
+      ? r.recommendations.map((item) => `<li style="margin-bottom: 4px;">${escHtml(item)}</li>`).join('')
+      : '<li>無具體建議</li>';
+
+    const evidenceHtml = Array.isArray(r.key_evidence) && r.key_evidence.length > 0
+      ? r.key_evidence.map((item) => `<pre style="background: #0f172a; padding: 8px 12px; border-radius: 6px; margin: 4px 0; font-size: 0.8rem; overflow-x: auto; color: #fca5a5; border: 1px solid #334155;"><code>${escHtml(item)}</code></pre>`).join('')
+      : '<span style="color: #64748b;">無特定關鍵日誌證據</span>';
+
+    const snap = r.log_snapshot || {};
+    const extraMetrics = r.extra_metrics || {};
+    let metricsHtml = '';
+    const metricKeys = Object.keys(extraMetrics);
+    if (metricKeys.length > 0) {
+      const items = metricKeys.map((k) => `<li><strong>${escHtml(k)}</strong>: <code style="color: #38bdf8;">${escHtml(typeof extraMetrics[k] === 'object' ? JSON.stringify(extraMetrics[k]) : String(extraMetrics[k]))}</code></li>`).join('');
+      metricsHtml = `
+        <div style="background: rgba(30, 41, 59, 0.7); border-left: 4px solid #818cf8; border-radius: 6px; padding: 14px;">
+          <h4 style="margin: 0 0 8px 0; color: #a5b4fc; font-size: 1rem;">📊 微觀耗時與度量指標 (Micro Metrics)</h4>
+          <ul style="margin: 0; padding-left: 20px; color: #e2e8f0; line-height: 1.6;">
+            ${items}
+          </ul>
+        </div>
+      `;
+    }
+
+    content.innerHTML = `
+      <div style="background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 14px; display: flex; flex-wrap: wrap; gap: 15px; font-size: 0.85rem;">
+        <div><strong>時間</strong>：<span style="color: #cbd5e1;">${escHtml(r.created_at)}</span></div>
+        <div><strong>類型</strong>：<span style="color: #f8fafc; font-weight: 600;">${escHtml(r.incident_type)}</span></div>
+        <div><strong>耗時</strong>：<span style="color: #38bdf8; font-weight: 600;">${(r.latency_ms / 1000.0).toFixed(1)}s (${r.latency_ms}ms)</span></div>
+        <div><strong>Trace ID</strong>：<code style="color: #a5b4fc;">${escHtml(r.trace_id || '-')}</code></div>
+        <div><strong>觸發原因</strong>：<span style="color: #e2e8f0;">${escHtml(r.trigger_reason)}</span></div>
+      </div>
+
+      <div style="background: rgba(30, 41, 59, 0.7); border-left: 4px solid #3b82f6; border-radius: 6px; padding: 14px;">
+        <h4 style="margin: 0 0 8px 0; color: #93c5fd; font-size: 1rem; display: flex; align-items: center; gap: 6px;">
+          🧠 雲端模型技術稽核診斷 (${escHtml(r.model_name || 'Cloud Search Model')})
+        </h4>
+        <div style="margin-bottom: 6px;"><strong>瓶頸分類</strong>：<code style="background: #0f172a; padding: 2px 6px; border-radius: 4px; color: #fde047;">${escHtml(r.bottleneck_category)}</code></div>
+        <div><strong>根因剖析</strong>：<span style="color: #f1f5f9; line-height: 1.5;">${escHtml(r.root_cause)}</span></div>
+      </div>
+
+      ${metricsHtml}
+
+      <div style="background: rgba(30, 41, 59, 0.7); border-left: 4px solid #10b981; border-radius: 6px; padding: 14px;">
+        <h4 style="margin: 0 0 8px 0; color: #6ee7b7; font-size: 1rem;">💡 稽核改善與處置建議</h4>
+        <ul style="margin: 0; padding-left: 20px; color: #e2e8f0; line-height: 1.6;">
+          ${recsHtml}
+        </ul>
+      </div>
+
+      <div style="background: rgba(30, 41, 59, 0.7); border-left: 4px solid #f59e0b; border-radius: 6px; padding: 14px;">
+        <h4 style="margin: 0 0 8px 0; color: #fcd34d; font-size: 1rem;">📝 關鍵日誌跡證</h4>
+        ${evidenceHtml}
+      </div>
+
+      <div style="background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 12px;">
+        <details>
+          <summary style="cursor: pointer; color: #94a3b8; font-weight: 600; font-size: 0.85rem;">查看 5 分鐘運行日誌快照截錄 (點擊展開)</summary>
+          <pre style="margin-top: 10px; padding: 10px; background: #020617; border-radius: 4px; font-size: 0.75rem; color: #cbd5e1; max-height: 250px; overflow-y: auto; white-space: pre-wrap;"><code>${escHtml(snapSnippet)}</code></pre>
+        </details>
+      </div>
+    `;
+  } catch (err) {
+    content.innerHTML = `<div style="color: #f87171;">載入異常: ${escHtml(err.message)}</div>`;
+  }
+}
+
+function closeSelfMonModal() {
+  const modal = document.getElementById('self-mon-detail-modal');
+  if (modal) modal.style.display = 'none';
 }
 
 async function loadTasks() {
@@ -1191,7 +2206,7 @@ async function loadTasks() {
 
         let timeText = '--';
         if (t.trigger_timestamp) {
-          timeText = new Date(t.trigger_timestamp * 1000).toLocaleString('zh-TW');
+          timeText = formatToUtc8(t.trigger_timestamp);
         }
 
         html += `
@@ -1360,6 +2375,7 @@ async function executeLogin() {
       if (state.currentView === 'settings') loadSettings();
       if (state.currentView === 'tasks') loadTasks();
       if (state.currentView === 'audit') loadAuditLogs();
+      if (state.currentView === 'roast') loadRoastConfig();
     } else if (resp.status === 429) {
       showToast(`⛔ ${data.message || '登入失敗次數過多，該 IP 已暫時鎖定！'}`, 'error');
     } else {
@@ -1385,6 +2401,9 @@ async function logoutAdmin(auto = false) {
 
   state.adminToken = null;
   localStorage.removeItem('sherry_admin_token');
+  state.settingsData = {};
+  state.dirtyKeys.clear();
+  state.dirtyValues = {};
   updateAuthUI(false);
   await loadLogFiles();
 
@@ -1397,6 +2416,7 @@ async function logoutAdmin(auto = false) {
   if (state.currentView === 'logs') loadLogs();
   if (state.currentView === 'settings') loadSettings();
   if (state.currentView === 'tasks') loadTasks();
+  if (state.currentView === 'roast') loadRoastConfig();
 }
 
 function updateAuthUI(isAdmin) {
@@ -1406,6 +2426,9 @@ function updateAuthUI(isAdmin) {
   const logoutBtn = document.getElementById('logout-nav-btn');
   const adminOnlyEls = document.querySelectorAll('.admin-only');
   const guestNotice = document.getElementById('chat-guest-notice');
+  const compNotice = document.getElementById('component-metrics-auth-notice');
+  const compContainer = document.getElementById('component-metrics-container');
+  const compActions = document.getElementById('component-metrics-actions');
 
   if (isAdmin) {
     if (loginBtn) loginBtn.classList.add('hidden');
@@ -1413,12 +2436,19 @@ function updateAuthUI(isAdmin) {
     if (logoutBtn) logoutBtn.classList.remove('hidden');
     adminOnlyEls.forEach(el => el.classList.remove('hidden'));
     if (guestNotice) guestNotice.style.display = 'none';
+    if (compNotice) compNotice.classList.add('hidden');
+    if (typeof loadComponentMetrics === 'function') {
+      loadComponentMetrics();
+    }
   } else {
     if (loginBtn) loginBtn.classList.remove('hidden');
     if (adminPill) adminPill.classList.add('hidden');
     if (logoutBtn) logoutBtn.classList.add('hidden');
     adminOnlyEls.forEach(el => el.classList.add('hidden'));
     if (guestNotice) guestNotice.style.display = 'block';
+    if (compNotice) compNotice.classList.remove('hidden');
+    if (compContainer) compContainer.classList.add('hidden');
+    if (compActions) compActions.classList.add('hidden');
   }
 }
 
@@ -1521,8 +2551,8 @@ function renderChatMessageContent(text) {
   // 2. 萃取 Action & Action Input
   const actionMatches = [...text.matchAll(/<action>([\s\S]*?)<\/action>(?:\s*<action_input>([\s\S]*?)<\/action_input>)?/gi)];
   actionMatches.forEach((m) => {
-    const act = m[1].trim();
-    const actIn = (m[2] || '').trim();
+    const act = m[1].trim().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const actIn = (m[2] || '').trim().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     stepsHtml += `<div class="react-thought-step"><span class="react-step-badge react-badge-action">⚡ 發動工具 [${act}]</span> 指令: <code>${actIn || '無參數'}</code></div>`;
   });
 
@@ -1704,7 +2734,7 @@ async function loadAuditLogs() {
           ${history.map(rec => {
             const isLoggedOut = rec.status === 'logged_out' || rec.logout_time;
             const statusBadge = isLoggedOut
-              ? `<span class="badge-logout">已登出 (${escHtml(rec.logout_time)})</span>`
+              ? `<span class="badge-logout">已登出 (${escHtml(formatToUtc8(rec.logout_time))})</span>`
               : `<span class="badge-active">● 線上中 (Active)</span>`;
             const actionsCount = (rec.actions || []).length;
             const actionsJson = escAttr(JSON.stringify(rec.actions || []));
@@ -1712,7 +2742,7 @@ async function loadAuditLogs() {
             return `
               <tr>
                 <td><span class="user-badge">👤 ${escHtml(rec.username || 'admin')}</span></td>
-                <td><span class="audit-time">${escHtml(rec.login_time)}</span></td>
+                <td><span class="audit-time">${escHtml(formatToUtc8(rec.login_time))}</span></td>
                 <td>${statusBadge}</td>
                 <td><code class="ip-code">${escHtml(rec.ip)}</code></td>
                 <td><span class="location-tag">${escHtml(rec.location)}</span></td>
@@ -1745,7 +2775,7 @@ function showAuditDetailModal(actions) {
           <div class="timeline-item">
             <div class="timeline-dot"></div>
             <div class="timeline-content">
-              <div class="timeline-time">${escHtml(act.timestamp)}</div>
+              <div class="timeline-time">${escHtml(formatToUtc8(act.timestamp))}</div>
               <div class="timeline-action">${escHtml(act.action)}</div>
               <div class="timeline-detail">${escHtml(act.detail)}</div>
             </div>
@@ -1901,7 +2931,7 @@ async function loadDashboard() {
     if (data.status !== 'success') return;
 
     const versionTag = document.getElementById('dashboard-version-tag');
-    if (versionTag) versionTag.textContent = data.version || 'v1.4.1';
+    if (versionTag) versionTag.textContent = data.version || 'v1.9.0-dev';
 
     const git = data.git || {};
     const running = git.running || {};
@@ -1931,7 +2961,7 @@ async function loadDashboard() {
             <span style="font-size: 1.4rem;">🌿</span>
             <div>
               <div style="font-weight: 700; font-size: 1.1rem; color: #00e5ff;">Git 代碼庫與實時運作版本</div>
-              <div style="font-size: 0.82rem; color: var(--text-muted);">分支: <strong style="color:var(--text-main);">${escHtml(disk.branch || 'dev')}</strong> | 標籤: <strong>${escHtml(data.version || 'v1.4.1')}</strong></div>
+              <div style="font-size: 0.82rem; color: var(--text-muted);">分支: <strong style="color:var(--text-main);">${escHtml(disk.branch || 'dev')}</strong> | 標籤: <strong>${escHtml(data.version || 'v1.9.0-dev')}</strong></div>
             </div>
           </div>
           ${syncBadge}
@@ -1958,7 +2988,7 @@ async function loadDashboard() {
           <div style="background: rgba(0,0,0,0.25); padding: 10px 14px; border-radius: 6px; border: 1px solid var(--border-color);">
             <div style="color: var(--text-muted); font-size: 0.78rem;">👤 最新提交作者與時間:</div>
             <div style="font-weight: 600; margin-top: 2px;">${escHtml(disk.commit_author || '未知')}</div>
-            <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px;">${escHtml(disk.commit_date || '--')}</div>
+            <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px;">${escHtml(formatToUtc8(disk.commit_date || '--'))}</div>
           </div>
         </div>
         ${gitAlert}

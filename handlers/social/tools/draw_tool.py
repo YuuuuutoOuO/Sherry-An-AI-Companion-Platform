@@ -5,7 +5,6 @@ import logging
 import re
 import asyncio
 import urllib.parse
-from pathlib import Path
 import aiohttp
 import discord
 from discord.ext import commands
@@ -13,7 +12,7 @@ from typing import Any
 
 import settings
 from handlers.bot_brain import BotBrain, InferenceTask
-from handlers.social.contracts import ToolCategory, ToolResult
+from handlers.social.contracts import ToolResult
 from handlers.social.tool_base import BaseTool, ToolResponseMode
 from handlers.social.utils import append_draw_thinking_log
 from mod.clients import GeminiImageClient
@@ -387,9 +386,8 @@ class DrawTool(BaseTool):
         成功回傳圖片 bytes，超時或失敗回傳 None。
         """
         # 截斷過長 prompt，避免 URL 過長導致 404
-        MAX_PROMPT_LENGTH = 300
-        if len(positive_prompt) > MAX_PROMPT_LENGTH:
-            positive_prompt = positive_prompt[:MAX_PROMPT_LENGTH].rsplit(" ", 1)[0]
+        if len(positive_prompt) > settings.DRAW_TOOL_MAX_PROMPT_LENGTH:
+            positive_prompt = positive_prompt[: settings.DRAW_TOOL_MAX_PROMPT_LENGTH].rsplit(" ", 1)[0]
             logger.warning(f"Pollinations prompt 過長，截斷至 {len(positive_prompt)} 字元")
 
         encoded_positive = urllib.parse.quote(positive_prompt)
@@ -487,14 +485,15 @@ class DrawTool(BaseTool):
         # 狀態機檢查
         if getattr(brain, "_voice_mode_active", False):
             msg = "名偵探現在正在用語音講話，無法分心畫圖喔！"
-            if silent: return msg
+            if silent:
+                return msg
             await message.reply(msg, mention_author=True)
             return None
 
         if not silent:
             await message.reply("好的，名偵探現在來畫圖了！請等我一下...", mention_author=True)
 
-        brain._sd_generating = True
+        brain.sd_generating = True
         # 廿別「需要記錄到 log 」的中間變數
         _seed_tags: list[str] = []
         _expanded_prompt: str = ""
@@ -585,7 +584,7 @@ class DrawTool(BaseTool):
                 return ToolResult.error(err_msg, is_direct_rendered=True)
 
         finally:
-            brain._sd_generating = False
+            brain.sd_generating = False
             # 無論成否都記錄完整的提示詞資訊
             append_draw_thinking_log(
                 user_query=user_query,

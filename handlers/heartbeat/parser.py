@@ -31,8 +31,18 @@ class HeartbeatTask:
 def parse_heartbeat_markdown(file_path: Path) -> list[HeartbeatTask]:
     """解析 heartbeat.md 文字內容並轉化成 HeartbeatTask 結構清單。"""
     if not file_path.exists():
-        logger.warning("[HEARTBEAT] 找不到排程設定檔: %s", file_path)
-        return []
+        try:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            default_content = (
+                "# Sherry Heartbeat Schedule\n\n"
+                "## 早上主動問候\n"
+                "- schedule_time: 08:30\n"
+                "- channel_id: 1519967448982487201\n"
+                "- prompt: 用橘雪莉元氣名偵探口吻跟大家說聲早安！\n"
+            )
+            file_path.write_text(default_content, encoding="utf-8")
+        except Exception:
+            return []
 
     try:
         content = file_path.read_text(encoding="utf-8")

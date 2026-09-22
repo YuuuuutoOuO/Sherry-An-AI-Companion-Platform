@@ -7,7 +7,6 @@ Detective Escape Room Text Adventure Engine.
 from __future__ import annotations
 
 import uuid
-from typing import Any
 
 from mod.game_center.models import EscapeRoomState, GameResultStatus
 

@@ -205,11 +205,18 @@ class DeepSearchEngine(IDeepSearchEngine):
                 await self._notify_progress(session, progress_callback)
 
                 round_results: list[SearchResultItem] = []
-                for q in search_queries[: config.QUERIES_PER_ROUND]:
-                    res_items = await self._search.search(
-                        query=q, max_results=config.MAX_RESULTS_PER_QUERY
-                    )
-                    round_results.extend(res_items)
+                queries_to_run = search_queries[: config.QUERIES_PER_ROUND]
+                if queries_to_run:
+                    search_tasks = [
+                        self._search.search(query=q, max_results=config.MAX_RESULTS_PER_QUERY)
+                        for q in queries_to_run
+                    ]
+                    search_responses = await asyncio.gather(*search_tasks, return_exceptions=True)
+                    for s_resp in search_responses:
+                        if isinstance(s_resp, list):
+                            round_results.extend(s_resp)
+                        elif isinstance(s_resp, Exception):
+                            logger.warning("[deep_search.engine] 搜尋查詢失敗: %s", s_resp)
 
                 # 記錄搜尋思考
                 search_thought = f"針對維度【{dim_title}】執行關鍵字檢索：`{', '.join(search_queries)}`。\n檢索返回 {len(round_results)} 筆候選資料來源。"
@@ -223,19 +230,28 @@ class DeepSearchEngine(IDeepSearchEngine):
                     )
                 )
 
-                # B. 網頁擷取與去噪
-                round_scraped_docs: list[SourceDoc] = []
-                for res in round_results:
-                    if res.url in seen_urls:
-                        continue
-                    if len(round_scraped_docs) >= config.MAX_PAGES_TO_SCRAPE_PER_ROUND:
-                        break
+                # B. 網頁擷取與去噪（使用 asyncio.gather 並行爬取）
+                candidates_to_scrape: list[SearchResultItem] = []
+                for item in round_results:
+                    if item.url not in seen_urls:
+                        seen_urls.add(item.url)
+                        candidates_to_scrape.append(item)
+                        if len(candidates_to_scrape) >= config.MAX_PAGES_TO_SCRAPE_PER_ROUND:
+                            break
 
-                    seen_urls.add(res.url)
-                    doc = await self._scraper.scrape(url=res.url, snippet=res.snippet)
-                    if doc and doc.content:
-                        round_scraped_docs.append(doc)
-                        collected_sources.append(doc)
+                round_scraped_docs: list[SourceDoc] = []
+                if candidates_to_scrape:
+                    scrape_tasks = [
+                        self._scraper.scrape(url=c.url, snippet=c.snippet)
+                        for c in candidates_to_scrape
+                    ]
+                    scrape_responses = await asyncio.gather(*scrape_tasks, return_exceptions=True)
+                    for doc in scrape_responses:
+                        if isinstance(doc, SourceDoc) and doc.content:
+                            round_scraped_docs.append(doc)
+                            collected_sources.append(doc)
+                        elif isinstance(doc, Exception):
+                            logger.warning("[deep_search.engine] 網頁爬取失敗: %s", doc)
 
                 # C. 文獻精讀與事實萃取
                 reading_notes = ""
@@ -545,9 +561,9 @@ class DeepSearchEngine(IDeepSearchEngine):
             f"本研究旨在系統性剖析「{topic}」之關鍵發展脈絡、運作機制與市場/技術影響。\n\n"
             f"## 3. 多維度深度技術與專題剖析 (In-Depth Thematic Analysis)\n"
             + "\n".join(dims_md)
-            + f"\n## 4. 關鍵爭議、多方觀點與局限性評估 (Critique & Nuances)\n"
-            f"綜合各維度文獻交叉比對，該領域受外部環境與數據變數影響顯著，建議持續追蹤後續進展。\n\n"
-            f"## 5. 參考文獻與資料來源 (References & Sources)\n"
+            + "\n## 4. 關鍵爭議、多方觀點與局限性評估 (Critique & Nuances)\n"
+            "綜合各維度文獻交叉比對，該領域受外部環境與數據變數影響顯著，建議持續追蹤後續進展。\n\n"
+            "## 5. 參考文獻與資料來源 (References & Sources)\n"
             + "\n".join(sources_md)
         )
         return report_md

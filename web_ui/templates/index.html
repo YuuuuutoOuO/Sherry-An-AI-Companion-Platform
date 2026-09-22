@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=17">
+    <link rel="stylesheet" href="/static/style.css?v=18">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
@@ -25,6 +25,7 @@
             {% include 'views/dashboard.html' %}
             {% include 'views/logs.html' %}
             {% include 'views/metrics.html' %}
+            {% include 'views/self_monitoring.html' %}
             {% include 'views/tasks.html' %}
             {% include 'views/chat.html' %}
             {% include 'views/settings.html' %}
@@ -33,6 +34,7 @@
             {% include 'views/audit.html' %}
             {% include 'views/mod_manager.html' %}
             {% include 'views/roast.html' %}
+            {% include 'views/spark.html' %}
 
             <!-- ===== DYNAMIC MOD VIEWS (加載之模組被動渲染處) ===== -->
             <div id="dynamic-mod-views"></div>
@@ -42,6 +44,7 @@
     <!-- ===== TOAST, MODALS & OVERLAYS ===== -->
     {% include 'components/modals.html' %}
 
-    <script src="/static/app.js?v=13"></script>
+    <script src="/static/app.js?v=19"></script>
+    <script src="/handlers/spark/static/spark.js?v=2"></script>
 </body>
 </html>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import discord
+import discord.opus
 from discord.ext import commands
 from discord import app_commands
 import asyncio
@@ -35,6 +36,110 @@ class MusicHandler(commands.Cog):
         self.playback_accumulated_time: dict[int, float] = {}
         self.is_paused: dict[int, bool] = {}
         self.progress_tasks: dict[int, asyncio.Task[Any]] = {}
+        self._is_stopping: dict[int, bool] = {}
+        self._is_skipping: dict[int, bool] = {}
+        self.current_sources: dict[int, Any] = {}
+        self.consecutive_failures: dict[int, int] = {}
+
+    # ──────────────────────────────────────────────────────────
+    # 資源清理與自癒重連方法
+    # ──────────────────────────────────────────────────────────
+
+    def _cleanup_guild_source(self, guild_id: int) -> None:
+        """安全釋放並強制終止指定伺服器現有的音訊來源與 FFmpeg 子行程。
+
+        Args:
+            guild_id: Discord 伺服器 ID。
+        """
+        source = self.current_sources.pop(guild_id, None)
+        if source is None:
+            return
+
+        try:
+            # 1. 若為 PCMVolumeTransformer 或包裝類別，取出底層 source
+            raw_source = getattr(source, "original", source)
+
+            # 2. 檢查底層 FFmpeg 子行程並強制終止
+            proc = getattr(raw_source, "_process", None)
+            if proc is not None:
+                try:
+                    if proc.poll() is None:
+                        proc.kill()
+                except Exception as e:
+                    logger.debug("終止 FFmpeg 進程 (PID: %s) 失敗: %s", getattr(proc, "pid", None), e)
+
+                # 確保關閉 stdout/stderr/stdin 管道，避免 Windows 管道阻塞
+                for pipe in (getattr(proc, "stdout", None), getattr(proc, "stderr", None), getattr(proc, "stdin", None)):
+                    if pipe is not None:
+                        try:
+                            pipe.close()
+                        except Exception:
+                            pass
+
+            # 3. 呼叫原始 cleanup
+            if hasattr(source, "cleanup"):
+                source.cleanup()
+            elif hasattr(raw_source, "cleanup"):
+                raw_source.cleanup()
+        except Exception as e:
+            logger.debug("清理音訊來源失敗 (guild_id: %s): %s", guild_id, e)
+
+    async def _recover_voice_and_play_next(
+        self,
+        guild: discord.Guild,
+        text_channel: discord.TextChannel,
+    ) -> None:
+        """當底層 Native 音訊/語音通道崩潰時，執行自動重置與重連自癒程序。
+
+        Args:
+            guild: Discord 伺服器物件。
+            text_channel: 文字回覆頻道。
+        """
+        guild_id = guild.id
+        logger.warning("啟動語音客戶端自癒重連程序 (Guild: %s)", guild_id)
+
+        # 1. 清理舊音訊來源與時間軸
+        self._cleanup_guild_source(guild_id)
+        self._stop_progress_updater(guild_id)
+        self.current_song[guild_id] = None
+        self.is_paused[guild_id] = False
+
+        # 2. 取得原先所在的語音頻道
+        vc: Any = guild.voice_client
+        target_channel = getattr(vc, "channel", None)
+
+        # 3. 強制中斷舊語音客戶端
+        if vc is not None:
+            try:
+                if hasattr(vc, "stop"):
+                    vc.stop()
+                if hasattr(vc, "disconnect"):
+                    await vc.disconnect(force=True)
+            except Exception as e:
+                logger.debug("自癒程序中斷舊語音連線異常: %s", e)
+
+        # 4. 短暫冷卻避免與 Discord Gateway 衝突
+        await asyncio.sleep(1.0)
+
+        # 5. 若找不到語音頻道，嘗試從伺服器語音狀態找回
+        if target_channel is None:
+            for channel in guild.voice_channels:
+                if len(channel.members) > 0:
+                    target_channel = channel
+                    break
+
+        if target_channel is None:
+            logger.warning("自癒程序找不到可重連的語音頻道 (Guild: %s)，結束自癒", guild_id)
+            return
+
+        # 6. 重新連線語音頻道並繼續播放
+        try:
+            await target_channel.connect()
+            logger.info("自癒重連語音頻道成功 (Channel: %s)，繼續播放佇列", target_channel.name)
+            self._play_next(guild, text_channel)
+        except Exception as e:
+            logger.error("自癒重連語音頻道失敗: %s", e)
+            await text_channel.send(f"❌ 語音通道自癒重連失敗：`{str(e)}`")
 
     # ──────────────────────────────────────────────────────────
     # 留言移除與時間軸工具方法
@@ -340,6 +445,7 @@ class MusicHandler(commands.Cog):
         if 1 <= index <= len(queue):
             song = queue.pop(index - 1)
             queue.insert(0, song)
+            self._is_skipping[guild_id] = True
             return song
         return None
 
@@ -356,6 +462,62 @@ class MusicHandler(commands.Cog):
         count = len(queue)
         self.queues[guild_id] = []
         return count
+
+    def skip_song(self, guild_id: int) -> bool:
+        """跳過指定伺服器當前正在播放的歌曲。
+
+        Args:
+            guild_id: Discord 伺服器 ID。
+
+        Returns:
+            bool: 是否成功觸發跳過。
+        """
+        guild = self.bot.get_guild(guild_id)
+        vc: Any = guild.voice_client if guild else None
+        if vc and hasattr(vc, "is_connected") and vc.is_connected():
+            if hasattr(vc, "is_playing") and (vc.is_playing() or vc.is_paused()):
+                self._is_skipping[guild_id] = True
+                self._cleanup_guild_source(guild_id)
+                vc.stop()
+                return True
+        return False
+
+    async def stop_player(self, guild_id: int, disconnect: bool = True) -> None:
+        """停止指定伺服器的音樂播放、清空佇列、重置循環模式並釋放播放資源。
+
+        Args:
+            guild_id: Discord 伺服器 ID。
+            disconnect: 是否中斷語音頻道連線（預設 True）。
+        """
+        # 1. 設置停止標記，阻斷 after_playback 的非預期循環回塞與自動切歌
+        self._is_stopping[guild_id] = True
+
+        # 2. 清空佇列與狀態
+        self.queues[guild_id] = []
+        self.current_song[guild_id] = None
+        self.loop_modes[guild_id] = "none"
+        self.is_paused[guild_id] = False
+        self.playback_start_time.pop(guild_id, None)
+        self.playback_accumulated_time.pop(guild_id, None)
+        self.consecutive_failures[guild_id] = 0
+
+        # 3. 強制釋放現有音訊來源與 FFmpeg 進程
+        self._cleanup_guild_source(guild_id)
+
+        # 4. 停止時間軸任務
+        self._stop_progress_updater(guild_id)
+
+        # 5. 刪除當前播放 Embed 訊息
+        await self._delete_song_message(guild_id)
+
+        # 6. 停止語音播放與中斷連線
+        guild = self.bot.get_guild(guild_id)
+        vc: Any = guild.voice_client if guild else None
+        if vc and hasattr(vc, "is_connected") and vc.is_connected():
+            if hasattr(vc, "is_playing") and (vc.is_playing() or vc.is_paused()):
+                vc.stop()
+            if disconnect and hasattr(vc, "disconnect"):
+                await vc.disconnect()
 
     # ──────────────────────────────────────────────────────────
     # 核心播放引擎
@@ -378,6 +540,7 @@ class MusicHandler(commands.Cog):
         """
         guild = text_channel.guild
         guild_id = guild.id
+        self._is_stopping[guild_id] = False
 
         vc: Any = guild.voice_client
         try:
@@ -392,8 +555,9 @@ class MusicHandler(commands.Cog):
         if guild_id not in self.queues:
             self.queues[guild_id] = []
 
+        cleaned_query = query.strip().rstrip("&?").strip()
         youtube_regex = r'^(https?\:\/\/)?(www\.youtube\.com|youtu\.?be)\/.+$'
-        search_query = query if re.match(youtube_regex, query.strip()) else f"ytsearch:{query}"
+        search_query = cleaned_query if re.match(youtube_regex, cleaned_query) else f"ytsearch:{cleaned_query}"
 
         try:
             loop = asyncio.get_running_loop()
@@ -432,7 +596,6 @@ class MusicHandler(commands.Cog):
                     self.queues[guild_id] = added_items + self.queues[guild_id]
                 else:
                     self.queues[guild_id].extend(added_items)
-                count = len(added_items)
             else:
                 url = data.get('webpage_url') or data.get('url')
                 if url and not str(url).startswith('http'):
@@ -455,11 +618,10 @@ class MusicHandler(commands.Cog):
                     self.queues[guild_id].insert(0, song_item)
                 else:
                     self.queues[guild_id].append(song_item)
-                count = 1
 
             is_currently_playing = bool(vc and hasattr(vc, "is_playing") and (vc.is_playing() or vc.is_paused()))
             total_queue_len = len(self.queues[guild_id])
-            if total_queue_len == count and not is_currently_playing:
+            if not is_currently_playing:
                 first_song = self.queues[guild_id][0]
                 dur_str = self.format_duration(first_song.get("duration", 0) or 0)
                 await text_channel.send(f"🎵 偵探橘雪莉已就定位！開始播放：**{first_song['title']}** `[{dur_str}]`")
@@ -486,6 +648,7 @@ class MusicHandler(commands.Cog):
 
         if vc is None or not vc.is_connected():
             self._stop_progress_updater(guild_id)
+            self._cleanup_guild_source(guild_id)
             self.current_song[guild_id] = None
             return
 
@@ -539,15 +702,66 @@ class MusicHandler(commands.Cog):
                     source = discord.PCMVolumeTransformer(raw_source, volume=vol)
 
                     def after_playback(error: Exception | None = None) -> None:
+                        self._cleanup_guild_source(guild_id)
+
+                        if self._is_stopping.get(guild_id, False):
+                            logger.debug("播放中斷來自 stop 操作 (guild_id: %s)，略過 after_playback", guild_id)
+                            return
+
+                        guild_obj = self.bot.get_guild(guild_id)
+                        curr_vc: Any = guild_obj.voice_client if guild_obj else None
+                        if curr_vc is None or not getattr(curr_vc, "is_connected", lambda: False)():
+                            logger.debug("語音客戶端已斷線 (guild_id: %s)，略過 after_playback 重入與循環", guild_id)
+                            self._stop_progress_updater(guild_id)
+                            self.current_song[guild_id] = None
+                            self.is_paused[guild_id] = False
+                            return
+
                         if error:
-                            logger.error(f"播放中斷錯誤: {error}")
+                            logger.error("播放中斷錯誤: %s", error)
+                            err_str = str(error).lower()
+                            is_native_crash = (
+                                "access violation" in err_str
+                                or "not connected to voice" in err_str
+                                or isinstance(error, (OSError, discord.ClientException, discord.opus.OpusError))
+                            )
+
+                            self.consecutive_failures[guild_id] = self.consecutive_failures.get(guild_id, 0) + 1
+
+                            if self.consecutive_failures[guild_id] >= 3:
+                                logger.warning("伺服器 %s 連續 3 次播放失敗，觸發熔斷保護", guild_id)
+                                self._stop_progress_updater(guild_id)
+                                self.current_song[guild_id] = None
+                                self.is_paused[guild_id] = False
+                                self.queues[guild_id] = []
+                                asyncio.run_coroutine_threadsafe(
+                                    text_channel.send("🛑 連續 3 次播放異常，為保護系統穩定已自動暫停播放並清空佇列。"),
+                                    self.bot.loop,
+                                )
+                                return
+
+                            if is_native_crash:
+                                logger.warning("偵測到底層語音或音訊解碼崩潰 (%s)，啟動語音自癒重連...", error)
+                                asyncio.run_coroutine_threadsafe(
+                                    text_channel.send("⚠️ 偵測到底層語音串流異常，橘雪莉正在重新校準語音頻道..."),
+                                    self.bot.loop,
+                                )
+                                asyncio.run_coroutine_threadsafe(
+                                    self._recover_voice_and_play_next(guild, text_channel),
+                                    self.bot.loop,
+                                )
+                                return
+                        else:
+                            self.consecutive_failures[guild_id] = 0
 
                         self._stop_progress_updater(guild_id)
                         asyncio.run_coroutine_threadsafe(self._delete_song_message(guild_id), self.bot.loop)
 
+                        is_skipping = self._is_skipping.pop(guild_id, False)
                         loop_mode = self.loop_modes.get(guild_id, "none")
                         if loop_mode == "single" and song:
-                            self.queues[guild_id].insert(0, song)
+                            if not is_skipping:
+                                self.queues[guild_id].insert(0, song)
                         elif loop_mode == "all" and song:
                             self.queues[guild_id].append(song)
 
@@ -557,12 +771,14 @@ class MusicHandler(commands.Cog):
 
                     # 如果當前已在播放中，先安全停止避免 ClientException
                     if vc and hasattr(vc, "is_playing") and (vc.is_playing() or vc.is_paused()):
+                        self._cleanup_guild_source(guild_id)
                         vc.stop()
                         await asyncio.sleep(0.05)
 
                     self.playback_start_time[guild_id] = time.time()
                     self.playback_accumulated_time[guild_id] = 0.0
                     self.is_paused[guild_id] = False
+                    self.current_sources[guild_id] = source
 
                     if vc and hasattr(vc, "play"):
                         vc.play(source, after=after_playback)
@@ -575,7 +791,22 @@ class MusicHandler(commands.Cog):
                     self._start_progress_updater(guild_id)
 
                 except Exception as e:
-                    logger.error(f"背景提取歌曲失敗，切換下一首: {e}")
+                    self._cleanup_guild_source(guild_id)
+                    self.consecutive_failures[guild_id] = self.consecutive_failures.get(guild_id, 0) + 1
+                    logger.error("背景提取歌曲失敗，切換下一首: %s", e)
+
+                    if self.consecutive_failures[guild_id] >= 3:
+                        logger.warning("伺服器 %s 連續 3 次提取/播放失敗，觸發熔斷保護", guild_id)
+                        await text_channel.send(
+                            f"⚠️ 歌曲提取失敗: `{str(e)[:50]}`\n"
+                            f"🛑 連續 3 次播放異常，為保護系統穩定已自動暫停播放並清空佇列。"
+                        )
+                        self._stop_progress_updater(guild_id)
+                        self.current_song[guild_id] = None
+                        self.queues[guild_id] = []
+                        self.is_paused[guild_id] = False
+                        return
+
                     await text_channel.send(
                         f"⚠️ 名偵探發聲警告！目標似乎上了反魔陣，無法發聲放出來！自動跳接下一號...\n"
                         f"*(技術錯失回執報:{str(e)[:50]})*"
@@ -587,6 +818,7 @@ class MusicHandler(commands.Cog):
             asyncio.run_coroutine_threadsafe(background_fetch_and_play(), self.bot.loop)
         else:
             self._stop_progress_updater(guild_id)
+            self._cleanup_guild_source(guild_id)
             self.current_song[guild_id] = None
             self.is_paused[guild_id] = False
 
@@ -608,6 +840,7 @@ class MusicHandler(commands.Cog):
         app_commands.Choice(name="🎯  jump   — 優先播放指定編號的歌",      value="jump"),
         app_commands.Choice(name="🗑️  remove — 刪除指定編號的歌",         value="remove"),
         app_commands.Choice(name="🧹  clear  — 清空整個播放清單",            value="clear"),
+        app_commands.Choice(name="⏹️  stop   — 停止播放並離開語音頻道",       value="stop"),
     ])
     async def play_command(
         self,
@@ -695,8 +928,7 @@ class MusicHandler(commands.Cog):
 
         # ── skip ────────────────────────────────────────────────
         elif play_type == "skip":
-            if vc and hasattr(vc, "is_playing") and (vc.is_playing() or vc.is_paused()):
-                vc.stop()
+            if self.skip_song(guild_id):
                 await interaction.response.send_message("⏭️ 已跳過當前歌曲！", delete_after=5)
             else:
                 await interaction.response.send_message("❌ 目前沒有歌曲正在播放。", ephemeral=True)
@@ -748,7 +980,8 @@ class MusicHandler(commands.Cog):
             result_set: set[int] = set()
             for rm in re.finditer(r'(\d+)\s*[~\-到至]\s*(\d+)', combined):
                 s, e = int(rm.group(1)), int(rm.group(2))
-                if s > e: s, e = e, s
+                if s > e:
+                    s, e = e, s
                 result_set.update(range(s, min(e, 9999) + 1))
             for n in re.findall(r'\d+', combined):
                 result_set.add(int(n))
@@ -790,3 +1023,31 @@ class MusicHandler(commands.Cog):
                 color=discord.Color.red()
             )
             await interaction.response.send_message(embed=embed)
+
+        # ── stop ───────────────────────────────────────────────
+        elif play_type == "stop":
+            await self.stop_player(guild_id, disconnect=True)
+            await interaction.response.send_message("⏹️ 已停止播放並清空清單！", delete_after=5)
+
+    # ──────────────────────────────────────────────────────────
+    # 語音連線狀態監聽
+    # ──────────────────────────────────────────────────────────
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+    ) -> None:
+        """處理當機器人被踢出或離開語音頻道時的資源清理。
+
+        Args:
+            member: 變更語音狀態的成員。
+            before: 變更前的語音狀態。
+            after: 變更後的語音狀態。
+        """
+        if self.bot.user and member.id == self.bot.user.id and before.channel and not after.channel:
+            guild_id = member.guild.id
+            logger.info("偵測到雪莉已離開語音頻道 (Guild: %s)，自動清理音樂狀態與佇列", guild_id)
+            await self.stop_player(guild_id, disconnect=False)

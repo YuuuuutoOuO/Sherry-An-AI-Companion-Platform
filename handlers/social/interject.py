@@ -87,6 +87,7 @@ async def maybe_interject(bot: commands.Bot, channel: discord.TextChannel | disc
         try:
             raw_result = await asyncio.wait_for(score_future, timeout=settings.INTERJECT_SCORE_TIMEOUT)
         except asyncio.TimeoutError:
+            setattr(score_task, "is_cancelled", True)
             return
 
         score: int = 0

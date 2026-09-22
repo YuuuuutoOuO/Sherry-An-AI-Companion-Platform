@@ -1,0 +1,101 @@
+<!-- ===== SELF MONITORING & DELAY AUDIT VIEW ===== -->
+<div class="view hidden" id="view-self-monitoring">
+    <!-- 標題與操作按鈕 -->
+    <div class="metrics-section-title" style="margin: 0.5rem 0 1rem 0; display: flex; align-items: center; justify-content: space-between;">
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <span style="font-size: 1.25rem;">🛡️</span>
+            <span style="font-weight: 600; font-size: 1.1rem; color: var(--text-main, #fff);">系統自我監控與延遲稽核主控台</span>
+        </div>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <button id="btn-self-mon-trigger" onclick="triggerManualAudit()" class="btn btn-primary btn-sm" style="background: #2563eb; color: #fff; font-weight: 600;">
+                🚀 立即執行技術稽核
+            </button>
+            <button onclick="loadSelfMonitoringData()" class="btn btn-secondary btn-sm">
+                🔄 重整
+            </button>
+        </div>
+    </div>
+
+    <!-- KPI 統計卡片 -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px;">
+        <div class="metric-card" style="padding: 16px;">
+            <div style="color: var(--text-muted, #94a3b8); font-size: 0.85rem; font-weight: 500;">📊 總稽核紀錄數</div>
+            <div id="stat-total-audits" style="font-size: 1.8rem; font-weight: 700; color: #f8fafc; margin-top: 6px;">0</div>
+            <div style="color: var(--text-muted, #64748b); font-size: 0.75rem; margin-top: 4px;">儲存於 ./data/sys_inspector/</div>
+        </div>
+        <div class="metric-card" style="padding: 16px;">
+            <div style="color: var(--text-muted, #94a3b8); font-size: 0.85rem; font-weight: 500;">⏱️ 平均事故耗時</div>
+            <div id="stat-avg-latency" style="font-size: 1.8rem; font-weight: 700; color: #38bdf8; margin-top: 6px;">0.0s</div>
+            <div style="color: var(--text-muted, #64748b); font-size: 0.75rem; margin-top: 4px;">超時與卡頓事故均值</div>
+        </div>
+        <div class="metric-card" style="padding: 16px;">
+            <div style="color: var(--text-muted, #94a3b8); font-size: 0.85rem; font-weight: 500;">⚠️ 慢速警告次數 (>90s)</div>
+            <div id="stat-warning-count" style="font-size: 1.8rem; font-weight: 700; color: #fbbf24; margin-top: 6px;">0</div>
+            <div style="color: var(--text-muted, #64748b); font-size: 0.75rem; margin-top: 4px;">已發出預警通知</div>
+        </div>
+        <div class="metric-card" style="padding: 16px;">
+            <div style="color: var(--text-muted, #94a3b8); font-size: 0.85rem; font-weight: 500;">🚨 嚴重事故 / 崩潰</div>
+            <div id="stat-critical-count" style="font-size: 1.8rem; font-weight: 700; color: #f87171; margin-top: 6px;">0</div>
+            <div style="color: var(--text-muted, #64748b); font-size: 0.75rem; margin-top: 4px;">推論中斷、超時與阻塞</div>
+        </div>
+    </div>
+
+    <!-- 篩選與工具列 -->
+    <div style="background: var(--card-bg, #1e293b); border: 1px solid var(--border-color, #334155); border-radius: 10px 10px 0 0; padding: 12px 18px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;" id="self-mon-filters">
+            <button class="filter-tab active" onclick="filterSelfMonRecords('ALL', this)" style="background: #3b82f6; color: #fff; border: none; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer;">全部紀錄</button>
+            <button class="filter-tab" onclick="filterSelfMonRecords('SLOW_TTFT_WARNING', this)" style="background: #334155; color: #cbd5e1; border: none; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer;">首字預警 (TTFT)</button>
+            <button class="filter-tab" onclick="filterSelfMonRecords('ACTION_LOOP', this)" style="background: #334155; color: #cbd5e1; border: none; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer;">動作死循環</button>
+            <button class="filter-tab" onclick="filterSelfMonRecords('QUALITY_ANOMALY', this)" style="background: #334155; color: #cbd5e1; border: none; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer;">人設/品質審查</button>
+            <button class="filter-tab" onclick="filterSelfMonRecords('WARNING', this)" style="background: #334155; color: #cbd5e1; border: none; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer;">慢速警告 (90s)</button>
+            <button class="filter-tab" onclick="filterSelfMonRecords('INFERENCE_FAILURE', this)" style="background: #334155; color: #cbd5e1; border: none; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer;">推論中斷/崩潰</button>
+            <button class="filter-tab" onclick="filterSelfMonRecords('CRITICAL', this)" style="background: #334155; color: #cbd5e1; border: none; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer;">嚴重事故</button>
+            <button class="filter-tab" onclick="filterSelfMonRecords('SYSTEM_BLOCKING', this)" style="background: #334155; color: #cbd5e1; border: none; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer;">系統阻塞</button>
+            <button class="filter-tab" onclick="filterSelfMonRecords('MANUAL_CHECK', this)" style="background: #334155; color: #cbd5e1; border: none; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer;">手動體檢</button>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px; font-size: 0.85rem; color: var(--text-muted, #94a3b8);">
+            <span id="self-mon-last-updated" style="font-size: 0.75rem;">最後更新: -</span>
+        </div>
+    </div>
+
+    <!-- 稽核紀錄清單表格 -->
+    <div style="background: rgba(0,0,0,0.25); border: 1px solid var(--border-color, #334155); border-top: none; border-radius: 0 0 10px 10px; overflow-x: auto; overflow-y: auto; max-height: 600px; min-height: 250px; margin-bottom: 24px;">
+        <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.9rem;">
+            <thead style="position: sticky; top: 0; z-index: 10; background: var(--card-bg, #1e293b);">
+                <tr style="background: var(--card-bg, #1e293b); color: var(--text-muted, #94a3b8); font-size: 0.8rem; text-transform: uppercase; border-bottom: 1px solid var(--border-color, #334155);">
+                    <th style="padding: 12px 16px;">時間</th>
+                    <th style="padding: 12px 16px;">等級</th>
+                    <th style="padding: 12px 16px;">事故類型</th>
+                    <th style="padding: 12px 16px;">耗時</th>
+                    <th style="padding: 12px 16px;">瓶頸分類</th>
+                    <th style="padding: 12px 16px;">雲端模型稽核剖析</th>
+                    <th style="padding: 12px 16px; text-align: center;">操作</th>
+                </tr>
+            </thead>
+            <tbody id="self-mon-table-body">
+                <tr>
+                    <td colspan="7" style="padding: 30px; text-align: center; color: var(--text-muted, #64748b);">
+                        正在載入系統稽核資料庫...
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 稽核詳情報告彈窗 (Modal) -->
+    <div id="self-mon-detail-modal" style="display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.75); z-index: 9999; justify-content: center; align-items: center; padding: 20px; backdrop-filter: blur(4px);">
+        <div style="background: #1e293b; border: 1px solid #475569; border-radius: 12px; width: 100%; max-width: 800px; max-height: 85vh; display: flex; flex-direction: column; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);">
+            <div style="padding: 16px 20px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center;">
+                <h3 id="modal-audit-title" style="margin: 0; font-size: 1.15rem; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+                    📑 系統效能技術稽核詳細報告
+                </h3>
+                <button onclick="closeSelfMonModal()" style="background: none; border: none; color: #94a3b8; font-size: 1.4rem; cursor: pointer; line-height: 1;">&times;</button>
+            </div>
+            <div id="modal-audit-content" style="padding: 20px; overflow-y: auto; color: #e2e8f0; font-size: 0.9rem; display: flex; flex-direction: column; gap: 16px;">
+            </div>
+            <div style="padding: 12px 20px; border-top: 1px solid #334155; display: flex; justify-content: flex-end;">
+                <button onclick="closeSelfMonModal()" class="btn btn-secondary btn-sm">關閉</button>
+            </div>
+        </div>
+    </div>
+</div>

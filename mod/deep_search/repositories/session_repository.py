@@ -1,16 +1,18 @@
 """
 session_repository.py (mod/deep_search/repositories)
 ===================================================
-深度研究專案歷程與狀態的 JSON 檔案儲存倉儲。
-將每份 ResearchSession 持久化儲存於 data/deep_search/sessions/。
+深度研究專案歷程與狀態的 SQLite 資料庫儲存倉儲。
+將每份 ResearchSession 持久化儲存於 data/deep_search/deep_search.db。
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
+from core.db import get_db_connection, db_transaction
 from mod.deep_search import config
 from mod.deep_search.domain.interfaces import ISessionRepository
 from mod.deep_search.domain.models import ResearchSession
@@ -18,18 +20,46 @@ from mod.deep_search.domain.models import ResearchSession
 logger = logging.getLogger(__name__)
 
 
-class FileSessionRepository(ISessionRepository):
-    """基於本地檔案系統之 JSON 專案資料倉儲。"""
+class SqliteSessionRepository(ISessionRepository):
+    """基於 SQLite 之深度研究專案資料倉儲。"""
 
-    def __init__(self, storage_dir: Path | None = None) -> None:
-        self._dir = storage_dir or config.SESSIONS_DIR
-        self._dir.mkdir(parents=True, exist_ok=True)
+    def __init__(self, db_path: Path | None = None, storage_dir: Path | None = None) -> None:
+        if db_path is not None:
+            self.db_path = db_path
+        elif storage_dir is not None:
+            if storage_dir.suffix == ".db":
+                self.db_path = storage_dir
+            else:
+                self.db_path = storage_dir / "deep_search.db"
+        else:
+            sub_db = config.DEEP_SEARCH_DIR / "deep_search.db"
+            root_db = config.DATA_DIR / "deep_search.db"
+            if sub_db.exists():
+                self.db_path = sub_db
+            elif root_db.exists():
+                self.db_path = root_db
+            else:
+                self.db_path = sub_db
 
-    def _get_path(self, session_id: str) -> Path:
-        """取得單一 session_id 對應之 JSON 檔案路徑。"""
-        # 過濾非法檔名字元
-        safe_id = "".join(c for c in session_id if c.isalnum() or c in ("-", "_"))
-        return self._dir / f"{safe_id}.json"
+        self._init_db()
+
+    def _init_db(self) -> None:
+        """初始化 SQLite 資料表與索引。"""
+        try:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            with db_transaction(self.db_path) as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS research_sessions (
+                        session_id TEXT PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        topic TEXT NOT NULL,
+                        data_json TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_ds_updated ON research_sessions(updated_at DESC);")
+        except Exception as e:
+            logger.error("[deep_search.repository] 初始化 SQLite 資料庫失敗: %s", e)
 
     def save_session(self, session: ResearchSession) -> bool:
         """儲存或更新 ResearchSession。
@@ -41,12 +71,21 @@ class FileSessionRepository(ISessionRepository):
             bool: 成功寫入返回 True，否則返回 False。
         """
         try:
-            path = self._get_path(session.session_id)
             data = session.to_dict()
-            tmp_path = path.with_suffix(".tmp")
-            with tmp_path.open("w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            tmp_path.replace(path)
+            title = str(session.topic or session.session_id)
+            topic = str(session.topic or "")
+            updated_at = str(
+                getattr(session, "finished_at", "")
+                or getattr(session, "started_at", "")
+                or datetime.now(timezone.utc).isoformat()
+            )
+            data_json = json.dumps(data, ensure_ascii=False)
+
+            with db_transaction(self.db_path) as cur:
+                cur.execute("""
+                    INSERT OR REPLACE INTO research_sessions (session_id, title, topic, data_json, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (session.session_id, title, topic, data_json, updated_at))
             return True
         except Exception as exc:
             logger.error(
@@ -65,25 +104,26 @@ class FileSessionRepository(ISessionRepository):
         Returns:
             ResearchSession | None: 成功則返回物件，否則返回 None。
         """
-        path = self._get_path(session_id)
-        if not path.exists():
-            return None
-
         try:
-            with path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
+            conn = get_db_connection(self.db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT data_json FROM research_sessions WHERE session_id = ?", (session_id,))
+            row = cur.fetchone()
+            conn.close()
+
+            if row:
+                data = json.loads(row["data_json"])
                 return ResearchSession.from_dict(data)
         except Exception as exc:
             logger.error(
-                "[deep_search.repository] 讀取 Session 失敗 (path=%s): %s",
-                path,
+                "[deep_search.repository] 讀取 SQLite Session 失敗 (id=%s): %s",
+                session_id,
                 exc,
             )
         return None
 
     def list_sessions(self, limit: int = 50) -> list[ResearchSession]:
-        """列出所有研究專案歷史 (依照修改時間由新到舊排序)。
+        """列出所有研究專案歷史 (依照更新時間由新到舊排序)。
 
         Args:
             limit: 獲取上限筆數。
@@ -92,29 +132,27 @@ class FileSessionRepository(ISessionRepository):
             list[ResearchSession]: 專案清單。
         """
         sessions: list[ResearchSession] = []
-        if not self._dir.exists():
-            return sessions
+        try:
+            conn = get_db_connection(self.db_path)
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT data_json FROM research_sessions
+                ORDER BY updated_at DESC
+                LIMIT ?
+            """, (limit,))
+            rows = cur.fetchall()
+            conn.close()
 
-        files = sorted(
-            self._dir.glob("*.json"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-
-        for path in files[:limit]:
-            try:
-                with path.open("r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
+            for r in rows:
+                try:
+                    data = json.loads(r["data_json"])
                     sessions.append(ResearchSession.from_dict(data))
-            except Exception as exc:
-                logger.debug(
-                    "[deep_search.repository] 解析 Session 檔案略過 (%s): %s",
-                    path.name,
-                    exc,
-                )
-
-        return sessions
+                except Exception:
+                    pass
+            return sessions
+        except Exception as exc:
+            logger.error("[deep_search.repository] 列出 Sessions 失敗: %s", exc)
+            return []
 
     def delete_session(self, session_id: str) -> bool:
         """刪除特定研究專案。
@@ -125,16 +163,18 @@ class FileSessionRepository(ISessionRepository):
         Returns:
             bool: 成功刪除返回 True。
         """
-        path = self._get_path(session_id)
-        if path.exists():
-            try:
-                path.unlink()
-                return True
-            except Exception as exc:
-                logger.error(
-                    "[deep_search.repository] 刪除 Session 失敗 (id=%s): %s",
-                    session_id,
-                    exc,
-                )
-                return False
-        return False
+        try:
+            with db_transaction(self.db_path) as cur:
+                cur.execute("DELETE FROM research_sessions WHERE session_id = ?", (session_id,))
+            return True
+        except Exception as exc:
+            logger.error(
+                "[deep_search.repository] 刪除 Session 失敗 (id=%s): %s",
+                session_id,
+                exc,
+            )
+            return False
+
+
+# 向下相容別名
+FileSessionRepository = SqliteSessionRepository

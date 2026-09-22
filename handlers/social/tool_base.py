@@ -5,7 +5,6 @@ from discord.ext import commands
 
 from handlers.social.contracts import (
     ToolCategory,
-    ToolExecutionStatus,
     ToolResult,
 )
 

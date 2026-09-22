@@ -6,7 +6,6 @@ Dice rolling engine for D&D checks, attacks, and stats generation.
 from __future__ import annotations
 
 import random
-from typing import Literal
 
 
 def roll(sides: int) -> int:
@@ -62,24 +61,6 @@ def disadvantage_roll(sides: int = 20) -> tuple[int, int, int]:
     d1 = roll(sides)
     d2 = roll(sides)
     return d1, d2, min(d1, d2)
-
-
-def check_critical(value: int, sides: int = 20) -> Literal["CRITICAL_SUCCESS", "CRITICAL_FAILURE", "NORMAL"]:
-    """Determine critical success (Nat 20) or failure (Nat 1).
-
-    Args:
-        value: The natural roll value on the die.
-        sides: Number of sides.
-
-    Returns:
-        Critical status string.
-    """
-    if sides == 20:
-        if value == 20:
-            return "CRITICAL_SUCCESS"
-        if value == 1:
-            return "CRITICAL_FAILURE"
-    return "NORMAL"
 
 
 def ability_modifier(score: int) -> int:

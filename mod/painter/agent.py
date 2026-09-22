@@ -14,12 +14,14 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
+
+import settings
 
 from mod.painter import config
 from mod.painter.canvas import VirtualCanvas
 from mod.painter.interpreter import CommandInterpreter
-from mod.painter.models import ArtStyle, BrushType, DrawingCommand, PaintingMetadata, ShapeType
+from mod.painter.models import ArtStyle, PaintingMetadata
 from mod.painter.palette import PaletteManager
 
 logger = logging.getLogger(__name__)
@@ -108,7 +110,7 @@ _SYSTEM_REFLECTION_PROMPT = """你是由 Google Gemma 驅動的頂級 AI 畫家�
 妳必須先輸出一小段俏皮的雪莉自我審視講評，並緊接著輸出 JSON 程式碼區塊 ```json [ ... ] ```。
 """
 
-MAX_PAINTING_TIMEOUT_SEC: float = 120.0  # Hard 2-minute ceiling protection
+MAX_PAINTING_TIMEOUT_SEC: float = float(getattr(settings, "PAINTER_MAX_PAINTING_TIMEOUT_SEC", 120.0))  # Hard 2-minute ceiling protection
 
 
 class PainterAgent:
@@ -281,7 +283,6 @@ class PainterAgent:
         c_main1 = colors[0]
         c_main2 = colors[1] if len(colors) > 1 else "#333333"
         c_accent1 = colors[2] if len(colors) > 2 else "#E63946"
-        c_accent2 = colors[3] if len(colors) > 3 else "#DAA520"
 
         texture = "rice_paper" if style == ArtStyle.INK_WASH else "plain"
         if style == ArtStyle.NEON:
@@ -450,20 +451,11 @@ class PainterAgent:
 
         # Initialize Canvas & Interpreter
         canvas = existing_canvas if existing_canvas is not None else VirtualCanvas(width=width, height=height, style=style)
-        interpreter = CommandInterpreter(canvas)
 
         def _step_callback(current: int, total: int) -> None:
             if total > 0:
                 _current_live_painting["current_step"] = current
                 _current_live_painting["progress"] = round(current / total, 2)
-
-        # Run interpretation
-        if commands:
-            interpreter.execute_batch(commands, on_step=_step_callback)
-        
-        measured_duration = round(time.perf_counter() - start_t, 2)
-        final_duration = custom_duration if custom_duration is not None else max(0.01, measured_duration)
-        final_command_count = custom_command_count if custom_command_count is not None else len(interpreter.executed_commands)
 
         # Ensure destination directory exists
         painting_dir = config.PAINTING_DIR
@@ -471,54 +463,71 @@ class PainterAgent:
         jpg_path = painting_dir / jpg_filename
         json_path = painting_dir / json_filename
 
-        # Save high quality JPEG
-        canvas.save_to_disk(jpg_path, format_name="JPEG", quality=92)
-
-        # Build & Save Metadata
-        meta = PaintingMetadata(
-            painting_id=filename_base,
-            prompt=prompt,
-            style=style.value,
-            author_id=author_id,
-            author_name=author_name,
-            created_at=now.isoformat(),
-            command_count=final_command_count,
-            filename=jpg_filename,
-            duration_sec=final_duration,
-            width=width,
-            height=height,
-            tags=[style.value, "ai_painter", f"stage_{stage}"],
-        )
-
-        meta_dict = {
-            "painting_id": meta.painting_id,
-            "prompt": meta.prompt,
-            "style": meta.style,
-            "author_id": meta.author_id,
-            "author_name": meta.author_name,
-            "created_at": meta.created_at,
-            "command_count": meta.command_count,
-            "filename": meta.filename,
-            "duration_sec": meta.duration_sec,
-            "width": meta.width,
-            "height": meta.height,
-            "tags": meta.tags,
-            "commands": [
+        # Synchronous worker for CPU rendering and disk I/O
+        def _render_and_persist() -> tuple[PaintingMetadata, int]:
+            interpreter = CommandInterpreter(canvas)
+            if commands:
+                interpreter.execute_batch(commands, on_step=_step_callback)
+            # Save high quality JPEG
+            canvas.save_to_disk(jpg_path, format_name="JPEG", quality=92)
+            executed_cmds = [
                 {"action": cmd.action, "params": cmd.params} for cmd in interpreter.executed_commands
-            ],
-        }
+            ]
+            executed_count = len(executed_cmds)
 
-        try:
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(meta_dict, f, ensure_ascii=False, indent=2)
-        except Exception as exc:
-            logger.error("PainterAgent: Failed to save painting metadata JSON: %s", exc)
+            measured_dur = round(time.perf_counter() - start_t, 2)
+            dur = custom_duration if custom_duration is not None else max(0.01, measured_dur)
+            cmd_cnt = custom_command_count if custom_command_count is not None else executed_count
+
+            # Build & Save Metadata
+            meta_obj = PaintingMetadata(
+                painting_id=filename_base,
+                prompt=prompt,
+                style=style.value,
+                author_id=author_id,
+                author_name=author_name,
+                created_at=now.isoformat(),
+                command_count=cmd_cnt,
+                filename=jpg_filename,
+                duration_sec=dur,
+                width=width,
+                height=height,
+                tags=[style.value, "ai_painter", f"stage_{stage}"],
+            )
+
+            meta_dict = {
+                "painting_id": meta_obj.painting_id,
+                "prompt": meta_obj.prompt,
+                "style": meta_obj.style,
+                "author_id": meta_obj.author_id,
+                "author_name": meta_obj.author_name,
+                "created_at": meta_obj.created_at,
+                "command_count": meta_obj.command_count,
+                "filename": meta_obj.filename,
+                "duration_sec": meta_obj.duration_sec,
+                "width": meta_obj.width,
+                "height": meta_obj.height,
+                "tags": meta_obj.tags,
+                "commands": executed_cmds if executed_cmds else [
+                    {"action": cmd.get("action", ""), "params": cmd.get("params", {})} for cmd in commands
+                ],
+            }
+
+            try:
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(meta_dict, f, ensure_ascii=False, indent=2)
+            except Exception as exc:
+                logger.error("PainterAgent: Failed to save painting metadata JSON: %s", exc)
+
+            return meta_obj, executed_count
+
+        meta, executed_count = await asyncio.to_thread(_render_and_persist)
 
         _current_live_painting["is_drawing"] = False
         _current_live_painting["progress"] = 1.0
 
         logger.info(
             "PainterAgent: Completed painting '%s' [%s] in %.2fs -> %s",
-            prompt, style.value, final_duration, jpg_path
+            prompt, style.value, meta.duration_sec, jpg_path
         )
         return canvas, meta, jpg_path

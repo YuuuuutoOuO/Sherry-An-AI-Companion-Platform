@@ -7,7 +7,6 @@ mod.game_center.akinator_20q
 from __future__ import annotations
 
 import uuid
-from typing import Any
 
 from mod.game_center.models import AkinatorState, GameResultStatus
 

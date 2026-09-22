@@ -9,9 +9,10 @@ and numerical constraints for system parameters editable via Web Console.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-SETTINGS_META: dict[str, dict] = {
+SETTINGS_META: dict[str, dict[str, Any]] = {
     # === 模型設定 ===
     "PRIMARY_MODEL": {
         "label": "主力模型 (Primary Model)",
@@ -46,7 +47,7 @@ SETTINGS_META: dict[str, dict] = {
     },
     "VISION_MODEL": {
         "label": "視覺辨識模型 (Vision Model)",
-        "description": "多模態圖片理解專用模型（如 ollama:minicpm-v）。若留空（預設），將自動啟用「端到端原生多模態」，直接由主力模型（PRIMARY_MODEL）直接看圖對話，速度極致翻倍。",
+        "description": "多模態圖片對話模型（如 ollama:minicpm-v 或 lms:qwen2.5-vl）。當訊息夾帶圖片時，由該模型同時執行看圖理解與角色性格回覆（單階段直出），大幅減輕顯卡負擔並降低延遲。若留空（預設），將使用主力模型（PRIMARY_MODEL）原生看圖對話。",
         "type": "model",
         "category": "模型設定",
     },
@@ -214,6 +215,38 @@ SETTINGS_META: dict[str, dict] = {
         "type": "int",
         "min": 60,
         "max": 86400,
+        "category": "記憶與上下文",
+    },
+    "CONTEXT_HISTORY_MAX_TOKENS": {
+        "label": "歷史區塊硬性封頂（tokens）",
+        "description": "歷史區塊的 token 估算上限。即使濃縮失敗，也絕不讓歷史超過此值，從根源封死「使用者每句 2-300 字」造成的快速膨脹。估算偏保守，實際 token 數通常更低。",
+        "type": "int",
+        "min": 500,
+        "max": 20000,
+        "category": "記憶與上下文",
+    },
+    "CONTEXT_COMPRESS_MIN_GAP_MESSAGES": {
+        "label": "濃縮水位節流（累積新訊息數）",
+        "description": "距離上次濃縮至少累積幾則新訊息才允許再次濃縮。越大則壓縮次數越少、體感越順，但歷史比較長；建議 6–12。",
+        "type": "int",
+        "min": 1,
+        "max": 30,
+        "category": "記憶與上下文",
+    },
+    "CONTEXT_COMPRESS_KEEP_RECENT": {
+        "label": "濃縮後保留最近原文則數",
+        "description": "濃縮後原樣保留的最近幾則對話，供雪莉當下精準接話。越多越連貫但越吃 token；建議 3–6。",
+        "type": "int",
+        "min": 1,
+        "max": 12,
+        "category": "記憶與上下文",
+    },
+    "CONTEXT_COMPRESS_THRESHOLD": {
+        "label": "濃縮觸發字數門檻",
+        "description": "歷史區塊超過此字數才考慮濃縮。太小會過度濃縮失去細節，太大則 prompt 偏大；預設 2000。",
+        "type": "int",
+        "min": 300,
+        "max": 6000,
         "category": "記憶與上下文",
     },
     "MEMORY_MAX_FACTS_IN_CONTEXT": {
@@ -516,16 +549,46 @@ SETTINGS_META: dict[str, dict] = {
         "max": 50,
         "category": "深夜記憶整合",
     },
+    "NIGHTLY_WORLD_SAMPLE_COUNT": {
+        "label": "世界記憶每日取樣訊息數",
+        "description": "深夜為每個伺服器提煉世界事件時，最多送入 LLM 的訊息數。深夜非同步執行，可放心調大。",
+        "type": "int",
+        "min": 50,
+        "max": 2000,
+        "category": "深夜記憶整合",
+    },
+    "WORLD_ARCHIVE_TRIGGER_WEEKDAY": {
+        "label": "世界記憶週歸檔日（星期幾深夜）",
+        "description": "0=週一 … 6=週日。到了指定星期幾的深夜，會把「整個週」的世界事件歸檔成 Markdown 永久存於 ./data/memory/world。",
+        "type": "int",
+        "min": 0,
+        "max": 6,
+        "category": "深夜記憶整合",
+    },
+    "WORLD_ARCHIVE_KEEP_WEEKS": {
+        "label": "週歸檔保留週數",
+        "description": "超過此週數的週檔會自動清理（月歸檔為永久庫不清理）。設 0 表示全都刪，僅保留月歸檔。",
+        "type": "int",
+        "min": 0,
+        "max": 156,
+        "category": "深夜記憶整合",
+    },
     # === 雪莉人設與心跳 ===
-    "BOT_NAME": {
-        "label": "雪莉稱呼名稱 (Bot Name)",
-        "description": "橘雪莉對外顯示與對話中被稱呼的名字。",
+    "CURRENT_SOUL_NAME": {
+        "label": "當前活躍人設檔案 (Active Soul)",
+        "description": "系統自動掃描 file/soul/*_default.md，選擇 Bot 的核心角色人設靈魂檔案。",
+        "type": "select",
+        "category": "雪莉人設與心跳",
+    },
+    "SOUL_CONTENT": {
+        "label": "當前人設內容預覽與編輯 (Soul Content)",
+        "description": "即時預覽與編輯當前選中之 *_default.md 檔案內容，保存時將直接更新該人設檔案。",
         "type": "str",
         "category": "雪莉人設與心跳",
     },
-    "CORE_PERSONA": {
-        "label": "橘雪莉核心人設 Prompt",
-        "description": "設定橘雪莉為 15 歲活潑台灣女高中生及自稱名偵探的核心靈魂設定。",
+    "BOT_NAME": {
+        "label": "雪莉稱呼名稱 (Bot Name)",
+        "description": "橘雪莉對外顯示與對話中被稱呼的名字。",
         "type": "str",
         "category": "雪莉人設與心跳",
     },
@@ -1034,8 +1097,14 @@ SETTINGS_META: dict[str, dict] = {
     },
     "HEALTH_ALERT_CHANNEL_ID": {
         "label": "系統警報 Discord 頻道 ID",
-        "description": "當系統狀態異常或模型離線時，推播警報通知的頻道 ID。",
+        "description": "當系統狀態異常或模型離線時，推播警報通知的頻道 ID（設為 0 代表停用頻道推播）。",
         "type": "int",
+        "category": "健康監控",
+    },
+    "HEALTH_ALERT_USER_IDS": {
+        "label": "系統警報 Discord 私訊 User ID 清單",
+        "description": "當系統發生 ERROR 錯誤日誌或模型離線時，額外以 Discord 私訊推播警報的使用者 ID 列表（ADMIN_USER_IDS 管理員會自動包含在內）。",
+        "type": "list[int]",
         "category": "健康監控",
     },
     "RATE_LIMIT_REPLY_MESSAGE": {
@@ -1078,7 +1147,275 @@ SETTINGS_META: dict[str, dict] = {
         "type": "str",
         "category": "系統與網路",
     },
+    "WEB_UI_MAX_LOGIN_ATTEMPTS": {
+        "label": "Web UI 登入失敗次數上限",
+        "description": "同一 IP 於監控區間內允許的登入失敗次數，超過即暫時封鎖。",
+        "type": "int",
+        "min": 1,
+        "max": 50,
+        "category": "系統與網路",
+    },
+    "WEB_UI_LOCKOUT_MINUTES": {
+        "label": "Web UI 封鎖持續分鐘數",
+        "description": "觸發登入失敗上限後，禁止該 IP 嘗試登入的分鐘數。",
+        "type": "int",
+        "min": 1,
+        "max": 1440,
+        "category": "系統與網路",
+    },
+    # === ReAct 推論與思考 ===
+    "REACT_MAX_STEPS": {
+        "label": "ReAct 最大推理步數",
+        "description": "單次 ReAct 推理允許的最大「思考 → 行動」循環次數，越高越深入但越耗時。",
+        "type": "int",
+        "min": 1,
+        "max": 30,
+        "category": "Chain-of-Thought",
+    },
+    "REACT_MAX_OBSERVATION_LENGTH": {
+        "label": "ReAct 單筆觀察最大長度",
+        "description": "單一工具觀察結果寫入推理上下文前的最大字元數，避免上下文爆量。",
+        "type": "int",
+        "min": 100,
+        "max": 10000,
+        "step": 100,
+        "category": "Chain-of-Thought",
+    },
+    "REACT_MAX_TRANSCRIPT_CHARS": {
+        "label": "ReAct 推理紀錄最大字元數",
+        "description": "整段 ReAct 推理歷程允許保留的最大字元數，超過將被截斷。",
+        "type": "int",
+        "min": 500,
+        "max": 50000,
+        "step": 500,
+        "category": "Chain-of-Thought",
+    },
+    "LIVE_THINKING_EDIT": {
+        "label": "即時思考串流編輯",
+        "description": "啟用後以 message.edit 即時更新思考過程，提供更流暢的推理可視化。",
+        "type": "bool",
+        "category": "Chain-of-Thought",
+    },
+    # === 記憶與上下文 ===
+    "CONTEXT_COMPRESS_CACHE_TTL": {
+        "label": "上下文壓縮快取存活秒數",
+        "description": "已壓縮摘要的快取有效時間（秒），避免同一對話重複觸發壓縮。",
+        "type": "float",
+        "min": 0,
+        "max": 3600,
+        "step": 10,
+        "category": "記憶與上下文",
+    },
+    "WORLD_MEMORY_SNIPPET_LIMIT": {
+        "label": "世界記憶注入片段數上限",
+        "description": "每次生成時最多注入的世界觀記憶片段數量。",
+        "type": "int",
+        "min": 0,
+        "max": 50,
+        "category": "記憶與上下文",
+    },
+    "NIGHTLY_DIGEST_MINUTE": {
+        "label": "深夜記憶整合觸發分鐘",
+        "description": "每日深夜記憶整理排程於每小時的第幾分鐘執行（0-59）。",
+        "type": "int",
+        "min": 0,
+        "max": 59,
+        "category": "深夜記憶整合",
+    },
+    # === 清單型設定 ===
+    "ADMIN_ROLE_IDS": {
+        "label": "管理員身分組 ID",
+        "description": "具備管理員權限的 Discord 身分組 ID 清單，可逐項新增／移除。",
+        "type": "list",
+        "item_type": "int",
+        "category": "系統與網路",
+    },
+    "ADMIN_USER_IDS": {
+        "label": "管理員使用者 ID",
+        "description": "具備管理員權限的 Discord 使用者 ID 清單，可逐項新增／移除。",
+        "type": "list",
+        "item_type": "int",
+        "category": "系統與網路",
+    },
+    "NSFW_ALLOWED_CHANNEL_IDS": {
+        "label": "NSFW 允許頻道 ID",
+        "description": "允許觸發 NSFW 內容的頻道 ID 清單。",
+        "type": "list",
+        "item_type": "int",
+        "category": "系統與網路",
+    },
+    "EXPLORER_TARGET_CHANNEL_IDS": {
+        "label": "外部探索目標頻道 ID",
+        "description": "允許主動探索與推送資訊的頻道 ID 清單。",
+        "type": "list",
+        "item_type": "int",
+        "category": "外部資訊檢索",
+    },
+    "WEB_UI_TRUSTED_PROXIES": {
+        "label": "Web UI 信任代理清單",
+        "description": "信任的 Reverse Proxy 來源位址清單，用於正確解析 X-Forwarded-For。",
+        "type": "list",
+        "item_type": "str",
+        "category": "系統與網路",
+    },
+    "SPARK_DEFAULT_COOLDOWN_SECONDS": {
+        "label": "Spark 推播觸發冷卻 (秒)",
+        "description": "同一個 Spark 觸發器的預設冷卻時間，避免短時間內重複推播。",
+        "type": "int",
+        "category": "模組與排程",
+        "restart_required": True,
+        "min": 0,
+    },
+    "SPARK_CHECK_INTERVAL_MINUTES": {
+        "label": "Spark 巡檢間隔 (分鐘)",
+        "description": "Spark 背景巡檢迴圈輪詢觸發器的頻率。",
+        "type": "int",
+        "category": "模組與排程",
+        "restart_required": True,
+        "min": 1,
+    },
+    "DEEP_SEARCH_DEFAULT_ROUNDS": {
+        "label": "深度研究預設輪數",
+        "description": "深度研究一次預設執行的多輪鑽研輪數。",
+        "type": "int",
+        "category": "外部資訊檢索",
+        "restart_required": True,
+        "min": 1,
+    },
+    "DEEP_SEARCH_MIN_ROUNDS": {
+        "label": "深度研究最少輪數",
+        "description": "深度研究允許的最少研究輪數下限。",
+        "type": "int",
+        "category": "外部資訊檢索",
+        "restart_required": True,
+        "min": 1,
+    },
+    "DEEP_SEARCH_MAX_ROUNDS": {
+        "label": "深度研究最多輪數",
+        "description": "深度研究可執行的最大輪數上限，保護 Token 與時間成本。",
+        "type": "int",
+        "category": "外部資訊檢索",
+        "restart_required": True,
+        "min": 1,
+    },
+    "DEEP_SEARCH_QUERIES_PER_ROUND": {
+        "label": "每輪檢索關鍵字數",
+        "description": "深度研究每一輪產生的檢索關鍵字數量。",
+        "type": "int",
+        "category": "外部資訊檢索",
+        "restart_required": True,
+        "min": 1,
+    },
+    "DEEP_SEARCH_MAX_RESULTS_PER_QUERY": {
+        "label": "每關鍵字候選結果數",
+        "description": "深度研究每個關鍵字取得的候選結果數。",
+        "type": "int",
+        "category": "外部資訊檢索",
+        "restart_required": True,
+        "min": 1,
+    },
+    "DEEP_SEARCH_MAX_PAGES_PER_ROUND": {
+        "label": "每輪深入抓取頁數上限",
+        "description": "深度研究每一輪實際深入抓取內文的網頁上限。",
+        "type": "int",
+        "category": "外部資訊檢索",
+        "restart_required": True,
+        "min": 1,
+    },
+    "DEEP_SEARCH_MAX_CHARS_PER_PAGE": {
+        "label": "單頁擷取字元上限",
+        "description": "深度研究單一網頁擷取的最大字元數，適配地端 SLM context。",
+        "type": "int",
+        "category": "外部資訊檢索",
+        "restart_required": True,
+        "min": 100,
+    },
+    "DND_MAX_HISTORY_ROUNDS": {
+        "label": "D&D 歷史回合數",
+        "description": "D&D 世界引擎每個頻道保留的對話歷史回合數 (玩家行動 + DM 回覆)。",
+        "type": "int",
+        "category": "模組與排程",
+        "restart_required": True,
+        "min": 1,
+    },
+    "DRAW_TOOL_MAX_PROMPT_LENGTH": {
+        "label": "畫圖工具 Prompt 長度上限",
+        "description": "Pollinations 畫圖工具會截斷的 prompt 字數上限。",
+        "type": "int",
+        "category": "圖片生成",
+        "min": 50,
+    },
+    "LOREBOOK_MAX_GENERAL_ENTRIES": {
+        "label": "世界書一般條目上限",
+        "description": "每次組裝上下文時納入的一般世界書條目數量上限。",
+        "type": "int",
+        "category": "記憶與上下文",
+        "min": 0,
+    },
+    "PAINTER_MAX_PAINTING_TIMEOUT_SEC": {
+        "label": "繪圖整體逾時 (秒)",
+        "description": "Painter 單次繪圖的總時間上限 (硬性 2 分鐘保護)。",
+        "type": "float",
+        "category": "圖片生成",
+        "restart_required": True,
+        "min": 30,
+        "step": 5,
+    },
+    "STOCK_TRADER_INITIAL_CAPITAL_USD": {
+        "label": "虛擬交易初始資金 (美元)",
+        "description": "美股虛擬量化交易模組的初始帳戶資金。",
+        "type": "float",
+        "category": "模組與排程",
+        "restart_required": True,
+        "min": 0,
+        "step": 100,
+    },
+    "STOCK_TRADER_FEE_RATE": {
+        "label": "虛擬交易手續費率",
+        "description": "美股虛擬量化交易模組的每筆買賣手續費率。",
+        "type": "float",
+        "category": "模組與排程",
+        "restart_required": True,
+        "min": 0,
+        "step": 0.0001,
+    },
+    "STOCK_TRADER_MIN_SHARES": {
+        "label": "虛擬交易最少股數",
+        "description": "美股虛擬量化交易模組允許的最少交易股數。",
+        "type": "float",
+        "category": "模組與排程",
+        "restart_required": True,
+        "min": 0,
+        "step": 0.01,
+    },
 }
+
+
+RESTART_REQUIRED_KEYS: frozenset[str] = frozenset({
+    "WEB_UI_HOST",
+    "WEB_UI_PORT",
+    "WEB_UI_HTTPS",
+    "WEB_UI_TRUSTED_PROXIES",
+})
+
+
+def _infer_list_item_type(values: list[Any], key: str, meta: dict[str, Any]) -> str:
+    """推斷清單型設定的元素型別，供前端編輯器正確轉型。"""
+    declared = meta.get("item_type")
+    if declared:
+        return str(declared)
+    if values:
+        sample = values[0]
+        if isinstance(sample, bool):
+            return "bool"
+        if isinstance(sample, int):
+            return "int"
+        if isinstance(sample, float):
+            return "float"
+        return "str"
+    if "_IDS" in key:
+        return "int"
+    return "str"
 
 
 def get_editable_settings(source_dict: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1096,27 +1433,70 @@ def get_editable_settings(source_dict: dict[str, Any] | None = None) -> dict[str
 
     editable: dict[str, Any] = {}
     _SENSITIVE_KEYWORDS = ("PASSWORD", "PATH", "DIR", "KEY", "TOKEN", "SECRET")
-    _EXCLUDED_KEYS = ("LLM_MODEL_NAME",)
+    _NON_SENSITIVE_WHITELIST = {
+        "LLM_MAX_OUTPUT_TOKENS",
+        "LLM_MAX_CONTEXT_TOKENS",
+        "CONTEXT_COMPRESS_TOKEN_THRESHOLD",
+    }
+    _EXCLUDED_KEYS = ("LLM_MODEL_NAME", "CORE_PERSONA")
+    _SCALAR_TYPES = (int, float, str, bool)
 
     for k, v in source_dict.items():
         if not k.isupper() or k.startswith("_") or k in _EXCLUDED_KEYS:
             continue
-        if type(v) not in (int, float, str, bool):
-            continue
-        if any(kw in k for kw in _SENSITIVE_KEYWORDS):
+        if k not in _NON_SENSITIVE_WHITELIST and any(kw in k for kw in _SENSITIVE_KEYWORDS):
             continue
 
         meta = SETTINGS_META.get(k, {})
+        item_type: str | None = None
+
+        if type(v) in _SCALAR_TYPES:
+            entry_type = meta.get("type", type(v).__name__)
+            entry_value: Any = v
+        elif isinstance(v, list) and all(type(e) in _SCALAR_TYPES for e in v):
+            entry_type = meta.get("type", "list")
+            entry_value = list(v)
+            item_type = _infer_list_item_type(v, k, meta)
+        else:
+            continue
+
         entry: dict[str, Any] = {
-            "value": v,
+            "value": entry_value,
             "label": meta.get("label", k),
             "description": meta.get("description", ""),
-            "type": meta.get("type", type(v).__name__),
+            "type": entry_type,
             "category": meta.get("category", "其他"),
+            "restart_required": bool(meta.get("restart_required", k in RESTART_REQUIRED_KEYS)),
         }
+        if item_type is not None:
+            entry["item_type"] = item_type
         for constraint in ("min", "max", "step", "options"):
             if constraint in meta:
                 entry[constraint] = meta[constraint]
+
+        if k == "CURRENT_SOUL_NAME":
+            import settings as _s
+            if hasattr(_s, "get_available_soul_names"):
+                entry["options"] = _s.get_available_soul_names()
+            else:
+                entry["options"] = [str(v)] if v else ["manosaba_sherry_default.md"]
+
+        if k == "SOUL_CONTENT":
+            import settings as _s
+            target_file = getattr(
+                _s, "DEFAULT_SOUL_PATH", getattr(_s, "SOUL_DIR", Path("file/soul")) / "manosaba_sherry_default.md"
+            )
+            if not target_file.exists() and not target_file.name.startswith("manosaba_"):
+                fallback_target = getattr(_s, "SOUL_DIR", Path("file/soul")) / f"manosaba_{target_file.name}"
+                if fallback_target.exists():
+                    target_file = fallback_target
+            if target_file.exists():
+                try:
+                    entry["value"] = target_file.read_text(encoding="utf-8")
+                except Exception:
+                    entry["value"] = ""
+            else:
+                entry["value"] = ""
 
         editable[k] = entry
     return editable

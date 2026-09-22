@@ -23,16 +23,19 @@ MOD_DIR: Path = Path(__file__).resolve().parent
 PROJECT_ROOT: Path = MOD_DIR.parent.parent
 DATA_DIR: Path = PROJECT_ROOT / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+DND_DATA_DIR: Path = DATA_DIR / "dnd"
+DND_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # 持久化檔案路徑
 # ---------------------------------------------------------------------------
-WORLD_FILE: Path = DATA_DIR / "dnd_world.json"
-CHARACTERS_FILE: Path = DATA_DIR / "dnd_characters.json"
-QUESTS_FILE: Path = DATA_DIR / "dnd_quests.json"
-NPCS_FILE: Path = DATA_DIR / "dnd_npcs.json"
-HISTORY_FILE: Path = DATA_DIR / "dnd_history.jsonl"
-WORLD_SETTING_FILE: Path = DATA_DIR / "dnd_world_setting.json"
+DND_DB_PATH: Path = DND_DATA_DIR / "dnd.db"
+WORLD_FILE: Path = DND_DATA_DIR / "dnd_world.json"
+CHARACTERS_FILE: Path = DND_DATA_DIR / "dnd_characters.json"
+QUESTS_FILE: Path = DND_DATA_DIR / "dnd_quests.json"
+NPCS_FILE: Path = DND_DATA_DIR / "dnd_npcs.json"
+HISTORY_FILE: Path = DND_DATA_DIR / "dnd_history.jsonl"
+WORLD_SETTING_FILE: Path = DND_DATA_DIR / "dnd_world_setting.json"
 
 # ---------------------------------------------------------------------------
 # 模型與推理優先級

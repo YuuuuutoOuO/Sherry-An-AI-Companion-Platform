@@ -166,21 +166,26 @@ class TradeStrategist:
             t = idx.get("ticker", "UNKNOWN")
             close = idx.get("close", idx.get("price", 0.0))
             day_pct = idx.get("day_pct", 0.0)
+            day5_pct = idx.get("day5_pct", 0.0)
             mon_pct = idx.get("mon_pct", 0.0)
             rsi = idx.get("rsi", "N/A")
+            kd_k = idx.get("kd_k", "N/A")
+            kd_d = idx.get("kd_d", "N/A")
             ma20 = idx.get("ma20", "N/A")
             ma60 = idx.get("ma60", "N/A")
             e20 = idx.get("ema20", "N/A")
             bbu = idx.get("bb_upper", "N/A")
             bbl = idx.get("bb_lower", "N/A")
+            pct_b = idx.get("pct_b", "N/A")
             macd_h = idx.get("macd_hist", "N/A")
             vr = idx.get("volume_ratio", 1.0)
             pe = idx.get("pe", "N/A")
 
+            kd_str = f"{kd_k}/{kd_d}" if kd_k != "N/A" else "N/A"
             mkt_context += (
-                f"• {t:<5}: ${close:<7.2f} (1D:{day_pct:+.1f}%, 1M:{mon_pct:+.1f}%) | "
-                f"RSI:{rsi} | MA20:${ma20} MA60:${ma60} EMA20:${e20} | "
-                f"BB:${bbl}~${bbu} | MACD柱:{macd_h} | 量比:{vr}x | PE:{pe}\n"
+                f"• {t:<5}: ${close:<7.2f} (1D:{day_pct:+.1f}%, 5D:{day5_pct:+.1f}%, 1M:{mon_pct:+.1f}%) | "
+                f"RSI:{rsi} KD:{kd_str} | MA20:${ma20} MA60:${ma60} EMA20:${e20} | "
+                f"BB:${bbl}~${bbu} (%B:{pct_b}) | MACD柱:{macd_h} | 量比:{vr}x | PE:{pe}\n"
             )
 
         template = (
@@ -496,39 +501,40 @@ class TradeStrategist:
                 except Exception as e:
                     logger.warning("[stock_trader] BotBrain 佇列呼叫失敗，切換直連備援模式: %s", e)
 
-        # 2. 直連推論：依次嘗試 cfg.get_default_model() -> PRIMARY_MODEL -> QUICK_MODEL -> 本地常用 Ollama 模型
+        # 2. 直連推論：依次嘗試 cfg.get_default_model() -> PRIMARY_MODEL -> QUICK_MODEL -> NOMORAL_MODEL
         models_to_try = [
             cfg.get_default_model(),
             getattr(settings, "PRIMARY_MODEL", None),
             getattr(settings, "QUICK_MODEL", None),
             getattr(settings, "NOMORAL_MODEL", None),
-            "ollama:qwen2.5:3b",
-            "ollama:llama3.2",
         ]
-        candidate_models = [m for m in dict.fromkeys(models_to_try) if m]
+        candidate_models = [str(m).strip() for m in dict.fromkeys(models_to_try) if m and str(m).strip()]
 
         from handlers.bot_brain.client import OllamaClient
         client = OllamaClient()
 
-        for model_name in candidate_models:
-            try:
-                logger.info("[stock_trader] 嘗試使用模型推論: %s", model_name)
-                res_text = await client.chat(
-                    model=model_name,
-                    system_prompt="",
-                    user_prompt=prompt,
-                )
-                if res_text and res_text.strip():
-                    return self.parse_llm_response(res_text, trigger_type, known_tickers=known_tickers)
-            except Exception as e:
-                logger.warning("[stock_trader] 模型 %s 推論失敗 (%s)，嘗試下一個備援模型...", model_name, e)
+        try:
+            for model_name in candidate_models:
+                try:
+                    logger.info("[stock_trader] 嘗試使用模型推論: %s", model_name)
+                    res_text = await client.chat(
+                        model=model_name,
+                        system_prompt="",
+                        user_prompt=prompt,
+                    )
+                    if res_text and res_text.strip():
+                        return self.parse_llm_response(res_text, trigger_type, known_tickers=known_tickers)
+                except Exception as e:
+                    logger.warning("[stock_trader] 模型 %s 推論失敗 (%s)，嘗試下一個備援模型...", model_name, e)
+        finally:
+            await client.close()
 
         # Fallback 預設日誌 (觀望)
         now_str = datetime.now(_TZ_TW).strftime("%Y-%m-%d %H:%M:%S")
         fallback_log = ThoughtLog(
             timestamp=now_str,
             trigger_type=trigger_type,
-            thought_process="無法連線至任何可用 LLM 模型 (LM Studio / Ollama 均未開啟或無回應)，名偵探雪莉暫時保持觀望姿態。",
+            thought_process="無法連線至任何可用 LLM 模型 (推論服務無回應或連線逾時)，名偵探雪莉暫時保持觀望姿態。",
             decision_summary="連線異常，觀望 (HOLD)",
             recommended_actions=[],
         )

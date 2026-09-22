@@ -8,10 +8,10 @@ Heartbeat 心跳主動排程腦 Cog。
 
 from __future__ import annotations
 
-import asyncio
 import logging
+import re
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +19,7 @@ import discord
 from discord.ext import commands, tasks
 
 import settings
-from handlers.bot_brain import BotBrain, InferenceTask
+from handlers.bot_brain import InferenceTask
 from handlers.heartbeat.parser import HeartbeatTask, parse_heartbeat_markdown
 from handlers.social.persona import build_dynamic_persona
 from handlers.social.utils import simulate_typing_and_send
@@ -179,9 +179,9 @@ class HeartbeatCog(commands.Cog):
             f"{vibe_context}"
             "【執行規則】：\n"
             f"{cot_instruction}"
-            "1. 必須以橘雪莉第一人稱口吻直接開口說話，文字生動有活力。\n"
+            "1. 必須以第一人稱口吻直接開口說話，文字生動自然。\n"
             "2. 嚴禁引號括號包裹整句，也不要輸出任何小說旁白敘述。\n"
-            "3. 保持 15 歲名偵探的自信、自然與調皮人設。"
+            "3. 徹底貫徹妳當前設定的核心人設與性格特質。"
         )
 
         import time
@@ -215,9 +215,6 @@ class HeartbeatCog(commands.Cog):
         )
         await brain.enqueue_task(inference_task)
         logger.info("[HEARTBEAT] 已將心跳任務 '%s' 推送至 BotBrain 佇列 (Channel: %d)", task.title, task.channel_id)
-
-
-import re
 
 
 async def setup(bot: commands.Bot) -> None:
