@@ -5,8 +5,7 @@ disallow_untyped_defs = false
 warn_return_any = true
 no_implicit_optional = true
 ignore_missing_imports = true
-explicit_package_bases = true
-exclude = ["^Deprecated/", "^tests/"]
+exclude = ["(?i)(^|[\\\\/])(tests|Deprecated)[\\\\/]"]
 
 [tool.coverage.report]
 fail_under = 80

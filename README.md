@@ -42,13 +42,13 @@
 flowchart TD
     UserMsg["群友訊息 / 圖片 @雪莉 / Discord 指令"] --> Orchestrator["🎼 SherryCore Orchestrator (app/orchestrator.py)"]
     
-    subgraph ContextAssembly [Context 組裝與 Top-K 加權檢索]
+    subgraph ContextAssembly ["Context 組裝與 Top-K 加權檢索"]
         Orchestrator --> TopKMemory["記憶加權檢索 (Top-K Relevance Scoring + 好感度狀態)"]
         TopKMemory --> Zone1["Zone 1: 靜態系統前綴 (Soul 定義 + Compact Tool Index) 🔒 100% 相同"]
         TopKMemory --> Zone2["Zone 2: 動態情境 (Vibe + 歷史對話 + 視覺線索 + 記憶 + 世界觀)"]
     end
     
-    subgraph Pass1Inference [Pass-1 意圖規劃與直出]
+    subgraph Pass1Inference ["Pass-1 意圖規劃與直出"]
         Zone1 & Zone2 --> Pass1Prompt["Pass-1 System Prompt (Zone 1 + Zone 2)"]
         Pass1Prompt --> Pass1LLM["🧠 Planner Model (單次規劃 / 直出對話)"]
         Pass1LLM -.->|快取 5500+ Tokens| CacheHit["⚡ KV Cache 命中 (Ollama / vLLM / 雲端 API)"]
@@ -58,7 +58,7 @@ flowchart TD
     ToolExecCheck -->|否 / 閒聊| DirectOutput["Direct Output (Action Early Termination)"]
     ToolExecCheck -->|是| ParallelTools["⚡ 並行調度工具 (asyncio.gather + Tier-1 Cache)"]
     
-    subgraph Pass2Inference [Pass-2 人格合成 (零二次 Prefill)]
+    subgraph Pass2Inference ["Pass-2 人格合成 (零二次 Prefill)"]
         ParallelTools --> Pass2Prompt["Pass-2 System Prompt (Zone 1 + Zone 2 完全對齊 🎯)"]
         Pass2Prompt --> Pass2LLM["✨ Primary Model (工具結果注入於 User Prompt 尾部)"]
         CacheHit -.->|免除 Prefill / TTFT < 200ms| Pass2LLM
