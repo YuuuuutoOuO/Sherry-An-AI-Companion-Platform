@@ -24,7 +24,9 @@ MOD_INFO = {
     "category": "影音 / Livestream",
     "version": "1.0.0",
     "has_web_ui": False,  # 實況劇院運行於獨立伺服器 (PORT 8764)，非主要 Web UI 側邊欄外掛
-    "public_routes": ["/api/livestream/"],
+    # R3（報告 §5.3.2）：主站 /api/livestream/* 為歷史相容 Blueprint，全數收斂為需管理員 Session；
+    # 獨立 8764 播放器伺服器已有專屬存取權杖驗證（R2）。
+    "public_routes": [],
 }
 
 __all__ = [

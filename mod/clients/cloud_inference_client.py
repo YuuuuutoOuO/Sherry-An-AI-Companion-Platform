@@ -42,12 +42,12 @@ DEFAULT_LLM_TIMEOUT_SEC: float = 30.0
 class CloudInferenceClient:
     """雲端模型推論與多模態分析客戶端。"""
 
-    def __init__(self, api_key: str = "", default_model: str = "gemini-3.6-flash") -> None:
+    def __init__(self, api_key: str = "", default_model: str = "gemini-3.5-flash-lite") -> None:
         """初始化雲端推論客戶端。
 
         Args:
             api_key: Google Gemini API 金鑰。預設讀取 settings.GEMINI_API_KEY。
-            default_model: 預設模型名稱（當設定未指定時之後備，採用最新 gemini-3.6-flash）。
+            default_model: 預設模型名稱（當設定未指定時之後備，採用 gemini-3.5-flash-lite）。
         """
         self._custom_api_key = api_key
         self._default_model = default_model
@@ -65,7 +65,7 @@ class CloudInferenceClient:
         若設定為非 Google 體系模型 (如 deepseek:)，則回退至預設之 Google 原生模型作為 Google SDK 兜底。
 
         Returns:
-            str: 適用於 Google SDK 的模型名稱，如 'gemini-3.6-flash'。
+            str: 適用於 Google SDK 的模型名稱，如 'gemini-3.5-flash-lite'。
         """
         raw_model: str = getattr(settings, "CLOUD_SEARCH_MODEL", "").strip()
         if not raw_model:
@@ -88,10 +88,9 @@ class CloudInferenceClient:
             list[str]: 依序嘗試的模型名稱清單。
         """
         fallback_pool = [
-            "gemini-3.6-flash",
+            "gemini-3.5-flash-lite",
             "gemini-3.8-flash",
-            "gemini-2.5-flash",
-            "gemini-1.5-flash",
+            "gemini-3.6-flash",
         ]
         primary = self.get_resolved_model_name()
         candidates = [primary]
@@ -160,7 +159,27 @@ class CloudInferenceClient:
         if system_instruction:
             config_args["system_instruction"] = system_instruction
 
-        config = types.GenerateContentConfig(**config_args) if config_args else None
+        if types is not None:
+            config_args["safety_settings"] = [
+                types.SafetySetting(
+                    category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                    threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                ),
+                types.SafetySetting(
+                    category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                    threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                ),
+                types.SafetySetting(
+                    category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                    threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                ),
+                types.SafetySetting(
+                    category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                    threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                ),
+            ]
+
+        config = types.GenerateContentConfig(**config_args) if (config_args and types is not None) else None
 
         response = client.models.generate_content(
             model=model_name,
@@ -408,7 +427,6 @@ class CloudInferenceClient:
         if not image_bytes:
             return "⚠️ 未能取得有效之圖片數據進行分析。"
 
-        part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
         sys_prompt = (
             "你是雪莉（Sherry）的視覺理解中樞。請深入解析使用者提供的圖片：\n"
             "- 若是「程式報錯或系統日誌截圖」：指出具體錯誤原因與建議修復步驟。\n"
@@ -417,6 +435,34 @@ class CloudInferenceClient:
             "請一律以親切清晰的繁體中文條列說明。"
         )
         prompt_text = user_prompt.strip() or "請詳細分析這張圖片的內容與關鍵細節。"
+
+        # VISION_MODEL 可能被設為本地模型（ollama:/lms:/vllm:/freetoken:）。
+        # 這些後端用 OpenAI-compatible 圖片格式，走 OllamaClient 統一路由，
+        # 不要硬性塞進 Gemini SDK，否則本地視覺模型設定形同虛設。
+        vision_model = str(getattr(settings, "VISION_MODEL", "") or "").strip()
+        if vision_model and not vision_model.lower().startswith(("gemini:", "gemini-", "models/gemini", "google:")):
+            try:
+                import base64
+
+                from handlers.bot_brain.client import OllamaClient
+
+                client = OllamaClient()
+                try:
+                    return await client.chat(
+                        model=vision_model,
+                        system_prompt=sys_prompt,
+                        user_prompt=prompt_text,
+                        images=[base64.b64encode(image_bytes).decode("ascii")],
+                        timeout=180,
+                    )
+                finally:
+                    await client.close()
+            except Exception as exc:
+                logger.warning("視覺模型 %s 分析失敗，回退 Gemini: %s", vision_model, exc)
+                if not getattr(settings, "GEMINI_API_KEY", ""):
+                    return f"⚠️ 視覺模型 {vision_model} 呼叫失敗：{exc}"
+
+        part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
         contents = [part, prompt_text]
         return await self._generate_async(contents, system_instruction=sys_prompt)
 

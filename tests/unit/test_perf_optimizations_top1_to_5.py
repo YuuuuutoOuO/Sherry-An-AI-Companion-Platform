@@ -31,6 +31,22 @@ from web_ui.server import (
 )
 
 
+def test_web_ui_frontend_avoids_repeated_live2d_and_unauthorized_work() -> None:
+    """測試 Live 2D 使用可快取資源且非管理員不輪詢受保護端點。"""
+    project_root = Path(__file__).resolve().parents[2]
+    live2d_source = (project_root / "web_ui" / "static" / "sherry_live2d.js").read_text(encoding="utf-8")
+    app_source = (project_root / "web_ui" / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "?v=${Date.now()}" not in live2d_source
+    assert "requestIdleCallback" in live2d_source
+    assert "cancelAnimationFrame" in live2d_source
+
+    function_start = app_source.index("async function loadComponentMetrics()")
+    function_end = app_source.index("function updateApmCategoryCounts()", function_start)
+    function_source = app_source[function_start:function_end]
+    assert function_source.index("if (!state.isAdmin)") < function_source.index("fetch(")
+
+
 # ===========================================================================
 # Top 1: Web UI /api/services/status 並行探測與快取
 # ===========================================================================
@@ -99,7 +115,9 @@ async def test_services_status_probe_exception_fallback(anyio_backend: str) -> N
         assert len(data["services"]) == 5
         freetoken_entry = next(s for s in data["services"] if s["id"] == "freetoken")
         assert freetoken_entry["status"] == "offline"
-        assert "MoE connection reset" in freetoken_entry["details"]
+        # R2（報告 §5.3.6）：探測例外細節不得外洩至 API 回應，改以錯誤代碼供對照伺服器日誌。
+        assert "MoE connection reset" not in freetoken_entry["details"]
+        assert "錯誤代碼" in freetoken_entry["details"]
 
 
 # ===========================================================================
@@ -170,8 +188,9 @@ async def test_web_ui_logs_total_cnt_zero_closes_connection(tmp_path: Path, monk
     """)
     conn.close()
 
-    mock_conn = MagicMock(wraps=sqlite3.connect(chat_db))
-    with patch("core.db.get_db_connection", return_value=mock_conn):
+    mock_conn = MagicMock(wraps=sqlite3.connect(chat_db, check_same_thread=False))
+    with patch("core.db.get_db_connection", return_value=mock_conn), \
+         patch("web_ui.server._is_admin_request", return_value=True):
         client = app.test_client()
         resp = await client.get("/api/logs?file=chat_history.db%20[runtime_events]&page=1&size=10")
         assert resp.status_code == 200
@@ -360,11 +379,12 @@ async def test_web_ui_reverse_paginated_log_endpoint(tmp_path: Path, monkeypatch
     bot_log.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
 
     client = app.test_client()
-    resp = await client.get("/api/logs?file=bot.log&page=1&size=5")
-    assert resp.status_code == 200
-    data = await resp.get_json()
-    assert data["total"] == 25
-    assert len(data["entries"]) == 5
-    # 最新在第一筆
-    assert "event message 25" in data["entries"][0]["message"]
-    assert "event message 21" in data["entries"][-1]["message"]
+    with patch("web_ui.server._is_admin_request", return_value=True):
+        resp = await client.get("/api/logs?file=bot.log&page=1&size=5")
+        assert resp.status_code == 200
+        data = await resp.get_json()
+        assert data["total"] == 25
+        assert len(data["entries"]) == 5
+        # 最新在第一筆
+        assert "event message 25" in data["entries"][0]["message"]
+        assert "event message 21" in data["entries"][-1]["message"]

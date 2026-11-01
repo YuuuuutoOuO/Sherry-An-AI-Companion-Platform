@@ -258,7 +258,7 @@ class CloudAnalysisClient:
         model_name = getattr(
             settings,
             "SELF_MONITORING_MODEL",
-            getattr(settings, "CLOUD_SEARCH_MODEL", "gemini:gemini-2.0-flash"),
+            getattr(settings, "CLOUD_SEARCH_MODEL", "gemini:gemini-3.5-flash-lite"),
         )
 
         user_prompt = self._build_prompt(incident, log_snapshot)
@@ -282,7 +282,7 @@ class CloudAnalysisClient:
         model_name = getattr(
             settings,
             "SELF_MONITORING_MODEL",
-            getattr(settings, "CLOUD_SEARCH_MODEL", "gemini:gemini-2.0-flash"),
+            getattr(settings, "CLOUD_SEARCH_MODEL", "gemini:gemini-3.5-flash-lite"),
         )
         prompt = f"""【待審查對話】
 - 追蹤標號 (Trace ID): `{trace_id or 'N/A'}`
@@ -368,8 +368,16 @@ class CloudAnalysisClient:
             cat = "EVENT_LOOP_BLOCK"
             cause = f"{prefix} 檢測到事件迴圈嚴重阻塞或佇列推積，可能存在未妥善以 to_thread 包裝之同步 Blocking I/O。"
         elif incident.incident_type == IncidentType.INFERENCE_FAILURE:
-            cat = "EXTERNAL_API_TIMEOUT"
-            cause = f"{prefix} 大腦推論任務在執行中斷或遭遇致命異常: {incident.trigger_reason}。"
+            reason_lower = (incident.trigger_reason or "").lower()
+            if "content_filter" in reason_lower:
+                cat = "CONTENT_FILTER"
+                cause = (
+                    f"{prefix} 供應商安全審查機制回傳 finish_reason=content_filter 拒絕請求。"
+                    f"此為確定性結果，重試相同輸入無效；需改寫被觸發的內容或改用其他供應商模型。"
+                )
+            else:
+                cat = "EXTERNAL_API_TIMEOUT"
+                cause = f"{prefix} 大腦推論任務在執行中斷或遭遇致命異常: {incident.trigger_reason}。"
         elif lat >= 120000:
             cat = "EXTERNAL_API_TIMEOUT"
             cause = f"{prefix} 單次請求超過 120 秒硬性超時限制 ({lat}ms)，通常由大模型提供商 API 連線卡頓或 GPU 排隊過載所引起。"
@@ -539,6 +547,17 @@ class SelfHealingAdvisor:
                 rationale="上下文長度過長或 Prefill 負載過重，建議執行短期記憶自動摘要與 Context 垃圾回收。",
                 parameters={"compression_ratio": 0.5, "gc_short_term": True},
             )
+        if cat == "CONTENT_FILTER":
+            # 換模型才可能繞過，且現行備援池常與主模型同廠同系列，切換無實質意義。
+            return SelfHealingAction(
+                strategy=SelfHealingStrategy.NONE,
+                trigger_incident=inc_type,
+                rationale=(
+                    "內容安全過濾為確定性失敗，重試或降級至同廠備援模型皆無效，"
+                    "不建議自動處置；應檢視觸發該請求的內容來源。"
+                ),
+                parameters={},
+            )
         if cat in ("GPU_LOCK", "EXTERNAL_API_TIMEOUT", "EVENT_LOOP_BLOCK") or inc_type in (
             IncidentType.FAILURE_120S,
             IncidentType.INFERENCE_FAILURE,
@@ -548,7 +567,7 @@ class SelfHealingAdvisor:
                 trigger_incident=inc_type,
                 rationale="主力模型推論逾時或顯卡資源鎖定，建議下一輪暫時降級至輕量快速備援模型。",
                 parameters={
-                    "fallback_target": getattr(settings, "QUICK_MODEL", "quick"),
+                    "fallback_target": getattr(settings, "LIGHT_MODEL", "light"),
                     "cooldown_sec": 180,
                 },
             )
@@ -609,9 +628,11 @@ class AuditService:
         # 2. 調用雲端搜尋模型進行根因診斷
         diagnostic = await self._analysis_client.analyze_incident(incident, snapshot)
 
-        # 3. 寫入 SQLite 資料庫持久化儲存
+        # 3. 寫入 SQLite 資料庫持久化儲存（同步 sqlite3 寫入移至工作執行緒，避免阻塞事件迴圈）
         try:
-            self._db_repo.insert_audit_record(incident, diagnostic, snapshot)
+            await asyncio.to_thread(
+                self._db_repo.insert_audit_record, incident, diagnostic, snapshot
+            )
         except Exception as db_err:
             logger.warning("AuditService: 寫入 audit.db 失敗: %s", db_err)
 

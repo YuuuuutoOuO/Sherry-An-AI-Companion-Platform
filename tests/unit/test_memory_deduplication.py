@@ -212,3 +212,58 @@ class TestMemoryDeduplication:
         assert deduped[0]["category"] == "rule"
         assert "雪莉自己決定" in deduped[0]["fact"]
 
+    def test_real_world_user_memory_consolidation(self) -> None:
+        """測試真實使用者記憶範例（15 條高重複事實）的收斂、分類矯正與實體保留。"""
+        raw_facts = [
+            # Rules
+            make_fact("對雪莉（Sherry/希羅醬）具有強烈的介入感與主導權，致力於研究如何增加其易上頭的個性特質，並要求其人格穩定性，不准變成怪怪的大叔機器人", importance=5, category="rule"),
+            make_fact("對雪莉（Sherry/希羅醬）具有高度開發熱情，透過技術手段研究其人格、語意分割、意圖拆解與運算邏輯優化，並致力於增加其「易上頭」的個性特質", importance=4, category="rule"),
+            make_fact("對於他人對其家人進行的不當稱呼表現出極高的道德底線與嚴厲的反感", importance=5, category="rule"),
+            make_fact("對雪莉（Sherry）展現高度依賴與情感需求，偏好包含親密行為、調情與性暗示的沉浸式角色扮演（RP）互動，並要求其人格穩定性，不准變得奇怪", importance=5, category="rule"),
+            make_fact("在與雪莉互動時，明確表達不接受雪莉變成「大叔機器人」或「怪怪的機器人」，要求其人格穩定且符合預期", importance=5, category="rule"),
+            make_fact("對雪莉（Sherry）的對話邏輯、人格穩定性與架構設計具有高度掌控欲，並要求其維持特定人格設定", importance=4, category="rule"),
+            make_fact("在技術開發與架構設計上，要求開發者（如 PHD）必須將架構與其既定標準對齊，並傾向於使用原始碼進行架構建立", importance=5, category="rule"),
+            # Knowledge / Facts
+            make_fact("對程式碼架構具有高度審美，能辨識以 Handler 為核心模組、Mod 為實驗模組的設計，並致力於優化 NLP 解析能力與工具調用精準度", importance=4, category="preference"),
+            make_fact("曾攻讀博士學位，研究題目餅畫太大，但也因此讓全實驗室得以畢業，並對這段經歷感到又屌又後悔", importance=4, category="identity"),
+            make_fact("具備博士學位背景，曾經歷畫大餅但成功帶領實驗室畢業的過程", importance=3, category="identity"),
+            make_fact("具備遊戲機制分析專家能力，專注於《Warframe》與《陰陽師》的平衡性與角色強度評估，對角色強度劇變（如更新後直接幹死普咖）持有批判態度", importance=4, category="preference"),
+            make_fact("對雪莉（Sherry）相關功能、檔案內容、語意分割與架構解耦具有深入研究，並致力於透過 LLM 技術進行對話互動與技術實作", importance=4, category="preference"),
+            make_fact("專注於台美股（如 VOO、0050、MU、SNDK、SKHY）與加密貨幣（BTC）投資，並持續追蹤 OpenAI 相關公司與市場消息炒作", importance=4, category="preference"),
+            make_fact("對資源消耗與 Token 消耗量極度敏感，會評估開發成本是否導致 RAM 爆掉或產生等同於股票賠錢的經濟損失", importance=4, category="habit"),
+            make_fact("高度關注台美股（如 VOO、0050、MU、SNDK、SKHY）與加密貨幣（BTC）市場，並利用雪莉進行美股交易量監測與提醒", importance=4, category="preference"),
+        ]
+
+        profile = UserProfile(
+            aliases=["Yuuto", "歐潤吉", "orion", "沒有CUDA的歐潤吉"],
+            facts=raw_facts,
+        )
+
+        consolidated, a_rem, f_rem = consolidate_user_memory(profile)
+        final_facts = consolidated["facts"]
+
+        # 1. 總條數大幅精簡：由 15 條收斂至 10 條以內（高重複項全數合併）
+        assert len(final_facts) <= 10
+        assert f_rem >= 5
+
+        # 2. 博士學位兩條必合併為 1 條
+        phd_facts = [f for f in final_facts if "博士" in f["fact"]]
+        assert len(phd_facts) == 1
+        assert phd_facts[0]["category"] == "identity"
+        assert "畢業" in phd_facts[0]["fact"]
+
+        # 3. 台美股 VOO/0050 兩條必合併為 1 條，且保留代號實體
+        stock_facts = [f for f in final_facts if "VOO" in f["fact"] or "0050" in f["fact"]]
+        assert len(stock_facts) == 1
+        assert "BTC" in stock_facts[0]["fact"]
+
+        # 4. RP 親密互動之寄生規則尾巴被剝離，並正確歸類為 preference
+        rp_facts = [f for f in final_facts if "親密行為" in f["fact"] or "角色扮演" in f["fact"]]
+        assert len(rp_facts) == 1
+        assert rp_facts[0]["category"] == "preference"
+        assert "變得奇怪" not in rp_facts[0]["fact"]
+
+        # 5. 規則區不再無限膨脹，收斂至 3 條左右核心規則
+        rule_facts = [f for f in final_facts if f["category"] == "rule"]
+        assert len(rule_facts) <= 4
+

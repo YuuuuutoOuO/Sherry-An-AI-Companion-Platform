@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🌐 雪莉上網衝浪實況台 — Sherry NetSurfer :8765</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌐</text></svg>">
+    <style>
+        :root {
+            --bg-base: #090d16;
+            --bg-surface: #111827;
+            --bg-panel: rgba(17, 24, 39, 0.75);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --accent-pink: #f472b6;
+            --accent-purple: #a855f7;
+            --accent-blue: #38bdf8;
+            --accent-green: #4ade80;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: var(--font-family);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+        }
+
+        /* 瀏覽器頂部視窗列 */
+        .browser-window {
+            margin: 16px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            flex: 1;
+        }
+
+        .browser-header {
+            background: #1e293b;
+            padding: 10px 16px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .window-dots {
+            display: flex;
+            gap: 6px;
+        }
+
+        .dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+        .dot-red { background: #ef4444; }
+        .dot-yellow { background: #f59e0b; }
+        .dot-green { background: #10b981; }
+
+        .browser-controls {
+            display: flex;
+            gap: 6px;
+            color: var(--text-muted);
+            font-size: 1.1rem;
+        }
+        .browser-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+        .browser-btn:hover {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        /* 網址列 */
+        .address-bar {
+            flex: 1;
+            background: #0f172a;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 8px;
+            padding: 7px 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9rem;
+            color: var(--text-main);
+            font-family: monospace;
+        }
+        .address-icon {
+            color: var(--accent-blue);
+        }
+        .address-url {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* 狀態徽章與控制按鈕 */
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .badge-live {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--accent-green);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+        .badge-live-pulse {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-green);
+            animation: pulse 1.8s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(74, 222, 128, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); }
+        }
+
+        .action-btn {
+            background: linear-gradient(135deg, var(--accent-purple), var(--accent-pink));
+            color: white;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .action-btn:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+        .action-btn.secondary {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+        }
+        .action-btn.secondary:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        /* 瀏覽器內容主要工作區（雙欄佈局） */
+        .browser-content {
+            display: grid;
+            grid-template-columns: 1.4fr 1fr;
+            gap: 20px;
+            padding: 20px;
+            flex: 1;
+            min-height: 650px;
+        }
+
+        @media (max-width: 1024px) {
+            .browser-content {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* 左側：網頁瀏覽演出區 */
+        .web-viewport {
+            background: #0b1120;
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            position: relative;
+            overflow-y: auto;
+            max-height: 800px;
+        }
+
+        .web-viewport-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 12px;
+        }
+
+        .web-title {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .step-pill {
+            font-size: 0.75rem;
+            padding: 4px 10px;
+            border-radius: 12px;
+            background: rgba(56, 189, 248, 0.15);
+            color: var(--accent-blue);
+            border: 1px solid rgba(56, 189, 248, 0.3);
+        }
+
+        /* 新聞卡片網格 */
+        .cards-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 14px;
+        }
+
+        .article-card {
+            background: rgba(30, 41, 59, 0.6);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 14px;
+            transition: all 0.25s ease;
+            position: relative;
+        }
+        .article-card.scanning {
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 16px rgba(56, 189, 248, 0.35);
+            transform: scale(1.015);
+        }
+        .article-card.selected {
+            border-color: var(--accent-pink);
+            background: rgba(244, 114, 182, 0.08);
+            box-shadow: 0 0 20px rgba(244, 114, 182, 0.3);
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 6px;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+        .card-source {
+            color: var(--accent-purple);
+            font-weight: 600;
+        }
+        .card-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: #f1f5f9;
+            margin-bottom: 6px;
+            line-height: 1.4;
+        }
+        .card-summary {
+            font-size: 0.85rem;
+            color: #cbd5e1;
+            line-height: 1.5;
+        }
+        .card-cursor-badge {
+            position: absolute;
+            top: -10px;
+            right: 12px;
+            background: var(--accent-blue);
+            color: #0f172a;
+            font-size: 0.7rem;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 10px;
+            display: none;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+        }
+        .article-card.scanning .card-cursor-badge {
+            display: block;
+        }
+
+        /* 右側：雪莉實況 OS 與記憶沉澱區 */
+        .live-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        /* 雪莉 OS 氣泡卡片 */
+        .sherry-os-box {
+            background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.9));
+            border: 1px solid rgba(244, 114, 182, 0.25);
+            border-radius: 12px;
+            padding: 16px;
+            position: relative;
+        }
+        .sherry-avatar-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .sherry-avatar {
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            border: 2px solid var(--accent-pink);
+            background: #3b0764;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.4rem;
+        }
+        .sherry-name {
+            font-weight: 700;
+            color: var(--accent-pink);
+            font-size: 1rem;
+        }
+        .sherry-os-text {
+            font-size: 0.92rem;
+            color: #f1f5f9;
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 8px;
+            padding: 12px;
+            line-height: 1.6;
+            font-style: italic;
+            border-left: 3px solid var(--accent-pink);
+        }
+
+        /* 興趣雷達匹配 */
+        .radar-box {
+            background: rgba(30, 41, 59, 0.5);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 14px;
+        }
+        .radar-title {
+            font-size: 0.85rem;
+            color: var(--accent-blue);
+            font-weight: 600;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .radar-item {
+            font-size: 0.85rem;
+            background: rgba(15, 23, 42, 0.6);
+            border-radius: 6px;
+            padding: 8px 10px;
+            margin-bottom: 6px;
+            color: #cbd5e1;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        /* Discord 貼文預覽 */
+        .discord-preview {
+            background: #313338;
+            border-radius: 12px;
+            padding: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        .discord-channel-header {
+            font-size: 0.8rem;
+            color: #949ba4;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .discord-message {
+            display: flex;
+            gap: 12px;
+        }
+        .discord-avatar {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            background: #f472b6;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            flex-shrink: 0;
+        }
+        .discord-body {
+            flex: 1;
+        }
+        .discord-author {
+            font-weight: 600;
+            color: #f2f3f5;
+            font-size: 0.95rem;
+            margin-bottom: 4px;
+        }
+        .discord-author .bot-tag {
+            background: #5865f2;
+            color: white;
+            font-size: 0.65rem;
+            padding: 1px 4px;
+            border-radius: 3px;
+            margin-left: 6px;
+        }
+        .discord-text {
+            font-size: 0.9rem;
+            color: #dbdee1;
+            line-height: 1.45;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        /* 自我記憶庫卡片 */
+        .memory-box {
+            background: rgba(30, 41, 59, 0.5);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 14px;
+        }
+        .memory-header {
+            font-size: 0.85rem;
+            color: var(--accent-purple);
+            font-weight: 600;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .memory-content {
+            font-size: 0.85rem;
+            color: #cbd5e1;
+            background: rgba(15, 23, 42, 0.6);
+            border-radius: 6px;
+            padding: 8px 10px;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="browser-window">
+        <!-- 頂部視窗與網址列 -->
+        <div class="browser-header">
+            <div class="window-dots">
+                <span class="dot dot-red"></span>
+                <span class="dot dot-yellow"></span>
+                <span class="dot dot-green"></span>
+            </div>
+
+            <div class="browser-controls">
+                <button class="browser-btn" id="btn-back" title="上一頁">←</button>
+                <button class="browser-btn" id="btn-forward" title="下一頁">→</button>
+                <button class="browser-btn" id="btn-reload" title="重新載入">↻</button>
+            </div>
+
+            <div class="address-bar">
+                <span class="address-icon">🔒</span>
+                <span class="address-url" id="address-bar-url">about:blank</span>
+            </div>
+
+            <div class="header-actions">
+                <div class="badge-live">
+                    <span class="badge-live-pulse"></span>
+                    <span id="sse-status-text">SSE 連線中</span>
+                </div>
+                <div id="live-mind-stats" style="font-size: 0.8rem; background: rgba(59, 130, 246, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); padding: 4px 10px; border-radius: 20px; font-weight: 600; display: flex; align-items: center; gap: 6px;">
+                    <span id="live-mind-badge">☀️ 活躍</span>
+                    <span>🥱 <span id="live-mind-boredom">--</span>%</span>
+                    <span style="display:none;"><span id="live-mind-social">--</span>%</span>
+                    <span>🔍 <span id="live-mind-curiosity">--</span>%</span>
+                </div>
+                <div id="live-rice-stats" style="font-size: 0.8rem; background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); padding: 4px 10px; border-radius: 20px; font-weight: 600;">
+                    🍚 0 碗白飯
+                </div>
+                <select id="live-mode-select" style="background: #1e293b; color: #f8fafc; border: 1px solid var(--border-color); border-radius: 6px; padding: 5px 8px; font-size: 0.82rem; cursor: pointer;">
+                    <option value="auto">🎲 自動模式 (Auto)</option>
+                    <option value="mind_monologue">💭 自發思考 (Monologue)</option>
+                    <option value="lurk_chat">👀 潛水插話 (Lurk)</option>
+                    <option value="daily_vibe">🍚 日常摸魚 (Vibe)</option>
+                    <option value="care_poke">💌 戳戳群友 (Poke)</option>
+                    <option value="surf_gossip">🌐 衝浪吃瓜 (Gossip)</option>
+                </select>
+                <button class="action-btn secondary" id="btn-trigger-dry">🧪 預覽 (Dry-run)</button>
+                <button class="action-btn" id="btn-trigger-post">🚀 立即冒泡</button>
+            </div>
+        </div>
+
+        <!-- 雙欄工作區 -->
+        <div class="browser-content">
+            <!-- 左欄：虛擬網頁與候選文章網格 -->
+            <div class="web-viewport">
+                <div class="web-viewport-header">
+                    <div class="web-title">
+                        <span>📰</span>
+                        <span id="viewport-title">等待雪莉啟動衝浪...</span>
+                    </div>
+                    <span class="step-pill" id="step-pill">IDLE</span>
+                </div>
+
+                <div class="cards-grid" id="candidates-container">
+                    <div style="padding: 40px; text-align: center; color: var(--text-muted);">
+                        目前尚無進行中的衝浪任務。<br>
+                        點擊右上角的「🧪 預覽衝浪」或「🚀 立即衝浪」即可即時觀看雪莉的上網演出！
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右欄：雪莉實況 OS 與記憶沉澱 -->
+            <div class="live-panel">
+                <!-- 雪莉內心 OS -->
+                <div class="sherry-os-box">
+                    <div class="sherry-avatar-row">
+                        <div class="sherry-avatar">🦊</div>
+                        <div>
+                            <div class="sherry-name">橘雪莉 (Sherry)</div>
+                            <div style="font-size: 0.75rem; color: var(--text-muted);">網活仔即時內心 OS</div>
+                        </div>
+                    </div>
+                    <div class="sherry-os-text" id="sherry-thought-text">
+                        「今天網路上不知道有什麼新鮮事呢～ 讓我來巡邏看看！」
+                    </div>
+                </div>
+
+                <!-- 群友記憶興趣雷達 -->
+                <div class="radar-box">
+                    <div class="radar-title">🎯 群友興趣雷達匹配</div>
+                    <div id="radar-container">
+                        <div style="color: var(--text-muted); font-size: 0.8rem;">尚無匹配的群友記錄。</div>
+                    </div>
+                </div>
+
+                <!-- Discord 單一測試頻道發送預覽 (支援多氣泡連發與表情回應) -->
+                <div class="discord-preview">
+                    <div class="discord-channel-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
+                        <div>
+                            <span>#</span>
+                            <span id="preview-channel-name">單一測試頻道沙盒 (ID: {{ config.sandbox_channel_id }})</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <span id="preview-send-status" style="font-size: 0.72rem; padding: 2px 8px; border-radius: 10px; background: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.3);">
+                                ⚪ 等待活動
+                            </span>
+                            <span id="preview-mode-badge" style="font-size: 0.72rem; padding: 2px 8px; border-radius: 10px; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);">
+                                模式: {{ config.behavior_mode or 'auto' }}
+                            </span>
+                        </div>
+                    </div>
+                    <div class="discord-message">
+                        <div class="discord-avatar">🦊</div>
+                        <div class="discord-body">
+                            <div class="discord-author">
+                                橘雪莉 <span class="bot-tag">BOT</span>
+                            </div>
+                            <div id="discord-bubbles-box" style="display: flex; flex-direction: column; gap: 6px;">
+                                <div class="discord-text" id="discord-post-text">
+                                    （尚未發布貼文）
+                                </div>
+                            </div>
+                            <div id="discord-reaction-box" style="margin-top: 6px; display: none;">
+                                <span id="discord-reaction-badge" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; padding: 2px 8px; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 4px;"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 寫入自我記憶庫 -->
+                <div class="memory-box">
+                    <div class="memory-header">🧠 雪莉自我記憶沉澱 (self_memory.db)</div>
+                    <div class="memory-content" id="memory-entry-text">
+                        等待本輪衝浪結束後寫入自我記憶與觀點...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const SurferLive = {
+            source: null,
+            snapshot: {{ snapshot | tojson }},
+            config: {{ config | tojson }},
+
+            esc(str) {
+                return String(str ?? '')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            },
+
+            init() {
+                this.bindButtons();
+                this.renderState(this.snapshot);
+                this.connectSSE();
+            },
+
+            bindButtons() {
+                document.getElementById('btn-trigger-dry').addEventListener('click', () => this.triggerSurfer(true));
+                document.getElementById('btn-trigger-post').addEventListener('click', () => this.triggerSurfer(false));
+                document.getElementById('btn-reload').addEventListener('click', () => {
+                    this.fetchState();
+                });
+            },
+
+            async triggerSurfer(dryRun) {
+                const modeSelect = document.getElementById('live-mode-select');
+                const mode = modeSelect ? modeSelect.value : 'auto';
+                try {
+                    const res = await fetch('/api/surfer/trigger', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ dry_run: dryRun, mode: mode })
+                    });
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        console.log('Triggered surfer:', data.message);
+                    }
+                } catch (err) {
+                    console.error('Trigger failed:', err);
+                }
+            },
+
+            async fetchState() {
+                try {
+                    const res = await fetch('/api/surfer/state');
+                    const data = await res.json();
+                    if (data.status === 'success' && data.snapshot) {
+                        this.renderState(data.snapshot);
+                    }
+                } catch (e) {
+                    console.error('Fetch state error:', e);
+                }
+            },
+
+            connectSSE() {
+                const statusEl = document.getElementById('sse-status-text');
+                if (this.source) {
+                    this.source.close();
+                }
+
+                this.source = new EventSource('/api/surfer/stream');
+
+                this.source.onopen = () => {
+                    statusEl.textContent = '實況同步已連線 (Port 8765)';
+                    statusEl.parentElement.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+                };
+
+                this.source.onerror = () => {
+                    statusEl.textContent = '斷線重連中...';
+                    statusEl.parentElement.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+                };
+
+                // 監聽各類事件
+                this.source.addEventListener('state', (e) => {
+                    const data = JSON.parse(e.data);
+                    this.renderState(data);
+                });
+
+                this.source.addEventListener('status', (e) => {
+                    const data = JSON.parse(e.data);
+                    this.updateStep(data.step || 'surfing', data.message);
+                });
+
+                this.source.addEventListener('browsing', (e) => {
+                    const data = JSON.parse(e.data);
+                    if (data.url) this.updateAddressBar(data.url);
+                    this.updateStep(data.step, data.message);
+                });
+
+                this.source.addEventListener('candidates', (e) => {
+                    const data = JSON.parse(e.data);
+                    if (data.url) this.updateAddressBar(data.url);
+                    this.renderCandidates(data.candidates || [], data.evaluating_index);
+                    this.updateStep(data.step, data.message);
+                });
+
+                this.source.addEventListener('evaluating', (e) => {
+                    const data = JSON.parse(e.data);
+                    if (data.url) this.updateAddressBar(data.url);
+                    this.highlightEvaluating(data.evaluating_index);
+                    if (data.thought) this.updateThought(data.thought);
+                });
+
+                this.source.addEventListener('matching_users', (e) => {
+                    const data = JSON.parse(e.data);
+                    this.renderMatches(data.matched_users || []);
+                });
+
+                this.source.addEventListener('thinking', (e) => {
+                    const data = JSON.parse(e.data);
+                    if (data.thought) this.updateThought(data.thought);
+                    this.updateStep('thinking', '雪莉正在構思貼文與觀點...');
+                });
+
+                this.source.addEventListener('completed', (e) => {
+                    const data = JSON.parse(e.data);
+                    this.renderCompleted(data);
+                });
+
+                this.source.addEventListener('mind_pulse', (e) => {
+                    const data = JSON.parse(e.data);
+                    if (data.mind_state) {
+                        this.renderMindState(data.mind_state, data.is_active_hours);
+                    }
+                    if (data.message) {
+                        this.updateStep('mind_pulse', data.message);
+                    }
+                });
+            },
+
+            updateAddressBar(url) {
+                const el = document.getElementById('address-bar-url');
+                if (el) el.textContent = url;
+            },
+
+            updateStep(step, message) {
+                const pill = document.getElementById('step-pill');
+                if (pill) pill.textContent = (step || 'RUNNING').toUpperCase();
+                const title = document.getElementById('viewport-title');
+                if (title && message) title.textContent = message;
+            },
+
+            updateThought(text) {
+                const el = document.getElementById('sherry-thought-text');
+                if (el) el.textContent = text;
+            },
+
+            highlightEvaluating(idx) {
+                const cards = document.querySelectorAll('.article-card');
+                cards.forEach((c, i) => {
+                    if (i === idx) {
+                        c.classList.add('scanning');
+                    } else {
+                        c.classList.remove('scanning');
+                    }
+                });
+            },
+
+            renderCandidates(candidates, evalIdx) {
+                const container = document.getElementById('candidates-container');
+                if (!container) return;
+                if (!candidates || !candidates.length) {
+                    container.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-muted);">未找到合適的候選文章。</div>';
+                    return;
+                }
+
+                container.innerHTML = candidates.map((c, i) => `
+                    <div class="article-card ${i === evalIdx ? 'scanning' : ''}" data-index="${c.index}">
+                        <div class="card-cursor-badge">🔍 雪莉正在閱讀</div>
+                        <div class="card-header">
+                            <span class="card-source">${c.source}</span>
+                            <span>#${c.index + 1}</span>
+                        </div>
+                        <div class="card-title">${c.title}</div>
+                        <div class="card-summary">${c.summary || ''}</div>
+                    </div>
+                `).join('');
+            },
+
+            renderMatches(matches) {
+                const container = document.getElementById('radar-container');
+                if (!container) return;
+                if (!matches || !matches.length) {
+                    container.innerHTML = '<div style="color: var(--text-muted); font-size: 0.8rem;">本輪無特定命中群友（將直接向大家分享）。</div>';
+                    return;
+                }
+                container.innerHTML = matches.map(m => `
+                    <div class="radar-item">
+                        <div>
+                            <span style="color: var(--accent-pink); font-weight: 600;">${m.user_name}</span>
+                            <span style="font-size: 0.75rem; margin-left: 6px; color: var(--text-muted);">${m.fact}</span>
+                        </div>
+                        <span style="font-size: 0.7rem; color: var(--accent-blue); background: rgba(56, 189, 248, 0.15); padding: 2px 6px; border-radius: 4px;">
+                            ${(m.matched_keywords || []).join(', ')}
+                        </span>
+                    </div>
+                `).join('');
+            },
+
+            renderBubbles(bubbles, postText, reaction) {
+                const box = document.getElementById('discord-bubbles-box');
+                if (!box) return;
+                const items = (bubbles && bubbles.length) ? bubbles : (postText ? [postText] : []);
+                if (!items.length) {
+                    box.innerHTML = '<div class="discord-text" id="discord-post-text">（尚未發布貼文）</div>';
+                } else {
+                    box.innerHTML = items.map((b, i) => `
+                        <div class="discord-text" style="background: rgba(255, 255, 255, 0.03); border-radius: 6px; padding: 6px 10px; border-left: 2px solid var(--accent-pink);">${this.esc(b)}</div>
+                    `).join('');
+                }
+
+                const rxBox = document.getElementById('discord-reaction-box');
+                const rxBadge = document.getElementById('discord-reaction-badge');
+                if (rxBox && rxBadge) {
+                    if (reaction) {
+                        rxBox.style.display = 'block';
+                        rxBadge.textContent = `${reaction} 1`;
+                    } else {
+                        rxBox.style.display = 'none';
+                    }
+                }
+            },
+
+            renderMindState(mindState, isActiveHours) {
+                if (!mindState) return;
+                const boredomEl = document.getElementById('live-mind-boredom') || document.getElementById('live-mind-social');
+                const socialEl = document.getElementById('live-mind-social');
+                const curiosityEl = document.getElementById('live-mind-curiosity');
+                const badgeEl = document.getElementById('live-mind-badge');
+
+                const bVal = Math.round(Number(mindState.boredom_level ?? (100 - (mindState.social_satiety ?? 72))));
+                const cVal = Math.round(Number(mindState.curiosity_level ?? (100 - (mindState.curiosity_satiety ?? 68))));
+
+                if (boredomEl) boredomEl.textContent = bVal;
+                if (socialEl) socialEl.textContent = Math.round(Number(mindState.social_satiety ?? (100 - bVal)));
+                if (curiosityEl) curiosityEl.textContent = cVal;
+
+                if (badgeEl) {
+                    if (isActiveHours !== false) {
+                        badgeEl.textContent = '☀️ 活躍';
+                        badgeEl.style.color = '#4ade80';
+                    } else {
+                        badgeEl.textContent = '🌙 休眠';
+                        badgeEl.style.color = '#a5b4fc';
+                    }
+                }
+            },
+
+            renderLiveStats(stats) {
+                if (!stats) return;
+                const el = document.getElementById('live-rice-stats');
+                if (el) {
+                    const bowls = stats.bowls_of_rice ?? 0;
+                    const tokens = stats.tokens_consumed_today ?? 0;
+                    el.textContent = `🍚 ${bowls} 碗白飯 (${Number(tokens).toLocaleString()} tokens)`;
+                }
+                if (stats.mind_state) {
+                    this.renderMindState(stats.mind_state, stats.is_active_hours);
+                }
+            },
+
+            renderCompleted(data) {
+                this.updateStep('completed', data.message || '衝浪完成！');
+                if (data.thought) this.updateThought(data.thought);
+                if (data.url) this.updateAddressBar(data.url);
+
+                if (data.selected) {
+                    const cards = document.querySelectorAll('.article-card');
+                    cards.forEach((c) => {
+                        const idx = Number(c.getAttribute('data-index'));
+                        if (idx === data.selected.index) {
+                            c.classList.add('selected');
+                            c.classList.remove('scanning');
+                        } else {
+                            c.classList.remove('selected', 'scanning');
+                        }
+                    });
+                }
+
+                this.renderBubbles(data.bubbles, data.post_text, data.reaction);
+                this.renderLiveStats(data.live_stats);
+
+                const modeBadge = document.getElementById('preview-mode-badge');
+                if (modeBadge && data.mode) {
+                    modeBadge.textContent = `模式: ${data.mode}`;
+                }
+
+                const sendStatusBadge = document.getElementById('preview-send-status');
+                if (sendStatusBadge) {
+                    if (data.dry_run) {
+                        sendStatusBadge.textContent = '🧪 預覽模式 (未外發 Discord)';
+                        sendStatusBadge.style.cssText = 'font-size: 0.72rem; padding: 2px 8px; border-radius: 10px; background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.4);';
+                    } else if (data.posted_message_id) {
+                        sendStatusBadge.textContent = '🚀 已真實發送至 Discord';
+                        sendStatusBadge.style.cssText = 'font-size: 0.72rem; padding: 2px 8px; border-radius: 10px; background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(74, 222, 128, 0.4);';
+                    } else if (data.silent_read) {
+                        sendStatusBadge.textContent = '🤫 私下默讀沉澱 (未外發 Discord)';
+                        sendStatusBadge.style.cssText = 'font-size: 0.72rem; padding: 2px 8px; border-radius: 10px; background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4);';
+                    } else {
+                        sendStatusBadge.textContent = '⚪ 未外發（無有效頻道或純閱讀）';
+                        sendStatusBadge.style.cssText = 'font-size: 0.72rem; padding: 2px 8px; border-radius: 10px; background: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.3);';
+                    }
+                }
+
+                if (data.self_memory_entry) {
+                    const memEl = document.getElementById('memory-entry-text');
+                    if (memEl) {
+                        const opinionText = this.esc(data.self_memory_entry.opinion || data.thought || '—');
+                        const readingId = this.esc(data.self_memory_entry.reading_id || '—');
+                        memEl.innerHTML = `
+                            <div><strong>觀點條目：</strong> ${opinionText}</div>
+                            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
+                                Reading ID: ${readingId}
+                            </div>
+                        `;
+                    }
+                }
+            },
+
+            renderState(snap) {
+                if (!snap) return;
+                if (snap.current_url) this.updateAddressBar(snap.current_url);
+                if (snap.thought) this.updateThought(snap.thought);
+                if (snap.current_step) this.updateStep(snap.current_step);
+                if (snap.candidates && snap.candidates.length) {
+                    this.renderCandidates(snap.candidates, snap.evaluating_index);
+                }
+                if (snap.matched_users) {
+                    this.renderMatches(snap.matched_users);
+                }
+                this.renderBubbles(snap.bubbles, snap.post_text, snap.reaction);
+                this.renderLiveStats(snap.live_stats);
+                if (snap.mind_state) {
+                    this.renderMindState(snap.mind_state, snap.live_stats?.is_active_hours);
+                }
+
+                const modeBadge = document.getElementById('preview-mode-badge');
+                if (modeBadge && snap.mode) {
+                    modeBadge.textContent = `模式: ${snap.mode}`;
+                }
+
+                if (snap.self_memory_entry) {
+                    const memEl = document.getElementById('memory-entry-text');
+                    if (memEl) {
+                        const opinionText = this.esc(snap.self_memory_entry.opinion || snap.thought || '—');
+                        const readingId = this.esc(snap.self_memory_entry.reading_id || '—');
+                        memEl.innerHTML = `
+                            <div><strong>觀點條目：</strong> ${opinionText}</div>
+                            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
+                                Reading ID: ${readingId}
+                            </div>
+                        `;
+                    }
+                }
+            }
+        };
+
+        window.addEventListener('DOMContentLoaded', () => {
+            SurferLive.init();
+        });
+    </script>
+</body>
+</html>

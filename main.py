@@ -19,6 +19,7 @@ from typing import Any
 import discord
 from discord.ext import commands
 
+import core.compat  # noqa: F401 (ensure Python 3.10 asyncio.timeout shim)
 import settings
 
 # ---------------------------------------------------------------------------
@@ -91,6 +92,7 @@ EXTENSIONS: list[str] = [
     "handlers.admin",
     "handlers.voice",
     "handlers.spark",  # 核心 SPARK 條件排程與推播系統（全面接管 scheduler）
+    "handlers.care",  # R19 主動關懷引擎（治理閘門、額度與候選來源）
     "handlers.executor",
     "handlers.help_cog",
     "handlers.welcome_cog",
@@ -208,6 +210,23 @@ async def main() -> None:
     from core.sys_inspector.audit_service import set_cloud_inference_client
     set_cloud_inference_client(bot.core.cloud_client)  # type: ignore[attr-defined]
 
+    orig_close = bot.close
+
+    async def _safe_close() -> None:
+        """在拆解語音與 Cog 之前，優先鎖定並捕獲系統與音樂恢復快照。"""
+        try:
+            music_cog = bot.get_cog("MusicHandler")
+            if music_cog:
+                setattr(music_cog, "_is_shutting_down", True)
+            from core.recovery.manager import get_recovery_manager
+
+            await get_recovery_manager().shutdown_handler()
+        except Exception as exc:
+            logger.debug("bot.close 前捕捉狀態恢復快照異常: %s", exc)
+        await orig_close()
+
+    bot.close = _safe_close  # type: ignore[method-assign]
+
     async with bot:
         for ext in EXTENSIONS:
             try:
@@ -269,6 +288,14 @@ async def main() -> None:
             logger.info("\n" + "\n".join(banner_lines))
 
             logger.info("Startup sequence completed successfully.")
+            # 開機狀態對帳與自癒接續 (State Recovery Reconciliation)
+            try:
+                from core.recovery.reconciler import get_boot_reconciler
+
+                reconciler = get_boot_reconciler()
+                bot.loop.create_task(reconciler.reconcile_all(bot=bot))
+            except Exception as rec_err:
+                logger.error("State recovery reconciliation trigger failed: %s", rec_err, exc_info=True)
 
             async def presence_loop() -> None:
                 await bot.wait_until_ready()
@@ -509,5 +536,29 @@ async def main() -> None:
         await bot.start(settings.DISCORD_BOT_TOKEN)
 
 
+async def _run_with_shutdown() -> None:
+    """執行主流程，並在正常結束或例外時回收觀測佇列與專用執行器。"""
+    try:
+        await main()
+    finally:
+        from core.recovery.manager import get_recovery_manager
+        from core.concurrency import shutdown_executors
+        from handlers.social.observability import shutdown_observability_logs
+
+        try:
+            await get_recovery_manager().shutdown_handler()
+        except Exception:
+            logger.debug("main: 狀態恢復關機快照捕獲失敗", exc_info=True)
+
+        try:
+            shutdown_observability_logs()
+        except Exception:
+            logger.debug("main: 觀測寫入器關閉失敗", exc_info=True)
+        try:
+            shutdown_executors(wait=False)
+        except Exception:
+            logger.debug("main: 專用執行器關閉失敗", exc_info=True)
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(_run_with_shutdown())

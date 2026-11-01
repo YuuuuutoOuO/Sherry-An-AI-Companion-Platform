@@ -212,7 +212,7 @@ class HelpSelect(discord.ui.Select):
             embed.add_field(
                 name="📺 直播螢幕播放 (Livestream)",
                 value=(
-                    "• `/play_video action:<file/youtube> video_name:<名稱/網址> [episode:<集數>]` — 播放本機影片或 YouTube (支援選單自動補全與連續自動輪播)\n"
+                    "• `/play_video action:<file/youtube/bilibili> video_name:<名稱/網址/BV/清單> [mode:<autoplay/loop/single>] [episode:<集數/P>]` — 播放本機、YouTube 或 Bilibili (支援多模式與播放清單)\n"
                     "• `/stream_stop` — 停止直播影片播放並切換回雪莉待機畫面\n"
                     "• `/stream_status` — 查看直播螢幕目前播放狀態與本機可用影片庫"
                 ),

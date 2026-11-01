@@ -14,8 +14,14 @@ business logic.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import logging
 import os
+import re
+import secrets
+from enum import IntEnum
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +83,7 @@ ROAST_RULES_PATH: Path = DATA_DIR / "roast_rules.json"
 # ---------------------------------------------------------------------------
 RUNTIME_LOG_PATH: Path = DATA_DIR / "runtime_log.jsonl"   # 所有互動事件完整快照
 ERROR_LOG_PATH: Path = DATA_DIR / "error_log.jsonl"       # 只記録異常與降級事件
+OBSERVABILITY_PII_REDACTION: bool = os.getenv("OBSERVABILITY_PII_REDACTION", "true").lower() in ("true", "1", "yes")
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +143,7 @@ NSFW_ALLOWED_CHANNEL_IDS: list[int] = _parse_int_list_env("NSFW_ALLOWED_CHANNEL_
 #   "deepseek:"  → DeepSeek                (OpenAI 相容, 需 API Key)
 #   "gemini:"    → Google Gemini           (OpenAI 相容, 需 API Key)
 #   "openrouter:" → OpenRouter              (OpenAI 相容, 需 API Key)
+#   "groq:"      → Groq Cloud              (OpenAI 相容, 需 API Key)
 #   "claude:"    → Anthropic Claude        (Anthropic Messages API, 需 API Key)
 # 若無前綴，預設為 "freetoken:"
 # ---------------------------------------------------------------------------
@@ -153,6 +161,7 @@ DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 CLAUDE_API_KEY: str = os.getenv("CLAUDE_API_KEY", "")
 OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
 
 # --- 雲端 Base URLs（可自訂，預設為官方端點）---
 OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
@@ -160,39 +169,61 @@ DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.co
 GEMINI_BASE_URL: str = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
 CLAUDE_BASE_URL: str = os.getenv("CLAUDE_BASE_URL", "https://api.anthropic.com/v1")
 OPENROUTER_BASE_URL: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+GROQ_BASE_URL: str = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 
 # --- 預設模型定義 ---
-LLM_MODEL_NAME: str = os.getenv("LLM_MODEL_NAME", "mistralai/Mixtral-8x7B-Instruct-v0.1")
+# 全專案僅保留 5 個語言模型槽位，其餘用途一律沿用 PRIMARY_MODEL 或 LIGHT_MODEL。
+# 新增用途前請先思考：真的需要獨立模型嗎？過細的槽位會讓設定難以維護、
+# 測試難以覆蓋，fallback 鏈也會跟著膨脹。
+#
+#   PRIMARY_MODEL        主力：日常對話、ReAct Agent、記憶萃取、深夜整合、
+#                        道德過濾、對話濃縮（全部沿用主力，不再另設槽位）
+#   LIGHT_MODEL          輕量：快速回覆、插話評分、影片篩選、氛圍萃取、
+#                        並行任務規劃（短輸出、低延遲、可容忍較弱推理）
+#   VISION_MODEL         多模態看圖（留空 = 沿用 PRIMARY_MODEL 原生看圖）
+#   CLOUD_SEARCH_MODEL   外部搜尋／深度研究（需要網路工具，與日常對話分開）
+#   SELF_MONITORING_MODEL 自我稽核（獨立的可靠性守門員，不與其他用途共用）
 
 # 主力模型：平衡智商與生成速度，適合日常深度對話與邏輯推演
-PRIMARY_MODEL: str = os.getenv("PRIMARY_MODEL", f"freetoken:{LLM_MODEL_NAME}")
+PRIMARY_MODEL: str = os.getenv("PRIMARY_MODEL", "freetoken:mistralai/Mixtral-8x7B-Instruct-v0.1")
 
-# 無道德限制模型：專門處理「橘雪莉」缺乏倫理觀的瘋狂人設
-NOMORAL_MODEL: str = os.getenv("NOMORAL_MODEL", PRIMARY_MODEL)
-
-# 快速回覆模型：要求極速但需要足夠的基礎智商
-QUICK_MODEL: str = os.getenv("QUICK_MODEL", "ollama:krith/mistral-nemo-instruct-2407-abliterated:IQ4_XS")
-
-# 輕量分類模型：用於「插話評分」與「YouTube 影片篩選」
-CLASSIFIER_MODEL: str = os.getenv("CLASSIFIER_MODEL", "ollama:qwen2.5:3b")
-
-# 氛圍話題萃取模型。
-VIBE_MODEL: str = os.getenv("VIBE_MODEL", "ollama:llama3.2:3b")
+# 輕量模型：要求極速但需要足夠的基礎智商，處理短輸出小任務
+LIGHT_MODEL: str = os.getenv("LIGHT_MODEL", "ollama:qwen2.5:3b")
 
 # 視覺辨識模型 (多模態圖片對話模型)。
 # 當訊息夾帶圖片時，系統直接由該模型同時執行看圖理解與角色性格回覆（單階段直出），避免重複調用主力模型導致顯卡負擔過重。
 # 若留空 (預設)，代表啟用主力模型原生看圖，直接由 PRIMARY_MODEL 讀圖回覆。
 _raw_vision_model: str = os.getenv("VISION_MODEL", "").strip()
-VISION_MODEL: str = "" if (_raw_vision_model.endswith(":") or _raw_vision_model in ("freetoken", "ollama", "lms", "vllm", "openai", "deepseek", "gemini", "openrouter", "claude")) else _raw_vision_model
+VISION_MODEL: str = "" if (_raw_vision_model.endswith(":") or _raw_vision_model in ("freetoken", "ollama", "lms", "vllm", "openai", "deepseek", "gemini", "openrouter", "claude", "groq")) else _raw_vision_model
 
 # Gemini 雲端模型輸出 Token 保障（Gemini 2.0/2.5 Flash 具備思考推理機制，需足夠 Token 空間避免被截斷）
 GEMINI_MIN_OUTPUT_TOKENS: int = int(os.getenv("GEMINI_MIN_OUTPUT_TOKENS", "4096"))
 
-# Gemini 備援模型清單（當首選 Gemini 模型遭遇 503/429 尖峰負載時自動依序嘗試）
-GEMINI_FALLBACK_MODELS: list[str] = [
-    "gemini:gemini-2.5-flash",
-    "gemini:gemini-2.0-flash",
-    "gemini:gemini-1.5-flash",
+# Gemini 思考強度（thinking_level，對應 OpenAI 相容端點的 reasoning_effort）。
+# 官方文件：max_output_tokens 是包含思考 Token 的硬性總上限，且不會改變思考預算配置。
+# 預設沿用模型的 medium，而非降為 low。
+#
+# 背景：Gemini 3.x Flash 預設 thinking_level=medium（8192 思考 Token）。OpenAI 相容端點的
+# max_tokens 是「思考 + 輸出」的硬性總上限，若額度不足會回傳「空輸出」（HTTP 200、無內容）。
+# 先前為解決空輸出而把思考強度調降為 low，等於用「牺牲推論品質」換取不空回應，
+# 導致雪莉的日常對話思考深度變浅、回應變短變平。
+#
+# 現行做法是保留 medium 的思考品質，改由 client.py 依思考預算自動把 max_tokens 拉高
+# （見 _GEMINI_THINKING_BUDGET），因此不需要用低思考量換取額度。
+# 若雲端 token 成本成為負擔，可在此降到 low，額度會自動跟著收縮。
+# 設為空字串可停用，僅沿用模型預設思考強度。
+GEMINI_REASONING_EFFORT: str = os.getenv("GEMINI_REASONING_EFFORT", "medium").strip().lower()
+
+# === 推論失敗備援鏈（Web UI 可設定）===
+# 這是模型槽位之外「失敗後怎麼辦」的單一真相來源。
+# 純地端部署：將 FALLBACK_ENABLED 設為 False，或 FALLBACK_MODELS 留空 → 失敗就明確失敗，不外送。
+# 地端優先雲端救援：填 "ollama:xxx,gemini:gemini-3.5-flash-lite" → 前者失效才後送。
+FALLBACK_ENABLED: bool = os.getenv("FALLBACK_ENABLED", "True").strip().lower() in ("1", "true", "yes", "on")
+
+FALLBACK_MODELS: list[str] = [
+    "gemini:gemini-3.5-flash-lite",
+    "gemini:gemini-3.8-flash",
+    "gemini:gemini-3.6-flash",
 ]
 
 # 雲端搜尋專用模型
@@ -200,8 +231,8 @@ CLOUD_SEARCH_MODEL: str = os.getenv("CLOUD_SEARCH_MODEL", "deepseek:deepseek-v4-
 
 # 自我監控與延遲/品質稽核專用模型 (Self-Monitoring & Auditing Model)
 # 獨立於主力對話與雲端搜尋模型，專門用於背景事故診斷、人設與回答品質審查、死循環攔截與自癒決策。
-# 支援前綴格式，例如 "gemini:gemini-2.0-flash" (推薦：速度極快、成本極低)、"claude:claude-3-5-haiku-20241022" 等
-SELF_MONITORING_MODEL: str = os.getenv("SELF_MONITORING_MODEL", "gemini:gemini-3.6-flash")
+# 支援前綴格式，例如 "gemini:gemini-3.5-flash-lite" (推薦：速度極快、成本極低)、"claude:claude-3-5-haiku-20241022" 等
+SELF_MONITORING_MODEL: str = os.getenv("SELF_MONITORING_MODEL", "gemini:gemini-3.5-flash-lite")
 
 # 右鍵訊息應用程式是否使用私密回覆 (True: 僅自己可見並帶有「只有您才能看到這個」, False: 公開發布於頻道中)
 CONTEXT_MENU_EPHEMERAL: bool = os.getenv("CONTEXT_MENU_EPHEMERAL", "False").lower() in ("true", "1", "yes")
@@ -225,14 +256,11 @@ AGENT_DISPATCH_MODE: str = os.getenv("AGENT_DISPATCH_MODE", "INTEGRATED").upper(
 # 行為自適應對話抑制開關：若為 True，當發動的工具全為 DIRECT_UI (如點歌/搜圖/畫圖) 且使用者無聊天需求時，動作完成即刻結束，不產生多餘廢話文字
 ACTION_EARLY_TERMINATION_ENABLED: bool = os.getenv("ACTION_EARLY_TERMINATION_ENABLED", "True").lower() in ("true", "1", "yes")
 
-# 並行調度模型（專門用於單次推論任務拆解與對話抑制標記）
-PARALLEL_PLANNER_MODEL: str = os.getenv("PARALLEL_PLANNER_MODEL", CLASSIFIER_MODEL)
+# 並行任務調度（任務拆解模型沿用 LIGHT_MODEL，單次輸出短且需低延遲）
 PARALLEL_MAX_TASKS: int = int(os.getenv("PARALLEL_MAX_TASKS", "8"))
 PARALLEL_STEP_TIMEOUT: float = float(os.getenv("PARALLEL_STEP_TIMEOUT", "120.0"))
 
-# ReAct 多步驟 Agent 推理模型（「思考→行動→觀察」迭代迴圈，保留向下相容）
-# 預設繼承 NOMORAL_MODEL（無道德限制模型），可用 .env 中 REACT_MODEL 覆寫
-REACT_MODEL: str = os.getenv("REACT_MODEL", NOMORAL_MODEL)
+# ReAct 多步驟 Agent 推理（「思考→行動→觀察」迭代迴圈，推理模型沿用 PRIMARY_MODEL）
 
 # ReAct 迴圈控制參數
 REACT_MAX_STEPS: int = int(os.getenv("REACT_MAX_STEPS", "5"))                    # 最多步數（日常聊天 1 步即收斂）
@@ -241,7 +269,7 @@ REACT_MAX_OBSERVATION_LENGTH: int = int(os.getenv("REACT_MAX_OBSERVATION_LENGTH"
 REACT_MAX_TRANSCRIPT_CHARS: int = int(os.getenv("REACT_MAX_TRANSCRIPT_CHARS", "6000"))      # 總對話历史截斷防爆上限
 
 LLM_MAX_CONTEXT_TOKENS: int = int(os.getenv("LLM_MAX_CONTEXT_TOKENS", "8192"))
-LLM_MAX_OUTPUT_TOKENS: int = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "1024"))
+LLM_MAX_OUTPUT_TOKENS: int = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "2048"))
 
 # GPU 吞吐量最佳化：Prompt 批次處理量（n_batch）
 # 預設 512 過於保守，A4000 可大幅提升至 2048–4096 以加速 Prefill（降低首字延遲）
@@ -259,12 +287,64 @@ LLM_FREQUENCY_PENALTY: float = float(os.getenv("LLM_FREQUENCY_PENALTY", "0.6"))
 # ---------------------------------------------------------------------------
 # Priority Queue Weights
 # ---------------------------------------------------------------------------
-PRIORITY_TAG_RESPONSE: int = int(os.getenv("PRIORITY_TAG_RESPONSE", "1"))       # 被 @Tag → 最高優先
-PRIORITY_DRAW: int = int(os.getenv("PRIORITY_DRAW", "5"))               # 圖片生成（使用者主動指令 → 高於背景自動任務）
-PRIORITY_INTERJECT: int = int(os.getenv("PRIORITY_INTERJECT", "10"))         # 主動插話（高於背景，低於 Tag 回應）
-PRIORITY_HEARTBEAT: int = int(os.getenv("PRIORITY_HEARTBEAT", "20"))         # 心跳排程任務（主動發言）
-PRIORITY_VIBE_UPDATE: int = int(os.getenv("PRIORITY_VIBE_UPDATE", "50"))       # 背景氛圍萃取
-PRIORITY_WEB_EXPLORER: int = int(os.getenv("PRIORITY_WEB_EXPLORER", "99"))      # 閒置爬蟲 → 最低優先
+class Priority(IntEnum):
+    """推論任務的語意優先序（數值越小越優先）。
+
+    以語意層級取代散落各處的魔術數字；實際數值仍由下方 ``PRIORITY_*``
+    設定（含 ``config_override.json``）決定，``priority_for()`` 負責映射。
+    """
+
+    INTERACTIVE = 1       # 使用者可感知的即時回覆（@Tag、天氣解析等）
+    DRAW = 5              # 使用者主動圖片生成
+    INTERJECT = 10        # 主動插話
+    TOOL_BACKGROUND = 20  # 工具輔助／背景摘要
+    MAINTENANCE = 50      # 氛圍萃取、記憶整理
+    IDLE = 99             # 閒置爬蟲等最低優先
+
+
+def _parse_priority_env(name: str, fallback: Priority) -> int:
+    val = os.getenv(name)
+    if val is None or not str(val).strip():
+        return int(fallback.value)
+    val = str(val).strip()
+    if val.startswith("Priority."):
+        val = val[len("Priority."):]
+    try:
+        return int(val)
+    except ValueError:
+        try:
+            return int(Priority[val].value)
+        except KeyError:
+            return int(fallback.value)
+
+
+PRIORITY_TAG_RESPONSE: int = _parse_priority_env("PRIORITY_TAG_RESPONSE", Priority.INTERACTIVE)       # 被 @Tag → 最高優先
+PRIORITY_DRAW: int = _parse_priority_env("PRIORITY_DRAW", Priority.DRAW)               # 圖片生成（使用者主動指令 → 高於背景自動任務）
+PRIORITY_INTERJECT: int = _parse_priority_env("PRIORITY_INTERJECT", Priority.INTERJECT)         # 主動插話（高於背景，低於 Tag 回應）
+PRIORITY_VISION_REACTION: int = _parse_priority_env("PRIORITY_VISION_REACTION", Priority.IDLE)       # 主動視覺搭話（低於插話，閒置時執行）
+PRIORITY_HEARTBEAT: int = _parse_priority_env("PRIORITY_HEARTBEAT", Priority.TOOL_BACKGROUND)         # 心跳排程任務（主動發言）
+PRIORITY_VIBE_UPDATE: int = _parse_priority_env("PRIORITY_VIBE_UPDATE", Priority.MAINTENANCE)       # 背景氛圍萃取
+PRIORITY_WEB_EXPLORER: int = _parse_priority_env("PRIORITY_WEB_EXPLORER", Priority.IDLE)      # 閒置爬蟲 → 最低優先
+
+
+def priority_for(tier: Priority) -> int:
+    """將語意優先序映射為當前設定值（支援執行期覆寫後的動態讀取）。
+
+    Args:
+        tier: 語意優先序層級。
+
+    Returns:
+        int: 對應的 ``PRIORITY_*`` 設定值；未知層級回退列舉原始數值。
+    """
+    mapping = {
+        Priority.INTERACTIVE: PRIORITY_TAG_RESPONSE,
+        Priority.DRAW: PRIORITY_DRAW,
+        Priority.INTERJECT: PRIORITY_INTERJECT,
+        Priority.TOOL_BACKGROUND: PRIORITY_HEARTBEAT,
+        Priority.MAINTENANCE: PRIORITY_VIBE_UPDATE,
+        Priority.IDLE: PRIORITY_WEB_EXPLORER,
+    }
+    return int(mapping.get(tier, int(tier)))
 
 # ---------------------------------------------------------------------------
 # Context / Memory
@@ -274,8 +354,6 @@ CONTEXT_TIME_GAP_SECONDS: int = int(os.getenv("CONTEXT_TIME_GAP_SECONDS", "900")
 
 # 對話上下文濃縮：當 chat history 字數超過此值才觸發濃縮（避免密集長對話撐爆 prefill）
 CONTEXT_COMPRESS_THRESHOLD: int = int(os.getenv("CONTEXT_COMPRESS_THRESHOLD", "2000"))
-# 濃縮採用的模型前端代號（預設用主力模型）
-CONTEXT_COMPRESS_MODEL: str = os.getenv("CONTEXT_COMPRESS_MODEL", "")
 # 濃縮摘要結果的 60 秒記憶體快取，避免同頻道短時間重複濃縮
 CONTEXT_COMPRESS_CACHE_TTL: float = float(os.getenv("CONTEXT_COMPRESS_CACHE_TTL", "60.0"))
 # 硬性封頂：歷史區塊的 token 估算上限。即使濃縮失敗／不可用，
@@ -304,8 +382,31 @@ MEMORY_PERMANENT_FACT_THRESHOLD: int = int(os.getenv("MEMORY_PERMANENT_FACT_THRE
 # memory-sync 在 RP 進行中偷取 GPU 的次數（萃取本身是完整 LLM 呼叫）。
 MEM_DIGEST_THRESHOLD: int = int(os.getenv("MEM_DIGEST_THRESHOLD", "15"))
 
-# 即時萃取使用的模型（建議與 PRIMARY_MODEL 一致，確保萃取品質）
-MEMORY_EXTRACT_MODEL: str = os.getenv("MEMORY_EXTRACT_MODEL", PRIMARY_MODEL)
+# 即時記憶萃取直接使用 PRIMARY_MODEL，確保萃取品質一致
+
+# R14：長期記憶檢索（FTS5＋權重骨架）。權重會自動正規化，總和不必為 1。
+MEMORY_RETRIEVAL_W_BM25: float = float(os.getenv("MEMORY_RETRIEVAL_W_BM25", "0.40"))
+# R15：embedding cosine 相似度與關係親和度（0–1）。
+MEMORY_RETRIEVAL_W_COS_SIM: float = float(os.getenv("MEMORY_RETRIEVAL_W_COS_SIM", "0.25"))
+MEMORY_RETRIEVAL_W_RECENCY: float = float(os.getenv("MEMORY_RETRIEVAL_W_RECENCY", "0.10"))
+MEMORY_RETRIEVAL_W_AFFINITY: float = float(os.getenv("MEMORY_RETRIEVAL_W_AFFINITY", "0.10"))
+MEMORY_RETRIEVAL_W_IMPORTANCE: float = float(os.getenv("MEMORY_RETRIEVAL_W_IMPORTANCE", "0.10"))
+MEMORY_RETRIEVAL_W_SOURCE_PRIORITY: float = float(os.getenv("MEMORY_RETRIEVAL_W_SOURCE_PRIORITY", "0.05"))
+# 時效分數半衰期（天）與單次查詢最多解析的關鍵字數。
+MEMORY_RETRIEVAL_RECENCY_HALFLIFE_DAYS: float = float(os.getenv("MEMORY_RETRIEVAL_RECENCY_HALFLIFE_DAYS", "30.0"))
+MEMORY_RETRIEVAL_MAX_TERMS: int = int(os.getenv("MEMORY_RETRIEVAL_MAX_TERMS", "8"))
+
+# R15：Ollama embeddings 向量化管線（未安裝／離線時自動降級純關鍵字）。
+MEMORY_EMBEDDING_ENABLED: bool = os.getenv("MEMORY_EMBEDDING_ENABLED", "True").lower() in ("true", "1", "yes", "on")
+MEMORY_EMBEDDING_MODEL: str = os.getenv("MEMORY_EMBEDDING_MODEL", "nomic-embed-text")
+MEMORY_EMBEDDING_TIMEOUT: float = float(os.getenv("MEMORY_EMBEDDING_TIMEOUT", "8.0"))
+MEMORY_EMBEDDING_MAX_RETRIES: int = int(os.getenv("MEMORY_EMBEDDING_MAX_RETRIES", "2"))
+MEMORY_EMBEDDING_MAX_CONCURRENCY: int = int(os.getenv("MEMORY_EMBEDDING_MAX_CONCURRENCY", "2"))
+MEMORY_EMBEDDING_BATCH_SIZE: int = int(os.getenv("MEMORY_EMBEDDING_BATCH_SIZE", "8"))
+MEMORY_EMBEDDING_MIN_SIMILARITY: float = float(os.getenv("MEMORY_EMBEDDING_MIN_SIMILARITY", "0.25"))
+MEMORY_EMBEDDING_QUERY_CACHE_SIZE: int = int(os.getenv("MEMORY_EMBEDDING_QUERY_CACHE_SIZE", "128"))
+# Prompt 動態尾段最多注入幾條「依當前話題檢索」的記憶。
+MEMORY_RETRIEVAL_TAIL_FACTS: int = int(os.getenv("MEMORY_RETRIEVAL_TAIL_FACTS", "4"))
 
 VIBE_UPDATE_MESSAGE_THRESHOLD: int = int(os.getenv("VIBE_UPDATE_MESSAGE_THRESHOLD", "50"))
 VIBE_TOP_N_TOPICS: int = int(os.getenv("VIBE_TOP_N_TOPICS", "3"))
@@ -434,6 +535,7 @@ VOICE_STT_COMPUTE_TYPE: str = os.getenv("VOICE_STT_COMPUTE_TYPE", "float32")
 VOICE_STT_LANGUAGE: str = os.getenv("VOICE_STT_LANGUAGE", "zh")
 VOICE_TTS_LANGUAGE: str = os.getenv("VOICE_TTS_LANGUAGE", "zh-cn")
 VOICE_TTS_SPEAKER_WAV: str = os.getenv("VOICE_TTS_SPEAKER_WAV", str(BASE_DIR / "file" / "shiry_voice_sample.wav"))
+VOICE_TTS_DEVICE: str = os.getenv("VOICE_TTS_DEVICE", "cpu")
 VOICE_VAD_THRESHOLD: float = float(os.getenv("VOICE_VAD_THRESHOLD", "0.5"))
 VOICE_VAD_MIN_SILENCE_MS: int = int(os.getenv("VOICE_VAD_MIN_SILENCE_MS", "500"))
 VOICE_SILENCE_TIMEOUT_SECONDS: float = float(os.getenv("VOICE_SILENCE_TIMEOUT_SECONDS", "1.5"))
@@ -502,7 +604,6 @@ LIVE_THINKING_EDIT: bool = os.getenv("LIVE_THINKING_EDIT", "True").lower() in ("
 CHAT_LOG_DIR: Path = DATA_DIR / "chat_logs"          # 每日聊天記錄 JSONL 目錄
 NIGHTLY_DIGEST_HOUR: int = int(os.getenv("NIGHTLY_DIGEST_HOUR", "4"))                          # 深夜整合觸發小時（台灣時間 UTC+8）
 NIGHTLY_DIGEST_MINUTE: int = int(os.getenv("NIGHTLY_DIGEST_MINUTE", "30"))                        # 深夜整合觸發分鐘（台灣時間 UTC+8，預設 04:30）
-NIGHTLY_DIGEST_MODEL: str = os.getenv("NIGHTLY_DIGEST_MODEL", PRIMARY_MODEL)             # 深夜整合使用較強模型
 NIGHTLY_MAX_MSGS_PER_USER: int = int(os.getenv("NIGHTLY_MAX_MSGS_PER_USER", "200"))                  # 每位使用者最多送入 LLM 的訊息數
 
 # ---------------------------------------------------------------------------
@@ -511,6 +612,7 @@ NIGHTLY_MAX_MSGS_PER_USER: int = int(os.getenv("NIGHTLY_MAX_MSGS_PER_USER", "200
 WEB_UI_HOST: str = os.getenv("WEB_UI_HOST", "127.0.0.1")
 WEB_UI_PORT: int = int(os.getenv("WEB_UI_PORT", "8080"))
 WEB_UI_HTTPS: bool = True
+WEB_UI_LIVE2D_ENABLED: bool = os.getenv("WEB_UI_LIVE2D_ENABLED", "True").lower() in ("true", "1", "yes", "on")
 WEB_UI_SSL_CERT: str | None = os.getenv("WEB_UI_SSL_CERT", None)
 WEB_UI_SSL_KEY: str | None = os.getenv("WEB_UI_SSL_KEY", None)
 WEB_UI_RADMIN_IP: str | None = os.getenv("WEB_UI_RADMIN_IP", "26.108.83.196")  # Radmin VPN IP for SSL SAN
@@ -561,6 +663,8 @@ WORLD_ARCHIVE_KEEP_WEEKS: int = int(os.getenv("WORLD_ARCHIVE_KEEP_WEEKS", "52"))
 NIGHTLY_WORLD_SAMPLE_COUNT: int = int(os.getenv("NIGHTLY_WORLD_SAMPLE_COUNT", "200"))
 BOT_LOG_PATH: Path = DATA_DIR / "bot.log"
 WEB_UI_LOG_PATH: Path = DATA_DIR / "web_ui.log"
+# 觀測寫入佇列上限：暴量時有界丟棄並計數，避免記憶體無上限成長。
+OBSERVABILITY_WRITE_QUEUE_MAXSIZE: int = int(os.getenv("OBSERVABILITY_WRITE_QUEUE_MAXSIZE", "10000"))
 
 
 # ---------------------------------------------------------------------------
@@ -573,6 +677,17 @@ NIGHTLY_MIN_MSGS_THRESHOLD: int = int(os.getenv("NIGHTLY_MIN_MSGS_THRESHOLD", "5
 # ---------------------------------------------------------------------------
 BOT_BRAIN_MAX_RETRIES: int = int(os.getenv("BOT_BRAIN_MAX_RETRIES", "3"))
 BOT_BRAIN_RETRY_DELAY: float = float(os.getenv("BOT_BRAIN_RETRY_DELAY", "2.0"))
+# 逾時重試上限獨立於一般重試（避免本機 GPU 被反覆疊加佔用）；
+# 退避上限避免長時間 sleep 佔住 worker。
+BOT_BRAIN_MAX_TIMEOUT_RETRIES: int = int(os.getenv("BOT_BRAIN_MAX_TIMEOUT_RETRIES", "1"))
+BOT_BRAIN_RETRY_MAX_DELAY: float = float(os.getenv("BOT_BRAIN_RETRY_MAX_DELAY", "30.0"))
+# R10 任務治理：雲端雙層併發閘門 + Worker 韌性。
+# 全域上限避免一次打出過多雲端請求；per-user 上限避免單一使用者壟斷配額。
+BOT_BRAIN_CLOUD_MAX_CONCURRENCY: int = int(os.getenv("BOT_BRAIN_CLOUD_MAX_CONCURRENCY", "4"))
+BOT_BRAIN_CLOUD_PER_USER_CONCURRENCY: int = int(os.getenv("BOT_BRAIN_CLOUD_PER_USER_CONCURRENCY", "1"))
+# Worker 連續失敗上限（達到後標記降級）與指數退避上限（秒）。
+BOT_BRAIN_WORKER_MAX_FAILURES: int = int(os.getenv("BOT_BRAIN_WORKER_MAX_FAILURES", "5"))
+BOT_BRAIN_WORKER_BACKOFF_CAP: float = float(os.getenv("BOT_BRAIN_WORKER_BACKOFF_CAP", "60.0"))
 
 # ---------------------------------------------------------------------------
 # Heartbeat Active System
@@ -581,6 +696,8 @@ HEARTBEAT_CHECK_INTERVAL_MINUTES: int = int(os.getenv("HEARTBEAT_CHECK_INTERVAL_
 HEARTBEAT_CONDITION_START_HOUR: int = int(os.getenv("HEARTBEAT_CONDITION_START_HOUR", "9"))
 HEARTBEAT_CONDITION_END_HOUR: int = int(os.getenv("HEARTBEAT_CONDITION_END_HOUR", "22"))
 HEARTBEAT_CONDITION_MIN_GAP_SECONDS: int = int(os.getenv("HEARTBEAT_CONDITION_MIN_GAP_SECONDS", "14400"))
+# 每輪心跳掃描最多處理的任務數；避免 heartbeat.md 過長時單輪卡住或一次灌爆佇列。
+HEARTBEAT_MAX_TASKS_PER_ROUND: int = int(os.getenv("HEARTBEAT_MAX_TASKS_PER_ROUND", "10"))
 
 # ---------------------------------------------------------------------------
 # External APIs, Search & User-Agent
@@ -607,6 +724,8 @@ SAFEBOORU_HTTP_TIMEOUT: int = int(os.getenv("SAFEBOORU_HTTP_TIMEOUT", "12"))
 VISION_ANALYSIS_TIMEOUT: int = int(os.getenv("VISION_ANALYSIS_TIMEOUT", "120"))
 STOCK_EXTRACT_TIMEOUT: float = float(os.getenv("STOCK_EXTRACT_TIMEOUT", "10.0"))
 STOCK_REPLY_TIMEOUT: float = float(os.getenv("STOCK_REPLY_TIMEOUT", "90.0"))
+# 全域 yfinance／matplotlib 抓取併發上限；避免多個頻道同時查詢時塞滿執行器。
+STOCK_MAX_CONCURRENT_FETCHES: int = int(os.getenv("STOCK_MAX_CONCURRENT_FETCHES", "3"))
 SCHEDULE_PARSE_TIMEOUT: float = float(os.getenv("SCHEDULE_PARSE_TIMEOUT", "20.0"))
 DRAW_RAW_TIMEOUT: float = float(os.getenv("DRAW_RAW_TIMEOUT", "30.0"))
 DRAW_EXPAND_TIMEOUT: float = float(os.getenv("DRAW_EXPAND_TIMEOUT", "10.0"))
@@ -625,6 +744,85 @@ ROAST_REPLY_TIMEOUT: float = float(os.getenv("ROAST_REPLY_TIMEOUT", "30.0"))
 # ---------------------------------------------------------------------------
 SPARK_DEFAULT_COOLDOWN_SECONDS: int = int(os.getenv("SPARK_DEFAULT_COOLDOWN_SECONDS", "3600"))
 SPARK_CHECK_INTERVAL_MINUTES: int = int(os.getenv("SPARK_CHECK_INTERVAL_MINUTES", "1"))
+SPARK_MAX_TRIGGERS_PER_USER: int = int(os.getenv("SPARK_MAX_TRIGGERS_PER_USER", "10"))
+SPARK_MAX_PUSHES_PER_DAY: int = int(os.getenv("SPARK_MAX_PUSHES_PER_DAY", "30"))
+SPARK_MAX_CONCURRENT_ACTIONS: int = int(os.getenv("SPARK_MAX_CONCURRENT_ACTIONS", "4"))
+SPARK_MAX_CONCURRENT_CHECKS: int = int(os.getenv("SPARK_MAX_CONCURRENT_CHECKS", "8"))
+SPARK_ACTION_TIMEOUT_SECONDS: float = float(os.getenv("SPARK_ACTION_TIMEOUT_SECONDS", "300.0"))
+# 單一 checker 的網路／外部 API 上限；避免單一卡死拖垮整輪巡檢。
+SPARK_CHECKER_TIMEOUT_SECONDS: float = float(os.getenv("SPARK_CHECKER_TIMEOUT_SECONDS", "45.0"))
+# 單輪巡檢的整體 deadline；逾時即取消本輪剩餘檢查並記錄摘要。
+SPARK_CHECK_CYCLE_TIMEOUT_SECONDS: float = float(os.getenv("SPARK_CHECK_CYCLE_TIMEOUT_SECONDS", "60.0"))
+# daily_time 錯過目標分鐘後的補跑窗（分鐘）；0 表示關閉補跑。
+SPARK_DAILY_CATCHUP_MINUTES: int = int(os.getenv("SPARK_DAILY_CATCHUP_MINUTES", "120"))
+# R17：多實例 leader 租約（DB 租約；只有 leader 執行巡檢與推播）。
+SPARK_LEADER_LEASE_ENABLED: bool = os.getenv("SPARK_LEADER_LEASE_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+SPARK_LEADER_LEASE_TTL_SECONDS: float = float(os.getenv("SPARK_LEADER_LEASE_TTL_SECONDS", "90.0"))
+SPARK_LEADER_HEARTBEAT_SECONDS: float = float(os.getenv("SPARK_LEADER_HEARTBEAT_SECONDS", "30.0"))
+# R19：主動關懷引擎（預設 opt-out；每人每週 2 條、全域每日 20 條）。
+CARE_DB_PATH: Path = Path(os.getenv("SHERRY_CARE_DB", str(DATA_DIR / "care.db")))
+CARE_WEEKLY_LIMIT_PER_USER: int = int(os.getenv("CARE_WEEKLY_LIMIT_PER_USER", "2"))
+CARE_DAILY_LIMIT_GLOBAL: int = int(os.getenv("CARE_DAILY_LIMIT_GLOBAL", "20"))
+CARE_MIN_AFFINITY: float = float(os.getenv("CARE_MIN_AFFINITY", "60.0"))
+CARE_INACTIVE_DAYS: float = float(os.getenv("CARE_INACTIVE_DAYS", "14.0"))
+CARE_ADAPTIVE_BUDGET_ENABLED: bool = os.getenv("CARE_ADAPTIVE_BUDGET_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+CARE_FEEDBACK_WINDOW_DAYS: float = float(os.getenv("CARE_FEEDBACK_WINDOW_DAYS", "30"))
+CARE_MIN_FEEDBACK_SAMPLES: int = int(os.getenv("CARE_MIN_FEEDBACK_SAMPLES", "3"))
+CARE_SILENCE_DOWNGRADE_THRESHOLD: float = float(os.getenv("CARE_SILENCE_DOWNGRADE_THRESHOLD", "0.6"))
+CARE_SILENCE_STOP_THRESHOLD: float = float(os.getenv("CARE_SILENCE_STOP_THRESHOLD", "0.85"))
+CARE_SILENCE_SETTLE_HOURS: float = float(os.getenv("CARE_SILENCE_SETTLE_HOURS", "48"))
+# 雪莉專屬自我記憶與網活仔衝浪設定
+SELF_MEMORY_DB_PATH: Path = Path(os.getenv("SHERRY_SELF_MEMORY_DB", str(DATA_DIR / "self_memory.db")))
+# 行為記憶（Self Action Memory）：讓雪莉記得「自己剛剛做過什麼」（播放、搜尋、繪圖…）。
+# 平常閒聊不注入（0 Token），僅在使用者主動詢問「你剛剛／你記得」時檢索 3~5 筆。
+SELF_ACTION_MEMORY_ENABLED: bool = os.getenv("SELF_ACTION_MEMORY_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+SELF_ACTION_RETENTION_DAYS: int = int(os.getenv("SELF_ACTION_RETENTION_DAYS", "14"))
+SELF_ACTION_SNIPPET_LIMIT: int = int(os.getenv("SELF_ACTION_SNIPPET_LIMIT", "5"))
+SELF_ACTION_SNIPPET_MAX_CHARS: int = int(os.getenv("SELF_ACTION_SNIPPET_MAX_CHARS", "400"))
+SELF_ACTION_LIVE_STATE_ENABLED: bool = os.getenv("SELF_ACTION_LIVE_STATE_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+CARE_SURFER_PORT: int = int(os.getenv("CARE_SURFER_PORT", "8765"))
+CARE_SURFER_ENABLED: bool = os.getenv("CARE_SURFER_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+CARE_SURFER_CHANNEL_ID: int = int(os.getenv("CARE_SURFER_CHANNEL_ID", "0"))
+CARE_SURFER_INTERVAL_MINUTES: int = int(os.getenv("CARE_SURFER_INTERVAL_MINUTES", "120"))
+# === 統一互動（One Brain, Two Lanes） ===
+# 預設關閉 gateway，避免未經 canary 就改變 @雪莉 路由；開啟後由 TurnGateway 接管 sandbox ambient + mention。
+INTERACTION_GATEWAY_ENABLED: bool = os.getenv("INTERACTION_GATEWAY_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+INTERACTION_MENTION_SCOPE: str = os.getenv("INTERACTION_MENTION_SCOPE", "sandbox").strip().lower()
+INTERACTION_NAME_MENTION_ENABLED: bool = os.getenv("INTERACTION_NAME_MENTION_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+INTERACTION_PREEMPT_AMBIENT: bool = os.getenv("INTERACTION_PREEMPT_AMBIENT", "1").strip().lower() in {"1", "true", "yes", "on"}
+# Cyber v2：off / shadow / live。預設 shadow 只觀察，不發送。
+CYBER_ENGINE_MODE: str = os.getenv("CYBER_ENGINE_MODE", "shadow").strip().lower()
+CYBER_V2_OWNS_MENTIONS: bool = os.getenv("CYBER_V2_OWNS_MENTIONS", "0").strip().lower() in {"1", "true", "yes", "on"}
+CYBER_V2_TOOLS_ENABLED: bool = os.getenv("CYBER_V2_TOOLS_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+# 記憶共用：由 MemoryContextService 統一組裝；persona 不再重複注入自憶。
+MEMORY_CONTEXT_SERVICE_ENABLED: bool = os.getenv("MEMORY_CONTEXT_SERVICE_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+MEMORY_CONTEXT_OWNS_PERSONA_MEMORY: bool = os.getenv("MEMORY_CONTEXT_OWNS_PERSONA_MEMORY", "1").strip().lower() in {"1", "true", "yes", "on"}
+MEMORY_OBSERVATORY_ENABLED: bool = os.getenv("MEMORY_OBSERVATORY_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+# === 賽博群友 Social Core：沙盒群像（預設全部關閉） ===
+SOCIAL_SANDBOX_ENABLED: bool = os.getenv("SOCIAL_SANDBOX_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+SOCIAL_SANDBOX_COMPAT_MODE: bool = os.getenv("SOCIAL_SANDBOX_COMPAT_MODE", "0").strip().lower() in {"1", "true", "yes", "on"}
+SOCIAL_SANDBOX_MAX_NPCS: int = int(os.getenv("SOCIAL_SANDBOX_MAX_NPCS", "3"))
+SOCIAL_SCENE_MAX_TURNS: int = int(os.getenv("SOCIAL_SCENE_MAX_TURNS", "12"))
+SOCIAL_SCENE_IDLE_SECONDS: int = int(os.getenv("SOCIAL_SCENE_IDLE_SECONDS", "600"))
+SOCIAL_NPC_MAX_CONSECUTIVE: int = int(os.getenv("SOCIAL_NPC_MAX_CONSECUTIVE", "3"))
+SOCIAL_NPC_MAX_PER_ROUND: int = int(os.getenv("SOCIAL_NPC_MAX_PER_ROUND", "2"))
+SOCIAL_NPC_HOURLY_LIMIT: int = int(os.getenv("SOCIAL_NPC_HOURLY_LIMIT", "20"))
+SOCIAL_NPC_DAILY_LIMIT: int = int(os.getenv("SOCIAL_NPC_DAILY_LIMIT", "120"))
+SOCIAL_NPC_MIN_GAP_SECONDS: int = int(os.getenv("SOCIAL_NPC_MIN_GAP_SECONDS", "45"))
+SOCIAL_NPC_DELAY_MIN: float = float(os.getenv("SOCIAL_NPC_DELAY_MIN", "2.0"))
+SOCIAL_NPC_DELAY_MAX: float = float(os.getenv("SOCIAL_NPC_DELAY_MAX", "8.0"))
+SOCIAL_WEBHOOK_AVATAR_MAX_BYTES: int = int(os.getenv("SOCIAL_WEBHOOK_AVATAR_MAX_BYTES", "262144"))
+EMOTION_ENABLED: bool = os.getenv("EMOTION_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+EMOTION_HALF_LIFE_HOURS: float = float(os.getenv("EMOTION_HALF_LIFE_HOURS", "4.0"))
+PERSONA_GUARD_ENABLED: bool = os.getenv("PERSONA_GUARD_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+PERSONA_DRIFT_EVAL_PATH: Path = DATA_DIR / "eval" / "persona_drift_cases.jsonl"
+VISION_REACTION_ENABLED: bool = os.getenv("VISION_REACTION_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+VISION_REACTION_COOLDOWN_SECONDS: float = float(os.getenv("VISION_REACTION_COOLDOWN_SECONDS", "60.0"))
+VISION_REACTION_DISABLED_CHANNELS: list[int] = _parse_int_list_env(
+    "VISION_REACTION_DISABLED_CHANNELS", []
+)
+VISION_MAX_IMAGES: int = int(os.getenv("VISION_MAX_IMAGES", "3"))
+VISION_MAX_FILE_BYTES: int = int(os.getenv("VISION_MAX_FILE_BYTES", str(8 * 1024 * 1024)))
 DEEP_SEARCH_DEFAULT_ROUNDS: int = int(os.getenv("DEEP_SEARCH_DEFAULT_ROUNDS", "4"))
 DEEP_SEARCH_MIN_ROUNDS: int = int(os.getenv("DEEP_SEARCH_MIN_ROUNDS", "2"))
 DEEP_SEARCH_MAX_ROUNDS: int = int(os.getenv("DEEP_SEARCH_MAX_ROUNDS", "8"))
@@ -639,6 +837,10 @@ PAINTER_MAX_PAINTING_TIMEOUT_SEC: float = float(os.getenv("PAINTER_MAX_PAINTING_
 STOCK_TRADER_INITIAL_CAPITAL_USD: float = float(os.getenv("STOCK_TRADER_INITIAL_CAPITAL_USD", "10000.0"))
 STOCK_TRADER_FEE_RATE: float = float(os.getenv("STOCK_TRADER_FEE_RATE", "0.001"))
 STOCK_TRADER_MIN_SHARES: float = float(os.getenv("STOCK_TRADER_MIN_SHARES", "0.01"))
+
+# 系統重啟後工作自癒與狀態接續總開關（預設 True）
+STATE_RECOVERY_ENABLED: bool = os.getenv("STATE_RECOVERY_ENABLED", "True").strip().lower() in ("1", "true", "yes", "on")
+STATE_RECOVERY_DB_PATH: Path = DATA_DIR / "sherry_recovery.db"
 
 
 # ---------------------------------------------------------------------------
@@ -678,7 +880,7 @@ if CONFIG_OVERRIDE_PATH.exists():
                         if not Path(v).exists():
                             logger.warning("config_override 中 %s 的路徑不存在 (%s)，已自動回退為預設專案路徑", k, v)
                             continue
-                    if isinstance(v, str) and (v.strip().endswith(":") or v.strip() in ("ollama", "lms", "vllm", "openai", "deepseek", "gemini", "openrouter", "claude")):
+                    if isinstance(v, str) and (v.strip().endswith(":") or v.strip() in ("ollama", "lms", "vllm", "openai", "deepseek", "gemini", "openrouter", "claude", "groq")):
                         globals()[k] = ""
                         os.environ[k] = ""
                     else:
@@ -690,17 +892,76 @@ if CONFIG_OVERRIDE_PATH.exists():
 
     DEFAULT_SOUL_PATH = SOUL_DIR / CURRENT_SOUL_NAME
 
-import secrets
+# ---------------------------------------------------------------------------
+# Web UI 管理員密碼策略（R2／報告 §5.3.7）
+#   - WEB_UI_PASSWORD_HASH 優先於明文 WEB_UI_PASSWORD（格式：pbkdf2_sha256$iterations$salt$digest_b64）
+#   - 未配置任何憑證時「不再自動生成、不再列印」：登入 fail-closed（一律拒絕）
+#   - 一次性產生請執行：python -m web_ui.server --gen-password
+# ---------------------------------------------------------------------------
+_WEB_UI_PASSWORD_HASH_ALGO: str = "pbkdf2_sha256"
+_WEB_UI_PASSWORD_HASH_ITERATIONS: int = 260_000
 
+WEB_UI_PASSWORD_HASH: str = os.getenv("WEB_UI_PASSWORD_HASH", "").strip()
 _configured_web_ui_pw: str = os.getenv("WEB_UI_PASSWORD", "").strip()
 WEB_UI_PASSWORD: str
 _WEB_UI_PASSWORD_GENERATED: bool
 if _configured_web_ui_pw:
     WEB_UI_PASSWORD = _configured_web_ui_pw
     _WEB_UI_PASSWORD_GENERATED = False
+elif WEB_UI_PASSWORD_HASH:
+    WEB_UI_PASSWORD = ""
+    _WEB_UI_PASSWORD_GENERATED = False
 else:
-    WEB_UI_PASSWORD = secrets.token_hex(8)
+    # Fail-closed：無憑證時保持空密碼，登入端一律拒絕（不再生成隨機密碼）
+    WEB_UI_PASSWORD = ""
     _WEB_UI_PASSWORD_GENERATED = True
+
+
+def hash_web_ui_password(password: str, *, iterations: int = _WEB_UI_PASSWORD_HASH_ITERATIONS) -> str:
+    """使用 stdlib PBKDF2-SHA256 產生可注入環境變數的密碼雜湊字串。
+
+    Args:
+        password: 明文密碼（僅於此函式記憶體中短暫存在，不落地）。
+        iterations: PBKDF2 迭代次數（預設 260000）。
+
+    Returns:
+        str: 格式為 "pbkdf2_sha256$<iterations>$<salt_hex>$<digest_b64>" 的雜湊字串。
+    """
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", str(password).encode("utf-8"), salt.encode("ascii"), int(iterations)
+    )
+    return f"{_WEB_UI_PASSWORD_HASH_ALGO}${int(iterations)}${salt}${base64.b64encode(digest).decode('ascii')}"
+
+
+def is_web_ui_password_configured() -> bool:
+    """檢查是否已配置管理員登入憑證（WEB_UI_PASSWORD_HASH 或 WEB_UI_PASSWORD 任一）。"""
+    hash_spec = str(globals().get("WEB_UI_PASSWORD_HASH", "") or "").strip()
+    plain = str(globals().get("WEB_UI_PASSWORD", "") or "")
+    return bool(hash_spec or plain)
+
+
+def verify_web_ui_password(password: str) -> bool:
+    """恆定時間驗證 Web UI 管理員密碼（hash 優先；未配置或格式無效一律拒絕）。"""
+    candidate = str(password or "")
+    hash_spec = str(globals().get("WEB_UI_PASSWORD_HASH", "") or "").strip()
+    if hash_spec:
+        try:
+            algo, iterations_s, salt, digest_b64 = hash_spec.split("$", 3)
+            if algo != _WEB_UI_PASSWORD_HASH_ALGO:
+                raise ValueError(f"unsupported algorithm: {algo}")
+            expected = base64.b64decode(digest_b64.encode("ascii"), validate=True)
+            actual = hashlib.pbkdf2_hmac(
+                "sha256", candidate.encode("utf-8"), salt.encode("ascii"), int(iterations_s)
+            )
+            return hmac.compare_digest(actual, expected)
+        except Exception as exc:
+            logger.warning("WEB_UI_PASSWORD_HASH 格式無效，登入一律拒絕: %s", exc)
+            return False
+    configured = str(globals().get("WEB_UI_PASSWORD", "") or "")
+    if not configured:
+        return False
+    return hmac.compare_digest(configured.encode("utf-8"), candidate.encode("utf-8"))
 
 WEB_UI_MAX_LOGIN_ATTEMPTS: int = 5  # 1 分鐘內登入失敗最大次數，超過即封鎖 IP
 WEB_UI_LOCKOUT_MINUTES: int = 15   # 觸發封鎖後禁止登入的分鐘數
@@ -710,18 +971,78 @@ WEB_UI_TRUSTED_PROXIES: list[str] = [
 ] if _configured_trusted_proxies else ["127.0.0.1", "::1", "localhost", "testclient"]
 
 
+# ---------------------------------------------------------------------------
+# R2：設定寫入白名單與靈魂檔路徑邊界（報告 §5.1.2 A3 斷點）
+# ---------------------------------------------------------------------------
+_SOUL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_\-]+\.(md|txt)$")
+
+
+def _is_runtime_safe_setting(key: str) -> bool:
+    """委託 web_ui.settings_schema 判定鍵是否允許執行期寫入（schema 白名單＋runtime_safe）。"""
+    try:
+        from web_ui.settings_schema import is_runtime_safe_key
+    except Exception as exc:
+        logger.warning("無法載入 settings_schema 白名單（沿用寬容模式）: %s", exc)
+        return True
+    return bool(is_runtime_safe_key(key))
+
+
+def _is_soul_path_within_soul_dir(path: Any) -> bool:
+    """確認目標人設檔路徑（resolve 後）仍位於 SOUL_DIR 之內。"""
+    try:
+        return Path(path).resolve().is_relative_to(SOUL_DIR.resolve())
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _is_safe_soul_name(name: str) -> bool:
+    """靈魂檔名白名單：僅允許 [A-Za-z0-9_-]+ 加上 .md/.txt，且 resolve 後不得逸出 SOUL_DIR。"""
+    candidate = str(name or "").strip()
+    if not _SOUL_NAME_PATTERN.match(candidate):
+        return False
+    return _is_soul_path_within_soul_dir(SOUL_DIR / candidate)
+
+
 def update_setting(key: str, value: Any) -> bool:
-    """更新全域設定值並持久化至 config_override.json。"""
+    """更新全域設定值並持久化至 config_override.json（R2：schema 白名單反轉）。"""
     import json
     g = globals()
     key_str = str(key).strip()
     if not key_str.isidentifier() or not key_str.isupper() or key_str not in g:
         return False
 
+    # R2（§5.1.2 A3）：白名單反轉——僅允許 SETTINGS_META 登錄（且 runtime_safe）之鍵，
+    # 另保留 WEB_UI_PASSWORD 的管理路徑；憑證/路徑/人格原文等不再可任意覆寫。
+    if not _is_runtime_safe_setting(key_str):
+        return False
+
+    # R2：靈魂檔名白名單——路徑穿越樣本直接拒絕，且不變更任何全域狀態
+    if key_str == "CURRENT_SOUL_NAME" and not _is_safe_soul_name(str(value)):
+        logger.warning("拒絕不合法的人設檔名（未通過白名單）: %r", value)
+        return False
+
     expected_type = type(g[key_str])
     if expected_type is list:
+        if isinstance(value, str):
+            val_str = value.strip()
+            if val_str.startswith("[") and val_str.endswith("]"):
+                try:
+                    parsed = json.loads(val_str)
+                    if isinstance(parsed, list):
+                        value = parsed
+                    else:
+                        value = [parsed]
+                except Exception:
+                    value = []
+            elif val_str:
+                value = [item.strip() for item in val_str.split(",") if item.strip()]
+            else:
+                value = []
         if not isinstance(value, (list, tuple)):
             return False
+        # 使用者在 Web UI 清空清單欄位會送出空白字串，應視為未填寫項忽略，
+        # 否則 int("") / float("") 會拋例外並讓整個 key 儲存失敗。
+        value = [v for v in value if not (isinstance(v, str) and not v.strip())]
         base = g[key_str]
         if base:
             elem_type = type(base[0])
@@ -747,6 +1068,14 @@ def update_setting(key: str, value: Any) -> bool:
                 value = [elem_type(v) for v in value]
         except (ValueError, TypeError):
             return False
+    elif expected_type is bool:
+        if isinstance(value, str):
+            value = value.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            try:
+                value = bool(value)
+            except (ValueError, TypeError):
+                return False
     elif expected_type is str and not isinstance(value, str):
         value = str(value)
     elif expected_type is not type(value) and g[key_str] is not None:
@@ -757,7 +1086,7 @@ def update_setting(key: str, value: Any) -> bool:
 
     if isinstance(value, str):
         value_str = value.strip()
-        if value_str.endswith(":") or value_str in ("ollama", "lms", "vllm", "openai", "deepseek", "gemini", "openrouter", "claude"):
+        if value_str.endswith(":") or value_str in ("ollama", "lms", "vllm", "openai", "deepseek", "gemini", "openrouter", "claude", "groq"):
             value = ""
         else:
             value = value_str
@@ -772,6 +1101,9 @@ def update_setting(key: str, value: Any) -> bool:
             fallback_path = SOUL_DIR / f"manosaba_{str(value)}"
             if fallback_path.exists():
                 target_path = fallback_path
+        if not _is_soul_path_within_soul_dir(target_path):
+            logger.warning("拒絕人設路徑（超出 SOUL_DIR）: %s", target_path)
+            return False
         g["DEFAULT_SOUL_PATH"] = target_path
         try:
             from handlers.social.persona import clear_soul_cache
@@ -788,8 +1120,11 @@ def update_setting(key: str, value: Any) -> bool:
                 fallback_target = SOUL_DIR / f"manosaba_{active_name}"
                 if fallback_target.exists():
                     target_soul = fallback_target
+        if not _is_soul_path_within_soul_dir(target_soul):
+            logger.warning("拒絕寫入人設檔（超出 SOUL_DIR）: %s", target_soul)
+            return False
         try:
-            target_soul.write_text(str(value), encoding="utf-8")
+            Path(target_soul).resolve().write_text(str(value), encoding="utf-8")
             from handlers.social.persona import clear_soul_cache
             clear_soul_cache()
             return True

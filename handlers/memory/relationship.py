@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import settings
+from core.concurrency import db_pool, schedule_in_pool
 from core.db import get_db_connection, db_transaction
 
 logger = logging.getLogger(__name__)
@@ -87,9 +88,11 @@ class RelationshipManager:
 
             if rows:
                 for r in rows:
+                    tier_val = str(r["tier"]) if r["tier"] else "stranger"
                     self.store[str(r["user_id"])] = {
                         "affinity": float(r["affinity"]),
-                        "tier": str(r["tier"]),
+                        "tier": tier_val,
+                        "affinity_tier": tier_val,
                         "interaction_count": int(r["interaction_count"]),
                         "last_interaction": str(r["last_interaction"]),
                         "updated_at": str(r["updated_at"]),
@@ -118,7 +121,7 @@ class RelationshipManager:
                     (
                         str(uid),
                         float(r_obj.get("affinity", 0.0)),
-                        str(r_obj.get("tier", "stranger")),
+                        str(r_obj.get("affinity_tier") or r_obj.get("tier") or "stranger"),
                         int(r_obj.get("interaction_count", 0)),
                         str(r_obj.get("last_interaction", "")),
                         str(r_obj.get("updated_at", now_str)),
@@ -152,12 +155,8 @@ class RelationshipManager:
         self._dirty = False
         store_copy = dict(self.store)
 
-        try:
-            import asyncio
-            loop = asyncio.get_running_loop()
-            loop.run_in_executor(None, self._do_write_sync, store_copy)
-        except RuntimeError:
-            self._do_write_sync(store_copy)
+        # 專用 DB 池：避免與 WebUI／長 I/O 共用預設 executor。
+        schedule_in_pool(db_pool, self._do_write_sync, store_copy)
 
     def _schedule_debounce(self) -> None:
         """排程延遲落盤任務（Debounce）。"""
@@ -176,6 +175,24 @@ class RelationshipManager:
     def _save(self) -> None:
         """相容舊版直接存檔介面，觸發 flush。"""
         self.flush(force=True)
+
+    def soft_delete_user(self, uid: int | str) -> None:
+        """R6：軟刪除＋匿名化單一使用者關係資料（分數歸零、欄位清空）。
+
+        - 同步自 RAM store 移除該使用者，避免後續 flush 將其寫回。
+        - 寫入失敗時拋出例外（由清除管線 `purge_user_data` 記錄為子範圍失敗）。
+        """
+        uid_str = str(uid)
+        self.store.pop(uid_str, None)
+        now_str = datetime.now(timezone.utc).isoformat()
+        with db_transaction(MEMORY_DB_PATH) as cur:
+            cur.execute("""
+                UPDATE user_relations
+                SET affinity = 0, tier = 'stranger', interaction_count = 0, last_interaction = '',
+                    is_deleted = 1, deleted_at = ?, updated_at = datetime('now', 'localtime')
+                WHERE user_id = ? AND is_deleted = 0
+            """, (now_str, uid_str))
+        logger.info("RelationshipManager: 已軟刪除並匿名化使用者 %s 的關係資料", uid_str)
 
     MAX_AFFINITY: float = 1000.0
     DAILY_AFFINITY_GAIN_LIMIT: float = 10.0

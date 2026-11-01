@@ -19,6 +19,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from core.contracts import SherryRequest
+from core.error_report import log_safe_error
 from handlers.social.observability import new_trace_id
 import settings
 
@@ -194,8 +195,11 @@ class ContextMenuCog(commands.Cog):
             await interaction.followup.send(reply_content, ephemeral=ephemeral)
 
         except Exception as exc:
-            logger.error("ContextMenuCog: 執行 %s 失敗: %s", action, exc, exc_info=True)
-            await interaction.followup.send(f"❌ 處理訊息時發生未預期錯誤：{exc}", ephemeral=ephemeral)
+            eid = log_safe_error(f"handlers.context_menu.cog.{action}", exc)
+            await interaction.followup.send(
+                f"❌ 處理訊息時發生未預期錯誤（錯誤代碼：{eid}），請稍後再試。",
+                ephemeral=ephemeral,
+            )
 
     # ------------------------------------------------------------------
     # 三大右鍵動作回呼

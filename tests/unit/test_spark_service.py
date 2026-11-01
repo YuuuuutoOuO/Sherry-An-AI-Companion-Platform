@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -260,4 +261,65 @@ def test_service_toggle_trigger_preserves_action(
     assert t_paused is not None
     assert t_paused.is_active is False
     assert t_paused.action == action_data
+
+
+def test_service_update_trigger_memory(
+    service_setup: tuple[SparkService, SparkRepository],
+) -> None:
+    """測試 SparkService.update_trigger_memory 寫回跨輪記憶與時間戳記。"""
+    service, repo = service_setup
+    trigger = service.create_trigger(
+        user_id=123,
+        channel_id=456,
+        trigger_type="schedule",
+        condition={"mode": "interval", "interval_minutes": 10},
+        message="測試記憶寫回",
+    )
+    assert trigger.extra_data.get("last_output_summary") is None
+
+    updated = service.update_trigger_memory(trigger.trigger_id, "今日台股大漲200點，0050收盤180元")
+    assert updated is not None
+    assert updated.extra_data.get("last_output_summary") == "今日台股大漲200點，0050收盤180元"
+    assert updated.extra_data.get("last_output_at") is not None
+
+    # 驗證持久化重載
+    reloaded = repo.get(trigger.trigger_id)
+    assert reloaded is not None
+    assert reloaded.extra_data.get("last_output_summary") == "今日台股大漲200點，0050收盤180元"
+
+
+@pytest.mark.anyio
+async def test_service_run_count_increment_on_fire(
+    service_setup: tuple[SparkService, SparkRepository],
+) -> None:
+    """測試 Trigger 每次成功觸發時，extra_data.run_count 正確累加。"""
+    service, _ = service_setup
+    service._checkers["schedule"] = DummyChecker("schedule", will_fire=True, summary="時間到")
+    trigger = service.create_trigger(
+        user_id=123,
+        channel_id=456,
+        trigger_type="schedule",
+        condition={"mode": "interval", "interval_minutes": 10},
+        message="計數測試",
+    )
+    assert trigger.extra_data.get("run_count", 0) == 0
+
+    res, updated = await service.check_trigger(trigger)
+    assert res.should_fire is True
+    assert updated is not None
+    assert updated.extra_data.get("run_count") == 1
+
+
+def test_build_spark_service_registers_web_monitor() -> None:
+    """測試工廠函式正確註冊 web_monitor 檢查器。"""
+    repo = MagicMock(spec=SparkRepository)
+    clients = {
+        "stock": MagicMock(),
+        "rss": MagicMock(),
+        "weather": MagicMock(),
+        "web_monitor": MagicMock(),
+    }
+    svc = build_spark_service(repo, clients)
+    assert "web_monitor" in svc._checkers
+
 

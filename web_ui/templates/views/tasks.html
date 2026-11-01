@@ -1,6 +1,21 @@
 <!-- ===== TASKS VIEW ===== -->
 <div class="view hidden" id="view-tasks">
     <div class="tasks-wrapper">
+        <!-- Section 0: State Recovery & Resilience Summary -->
+        <div class="recovery-status-bar" id="recovery-status-bar">
+            <div class="recovery-status-title">
+                <span class="recovery-status-icon">🛡️</span>
+                <span>核心自癒中樞</span>
+                <span id="recovery-enabled-badge" class="task-type-badge recovery-badge">🟢 運作中</span>
+            </div>
+            <div class="recovery-status-metrics">
+                <span>已註冊提供者 <strong id="recovery-providers-count" class="is-blue">--</strong></span>
+                <span>有效快照 <strong id="recovery-active-snapshots" class="is-green">--</strong></span>
+                <span>隔離快照 <strong id="recovery-quarantined-snapshots" class="is-rose">--</strong></span>
+                <span>最近存檔 <strong id="recovery-last-saved">--</strong></span>
+            </div>
+        </div>
+
         <!-- Section 1: Brain Inference Queue -->
         <div class="tasks-header-info">
             <h3 class="tasks-section-title tasks-section-title--blue">🧠 大腦即時推理佇列 (LLM Task Queue)</h3>
@@ -10,13 +25,28 @@
             <div class="placeholder-msg">正在載入大腦佇列...</div>
         </div>
 
-        <!-- Section 2: Scheduled Reminders -->
+        <!-- Section 2: Active In-Flight AI Tasks -->
         <div class="tasks-header-info">
-            <h3 class="tasks-section-title">📅 背景排程與定時提醒 (Schedule Reminders)</h3>
-            <p class="tasks-section-desc">列出目前 `schedule.json` 中已登記監控的單次提醒與 Cron 週期任務。</p>
+            <h3 class="tasks-section-title">🛡️ 進行中 AI 推理任務 (Active AI Tasks)</h3>
+            <p class="tasks-section-desc">正處於多輪思維鏈推演、外部工具調用或即時串流生成的對話任務；若系統重啟將由自癒中樞自動復原。</p>
         </div>
-        <div class="tasks-container" id="tasks-container">
-            <div class="placeholder-msg">正在載入排程提醒...</div>
+        <div class="tasks-container" id="ai-tasks-container">
+            <div class="placeholder-msg">正在載入進行中 AI 任務...</div>
+        </div>
+
+        <!-- Section 3: Music & Voice Resumption Notice -->
+        <div class="tasks-header-info tasks-header-info--spaced">
+            <h3 class="tasks-section-title tasks-section-title--violet">🎵 語音與音樂斷點續播動態</h3>
+            <p class="tasks-section-desc">各伺服器語音連線、成員清單、播放時間軸進度條與自癒斷點狀態已整合至專屬頁面監控。</p>
+        </div>
+        <div class="tasks-callout">
+            <div class="tasks-callout-text">
+                <span>🔊 即時語音動態、時間軸與斷點續播保護請前往：</span>
+                <strong>「雪莉語音與音樂動態監控」</strong>
+            </div>
+            <button class="btn-primary btn-violet" onclick="switchView('bot-status')">
+                <span>🎵</span> 前往語音音樂監控
+            </button>
         </div>
     </div>
 </div>

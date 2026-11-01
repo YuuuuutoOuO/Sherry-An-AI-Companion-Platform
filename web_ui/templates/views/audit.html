@@ -1,10 +1,87 @@
-<!-- ===== AUDIT LOGS VIEW ===== -->
+<!-- ===== AUDIT & USER CONNECTION VIEW ===== -->
 <div class="view hidden" id="view-audit">
-    <div class="audit-header">
-        <h2 class="view-section-title">🛡️ 管理員登入與操作歷史審計紀錄</h2>
-        <p class="view-section-desc">歷史紀錄落盤儲存於 <code>./data/admin_audit.jsonl</code>，詳細紀錄登入帳號、時間、IP、裝置、位置與操作履歷歷程。</p>
+    <div class="audit-header" style="margin-bottom: 1rem;">
+        <h2 class="view-section-title">🛡️ 審計與連線監控中心</h2>
+        <p class="view-section-desc">詳細紀錄管理員登入與敏感操作履歷，以及一般使用者與訪客之即時在線狀況與連線歷程。</p>
     </div>
-    <div class="audit-container" id="audit-container">
-        <div class="placeholder-msg">正在載入管理員審計紀錄...</div>
+
+    <!-- 頁籤切換 (Tabs) -->
+    <div class="audit-tabs-bar">
+        <div class="audit-tabs-group">
+            <button class="audit-tab-btn filter-tab active" id="tab-btn-admin-audit" onclick="switchAuditTab('admin')">
+                <span>🛡️</span>
+                <span>管理員操作審計</span>
+            </button>
+            <button class="audit-tab-btn filter-tab" id="tab-btn-user-conn" onclick="switchAuditTab('user')">
+                <span>👥</span>
+                <span>一般使用者連線狀況</span>
+            </button>
+        </div>
+        <div>
+            <button onclick="refreshCurrentAuditTab()" class="btn btn-secondary btn-sm" style="font-size: 0.82rem; padding: 6px 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">
+                <span>🔄</span>
+                <span>重整資料</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- 頁籤 1: 管理員操作審計 -->
+    <div id="audit-tab-admin" class="audit-tab-content">
+        <div class="audit-container" id="audit-container">
+            <div class="placeholder-msg">正在載入管理員審計紀錄...</div>
+        </div>
+    </div>
+
+    <!-- 頁籤 2: 一般使用者連線狀況 -->
+    <div id="audit-tab-user" class="audit-tab-content hidden">
+        <!-- 訪客連線 KPI 卡片 -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px;">
+            <div class="metric-card" style="padding: 16px;">
+                <div style="color: var(--text-muted); font-size: 0.85rem; font-weight: 500;">👥 目前在線訪客</div>
+                <div id="user-stat-online" style="font-size: 1.8rem; font-weight: 700; color: #00ffaa; margin-top: 6px;">0</div>
+                <div style="color: var(--text-muted); font-size: 0.75rem; margin-top: 4px;">45 秒內維持心跳中</div>
+            </div>
+            <div class="metric-card" style="padding: 16px;">
+                <div style="color: var(--text-muted); font-size: 0.85rem; font-weight: 500;">📈 今日連線會話</div>
+                <div id="user-stat-today" style="font-size: 1.8rem; font-weight: 700; color: #38bdf8; margin-top: 6px;">0</div>
+                <div style="color: var(--text-muted); font-size: 0.75rem; margin-top: 4px;">今日不重複連線總數</div>
+            </div>
+            <div class="metric-card" style="padding: 16px;">
+                <div style="color: var(--text-muted); font-size: 0.85rem; font-weight: 500;">⏱️ 平均在線時長</div>
+                <div id="user-stat-avg-duration" style="font-size: 1.8rem; font-weight: 700; color: #fbbf24; margin-top: 6px;">0s</div>
+                <div style="color: var(--text-muted); font-size: 0.75rem; margin-top: 4px;">會話停留持續時間均值</div>
+            </div>
+            <div class="metric-card" style="padding: 16px;">
+                <div style="color: var(--text-muted); font-size: 0.85rem; font-weight: 500;">🌐 主要來源分佈</div>
+                <div id="user-stat-top-location" style="font-size: 1.1rem; font-weight: 700; color: #c084fc; margin-top: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">-</div>
+                <div style="color: var(--text-muted); font-size: 0.75rem; margin-top: 4px;">最常見網路區域</div>
+            </div>
+        </div>
+
+        <!-- 即時在線連線池 -->
+        <div style="margin-bottom: 24px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+                <h3 style="font-size: 1.05rem; font-weight: 600; color: var(--text-main); margin: 0; display: flex; align-items: center; gap: 6px;">
+                    <span>🟢</span> 實時在線訪客連線池
+                </h3>
+                <span id="user-active-summary-text" style="font-size: 0.8rem; color: var(--text-muted);">共 0 位活躍訪客</span>
+            </div>
+            <div class="audit-container" id="user-active-container">
+                <div class="placeholder-msg">正在載入即時訪客連線...</div>
+            </div>
+        </div>
+
+        <!-- 歷史訪客連線紀錄 -->
+        <div>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+                <h3 style="font-size: 1.05rem; font-weight: 600; color: var(--text-main); margin: 0; display: flex; align-items: center; gap: 6px;">
+                    <span>📜</span> 歷史訪客連線紀錄 (最近 100 筆)
+                </h3>
+                <span style="font-size: 0.8rem; color: var(--text-muted);">雙軌落盤於 chat_history.db & ./data/user_connections.jsonl</span>
+            </div>
+            <div class="audit-container" id="user-history-container">
+                <div class="placeholder-msg">正在載入歷史訪客紀錄...</div>
+            </div>
+        </div>
     </div>
 </div>

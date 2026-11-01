@@ -14,11 +14,12 @@ import asyncio
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, Sequence
 
 import discord
 
 import settings
+from handlers.social.persona_guard import sanitize_reply
 from handlers.social.utils import (
     BOT_MESSAGE_INTENTS,
     _chunk_message,
@@ -32,16 +33,19 @@ logger = logging.getLogger(__name__)
 class LiveThinkingSession:
     """管理單次對話請求的即時思考推演動態編輯生命週期。"""
 
-    def __init__(self, target: Any) -> None:
+    def __init__(self, target: Any, prompt: str = "") -> None:
         """初始化即時思考會話。
 
         Args:
             target: discord.Message 或 TextChannel 目標。
+            prompt: 使用者提問或請求內容（可選）。
         """
         self.target: Any = target
+        self.prompt: str = prompt
         self.channel: Any = getattr(target, "channel", target)
         self.is_message: bool = hasattr(target, "reply")
         self.placeholder_msg: discord.Message | None = None
+        self._task_id: str | None = None
         self.steps: list[tuple[str, str, int | None]] = []
         self._stream_buffer: str = ""
         self._live_thought: str = ""
@@ -88,14 +92,18 @@ class LiveThinkingSession:
         """是否啟用動態編輯思考流程。"""
         return bool(getattr(settings, "LIVE_THINKING_EDIT", True))
 
-    async def start(self, initial_hint: str = "📋 意圖解析中") -> None:
+    async def start(self, initial_hint: str = "📋 意圖解析中", prompt: str | None = None) -> None:
         """發送初始佔位思考訊息（零延遲即時反饋）。
 
         Args:
             initial_hint: 當前正在進行的動作簡述。
+            prompt: 可選覆寫的使用者提問文字。
         """
         if not self.is_enabled or self._failed:
             return
+
+        if prompt is not None:
+            self.prompt = prompt
 
         self._initial_hint = initial_hint
         self._session_start_time = time.monotonic()
@@ -120,6 +128,32 @@ class LiveThinkingSession:
             self._last_edit_time = now
             # 重設 pass_start_time，扣除 Discord REST 發送佔位訊息的網路延遲，精確反映真實 LLM 首字耗時
             self._pass_start_time = now
+
+            if self.placeholder_msg:
+                try:
+                    from handlers.social.task_registry import get_in_flight_registry
+
+                    task_id = f"ai-task-{self.placeholder_msg.id}"
+                    origin_id = getattr(self.target, "id", None) if self.is_message else None
+                    author = getattr(self.target, "author", None)
+                    user_id = getattr(author, "id", 0)
+                    resolved_prompt = (
+                        self.prompt
+                        or getattr(self.target, "clean_content", "")
+                        or getattr(self.target, "content", "")
+                    )
+                    get_in_flight_registry().register(
+                        task_id=task_id,
+                        channel_id=self.placeholder_msg.channel.id,
+                        message_id=self.placeholder_msg.id,
+                        prompt=resolved_prompt,
+                        user_id=user_id,
+                        task_type="chat",
+                        origin_message_id=origin_id,
+                    )
+                    self._task_id = task_id
+                except Exception as reg_exc:
+                    logger.debug("LiveThinkingSession: 登記 InFlightTask 失敗 (非致命): %s", reg_exc)
         except Exception as exc:
             logger.warning("LiveThinkingSession: 發送初始佔位訊息失敗: %s", exc)
             self._failed = True
@@ -145,7 +179,7 @@ class LiveThinkingSession:
         """以非同步背景任務 (Fire-and-Forget) 推送新思考/工具執行階段，主執行緒 0 等待。
 
         Args:
-            step_type: 步驟類型 ('plan', 'action', 'obs', 'persona')。
+            step_type: 步驟類型 ('plan', 'context', 'intent', 'memory', 'vision', 'action', 'obs', 'persona')。
             text: 步驟描述內容。
             duration_ms: 該步驟執行耗時（毫秒，可選）。
         """
@@ -155,6 +189,28 @@ class LiveThinkingSession:
         self.steps.append((step_type, text.strip(), duration_ms))
 
         # 取消前一個尚未發送的背景節流任務，以最新進度為主
+        if self._pending_task and not self._pending_task.done():
+            self._pending_task.cancel()
+
+        self._pending_task = asyncio.create_task(
+            self._debounced_edit_step(),
+            name=f"live-thinking-edit-{getattr(self.placeholder_msg, 'id', 0)}",
+        )
+
+    def push_steps(self, steps: Sequence[tuple[str, str] | tuple[str, str, int | None]]) -> None:
+        """批量推送多個前置階段步驟，合併單一防抖節流任務。
+
+        Args:
+            steps: 步驟元組列表 [(step_type, text, duration_ms?), ...]
+        """
+        if not self.is_enabled or self._failed or not self.placeholder_msg or self._is_finished:
+            return
+
+        for s in steps:
+            stype, text, *rest = s
+            dur = rest[0] if rest else None
+            self.steps.append((stype, text.strip(), dur))
+
         if self._pending_task and not self._pending_task.done():
             self._pending_task.cancel()
 
@@ -276,7 +332,7 @@ class LiveThinkingSession:
         step_idx = 1
         num_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣"]
 
-        # 1. 外部步驟 (Plan / Action / Obs / Persona)
+        # 1. 外部步驟 (Plan / Context / Intent / Memory / Vision / Action / Obs / Persona)
         for raw_step in self.steps:
             stype = raw_step[0]
             text = raw_step[1]
@@ -289,6 +345,12 @@ class LiveThinkingSession:
 
             if stype == "plan":
                 lines.append(f"> {num_emoji} 📋 **意圖拆解 [Plan]**：{dur_str}{clean_text}")
+            elif stype in ("context", "intent"):
+                lines.append(f"> {num_emoji} 📋 **對話語境與意圖 [Context & Intent]**：{dur_str}{clean_text}")
+            elif stype == "memory":
+                lines.append(f"> {num_emoji} 🧠 **長期記憶檢索 [Memory]**：{dur_str}{clean_text}")
+            elif stype == "vision":
+                lines.append(f"> {num_emoji} 👁️ **多模態視覺感知 [Vision]**：{dur_str}{clean_text}")
             elif stype in ("action", "obs"):
                 lines.append(f"> {num_emoji} 🛠️ **工具與觀測 [Action & Obs]**：{dur_str}{clean_text}")
             elif stype == "persona":
@@ -320,13 +382,18 @@ class LiveThinkingSession:
         # 4. 當前正在進行之動態提示 (⏳)
         if not self._is_finished:
             if self._generated_chars > 0 or self._generation_start_time is not None:
-                char_str = f" (已輸出 {self._generated_chars} 字)" if self._generated_chars > 0 else "..."
+                speed_str = ""
+                if self._generated_chars > 0 and self._generation_start_time is not None:
+                    gen_elapsed = max(0.1, time.monotonic() - self._generation_start_time)
+                    speed = self._generated_chars / gen_elapsed
+                    speed_str = f" • {speed:.1f} 字/秒"
+                char_str = f" (已輸出 {self._generated_chars} 字{speed_str})" if self._generated_chars > 0 else "..."
                 lines.append(f"> ⏳ *✨ 正在生成回覆中{char_str}*")
             elif self._live_thought:
                 lines.append("> ⏳ *🧠 正在深入思考中...*")
             elif self.steps and self.steps[-1][0] in ("action", "obs"):
                 lines.append("> ⏳ *💭 正在組織回覆語氣...*")
-            elif self.steps and self.steps[-1][0] == "plan":
+            elif self.steps and self.steps[-1][0] in ("plan", "context", "intent", "memory", "vision"):
                 lines.append("> ⏳ *🛠️ 正在調用工具查詢數據...*")
             elif self._pass_prefill_ms is not None:
                 lines.append("> ⏳ *💭 正在組織推演路徑...*")
@@ -380,6 +447,10 @@ class LiveThinkingSession:
         if not clean_reply:
             clean_reply = "（盯——你這是在說甚麼難懂的話呢！）"
 
+        # R22：LiveThinkingSession 不經 simulate_typing_and_send，必須在此
+        # 套用同一道人設守門，否則串流／原地編輯路徑會成為治理缺口。
+        clean_reply = sanitize_reply(clean_reply, user_input=prompt)
+
         if getattr(settings, "DEBUG_DETAIL", False):
             steps_block = format_thinking_steps_block(
                 thought_log=thought_log or self._live_thought,
@@ -391,6 +462,7 @@ class LiveThinkingSession:
                 thought_ms=self._pass_thought_ms,
                 tool_steps=self.steps,
                 generation_ms=self._generation_ms,
+                generation_chars=len(clean_reply),
             )
             full_content = f"{steps_block}\n\n{clean_reply}"
         else:
@@ -482,7 +554,29 @@ class LiveThinkingSession:
         except Exception as exc:
             logger.error("LiveThinkingSession: 訊息發送/更新異常: %s", exc)
         finally:
+            if self._task_id:
+                try:
+                    from handlers.social.task_registry import get_in_flight_registry
+
+                    get_in_flight_registry().unregister(self._task_id)
+                    self._task_id = None
+                except Exception as unreg_exc:
+                    logger.debug("LiveThinkingSession: 註銷 InFlightTask 失敗 (非致命): %s", unreg_exc)
             if self.is_message:
                 await remove_hourglass_reaction(self.target)
 
         return sent_messages
+
+    def abort(self) -> None:
+        """終止推演會話並自登記簿註銷任務。"""
+        self._is_finished = True
+        if self._pending_task and not self._pending_task.done():
+            self._pending_task.cancel()
+        if self._task_id:
+            try:
+                from handlers.social.task_registry import get_in_flight_registry
+
+                get_in_flight_registry().unregister(self._task_id)
+                self._task_id = None
+            except Exception:
+                pass

@@ -4,16 +4,22 @@ handlers/social/router.py
 import base64
 import logging
 import re
+import time
 from typing import Any
 
 import discord
 from discord.ext import commands
 
 import settings
+from handlers.social.action_recorder import record_tool_action
 from handlers.social.observability import log_event
 from handlers.social.rate_limiter import rate_limiter
 from handlers.social.registry import TOOL_LIST
-from handlers.social.utils import fetch_context_script, remove_hourglass_reaction
+from handlers.social.utils import (
+    build_reply_quote_context,
+    fetch_context_script,
+    remove_hourglass_reaction,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +49,11 @@ async def route_and_execute_tag(bot: commands.Bot, message: discord.Message, fro
 
     context_script = await fetch_context_script(message.channel, message, bot=bot)
 
-    quote_context = ""
-    if message.reference and isinstance(message.reference.resolved, discord.Message):
-        ref_msg = message.reference.resolved
-        quote_context = f"（回覆引用：{ref_msg.author.display_name} 說「{ref_msg.clean_content}」）"
+    # 回覆引用：resolved 常因重啟／舊訊息而失效，交由 utils 補抓並轉成明確語境。
+    quote_context = await build_reply_quote_context(
+        message,
+        bot_user_id=getattr(getattr(bot, "user", None), "id", None),
+    )
 
     # 組裝純淨對話歷史（當前發言由 user_prompt 獨立承載，消除 System Prompt 內的重複輸入）
     if context_script and quote_context:
@@ -162,7 +169,13 @@ async def route_and_execute_tag(bot: commands.Bot, message: discord.Message, fro
                 intent_source="youtube_fastpath",
             )
             try:
-                await music_tool.execute(bot, message, sq, vibe_snippet, full_context)
+                music_result = await music_tool.execute(
+                    bot, message, sq, vibe_snippet, full_context
+                )
+                music_obs = getattr(music_result, "summary_text", "") or str(music_result or "")
+                record_tool_action(
+                    message, "MUSIC", sq, music_obs or "已接收播放指令", status="success"
+                )
             finally:
                 await remove_hourglass_reaction(message, bot.user)
             return
@@ -208,3 +221,15 @@ async def route_and_execute_tag(bot: commands.Bot, message: discord.Message, fro
         )
     finally:
         await remove_hourglass_reaction(message, bot.user)
+        try:
+            from handlers.interaction import get_turn_gateway
+
+            gateway = get_turn_gateway()
+            if gateway is not None:
+                await gateway.note_external_bot_spoke(
+                    message.channel.id,
+                    sent_at=time.time(),
+                    target_author_id=message.author.id,
+                )
+        except Exception:
+            pass

@@ -56,7 +56,7 @@ class ReactStrategy(BaseDispatchStrategy):
         channel_id = message.channel.id
         user_id = message.author.id
         display_name = message.author.display_name
-        react_model = settings.REACT_MODEL
+        react_model = settings.PRIMARY_MODEL
 
         session = da.LiveThinkingSession(message)
         await session.start("🔍 思考第一步推理中")
@@ -97,6 +97,7 @@ class ReactStrategy(BaseDispatchStrategy):
                 model=react_model,
                 temperature=0.1,
                 timeout=settings.REACT_STEP_TIMEOUT,
+                user_id=message.author.id,
             )
 
             if not raw_output:

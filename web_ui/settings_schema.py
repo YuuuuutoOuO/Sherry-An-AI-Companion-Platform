@@ -9,6 +9,7 @@ and numerical constraints for system parameters editable via Web Console.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -21,27 +22,11 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "type": "model",
         "category": "模型設定",
     },
-    "NOMORAL_MODEL": {
-        "label": "無道德限制模型 (No-Moral Model)",
-        "description": "專門處理橘雪莉缺乏倫理觀的瘋狂人設，通常使用 abliterated 版本模型。",
-        "type": "model",
-        "category": "模型設定",
-    },
-    "QUICK_MODEL": {
-        "label": "快速回覆模型 (Quick Model)",
-        "description": "要求極速回覆時使用，需要足夠基礎智商。適合簡短互動。",
-        "type": "model",
-        "category": "模型設定",
-    },
-    "CLASSIFIER_MODEL": {
-        "label": "分類輕量模型 (Classifier Model)",
-        "description": "用於插話評分與 YouTube 影片篩選，輕量優先（如 qwen2.5:3b）。",
-        "type": "model",
-        "category": "模型設定",
-    },
-    "VIBE_MODEL": {
-        "label": "氛圍萃取模型 (Vibe Model)",
-        "description": "從聊天記錄中萃取當前話題氛圍，輕量模型即可勝任。",
+    "LIGHT_MODEL": {
+        "label": "輕量模型 (Light Model)",
+        "description": "處理短輸出、低延遲的小任務：快速回覆、插話評分、影片篩選、"
+                        "氛圍萃取、並行任務拆解。輕量優先（如 ollama:qwen2.5:3b），"
+                        "本機 GPU 吃緊時可改填雲端模型。",
         "type": "model",
         "category": "模型設定",
     },
@@ -55,6 +40,30 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "label": "雲端搜尋模型 (Cloud Search Model)",
         "description": "網路搜尋任務使用的雲端模型，需要良好的工具呼叫能力。",
         "type": "model",
+        "category": "模型設定",
+    },
+    "SELF_MONITORING_MODEL": {
+        "label": "自我稽核模型 (Self-Monitoring Model)",
+        "description": "獨立的可靠性守門員，用於診斷推論失敗、延遲與品質異常。"
+                        "刻意不與其他用途共用：若稽核模型本身失效或判斷力不足，"
+                        "會同時失去告警與自我修復能力。建議使用穩定的雲端模型。",
+        "type": "model",
+        "category": "模型設定",
+    },
+    "FALLBACK_ENABLED": {
+        "label": "推論失敗自動備援 (Fallback Enabled)",
+        "description": "總開關。關閉 (False) = 模型失敗就明確失敗，不自動切換到任何其他模型，"
+                        "適合純地端部署避免內容外送；開啟 (True) = 依下方備援序列逐一切換。",
+        "type": "bool",
+        "category": "模型設定",
+    },
+    "FALLBACK_MODELS": {
+        "label": "推論備援序列 (Fallback Chain)",
+        "description": "首選模型失敗時依序嘗試的模型清單，可混用本地與雲端。"
+                        "純地端請留空；地端優先雲端救援可填 "
+                        "ollama:llama3.2:3b,gemini:gemini-3.5-flash-lite。"
+                        "格式同各模型槽位（前綴:模型名）。",
+        "type": "list",
         "category": "模型設定",
     },
     "AGENT_DISPATCH_MODE": {
@@ -72,18 +81,6 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "label": "行為自適應對話抑制 (Action Early Termination)",
         "description": "開啟 (True) = 當發動的工具全為自帶 UI 渲染（如點歌、搜圖、畫圖）且無聊天需求時，動作完成即刻收工，不發送多餘文字；關閉 (False) = 動作完成後仍強制由主力模型生成文字閒聊回覆。",
         "type": "bool",
-        "category": "模型設定",
-    },
-    "PARALLEL_PLANNER_MODEL": {
-        "label": "並行調度模型 (Parallel Planner Model)",
-        "description": "用於 Parallel Agent 單次任務拆解與對話抑制標記的輕量模型。",
-        "type": "model",
-        "category": "模型設定",
-    },
-    "REACT_MODEL": {
-        "label": "ReAct 任務拆解模型 (ReAct Planner Model)",
-        "description": "ReAct 多步驟 Agent 用於意圖分析與工具發動的規劃模型（負責「思考→行動→觀察」步驟調度）。最終對話生成會由 PRIMARY_MODEL (主力模型) 進行發言合成。",
-        "type": "model",
         "category": "模型設定",
     },
     "OLLAMA_TIMEOUT": {
@@ -108,6 +105,26 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "type": "int",
         "min": 128,
         "max": 8192,
+        "category": "LLM 參數",
+    },
+    "GEMINI_MIN_OUTPUT_TOKENS": {
+        "label": "Gemini 最低輸出 Token 數",
+        "description": "Gemini OpenAI 相容端點的 max_tokens 是「思考 + 輸出」的硬性總上限，"
+                        "額度過低會被思考 Token 吃光導致空回應。此值為下限保護，"
+                        "實際額度會依下方思考強度自動拉高。",
+        "type": "int",
+        "min": 1024,
+        "max": 65536,
+        "category": "LLM 參數",
+    },
+    "GEMINI_REASONING_EFFORT": {
+        "label": "Gemini 思考強度 (Reasoning Effort)",
+        "description": "Gemini 3.x 的 thinking_level。high＝最深入但最慢最貴；"
+                        "medium＝官方預設，推論深度與成本平衡；"
+                        "low＝最快最便宜但推論淺，雪莉的回應會變短變平。"
+                        "思考 Token 會占用 max_tokens 額度，系統會依此自動把額度拉高，"
+                        "因此維持 medium 不會造成空回應。",
+        "type": "str",
         "category": "LLM 參數",
     },
     "LLM_TEMPERATURE": {
@@ -149,6 +166,29 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "label": "Ollama 模型駐留時間 (Keep-Alive)",
         "description": "推論完成後模型與 KV 快取在 VRAM 中保留多久。支援時間格式：\"60m\"（60 分鐘）、\"24h\"（24 小時）、\"0\"（立即卸載，停用快取）。建議設為 \"60m\" 以發揮 Prompt Caching 效益。",
         "type": "str",
+        "category": "LLM 參數",
+    },
+    "LLM_TIMEOUT": {
+        "label": "LLM 總逾時秒數 (Timeout)",
+        "description": "單次 LLM 請求（含串流）的整體等待上限秒數。越大越能容忍慢速生成，但卡死時佔用資源越久。建議 60–300。",
+        "type": "int",
+        "min": 10,
+        "max": 1200,
+        "category": "LLM 參數",
+    },
+    "LLM_STREAM_CHUNK_TIMEOUT": {
+        "label": "串流 Chunk 讀取逾時（秒）",
+        "description": "單一 SSE chunk 的 socket 讀取逾時。放寬可避免「本機 GPU 慢速生成 → 超過 60s 無新 chunk 就被斷線重試」；與 LLM_TIMEOUT 疊加時請留意總時長。",
+        "type": "float",
+        "min": 5.0,
+        "max": 600.0,
+        "step": 1.0,
+        "category": "LLM 參數",
+    },
+    "LLM_STREAM_INCLUDE_USAGE": {
+        "label": "串流附帶真實 usage",
+        "description": "開啟 (True) = 送出 stream_options.include_usage，讓日誌量到真實 prompt/completion tokens（可計算 tok/s）。部分引擎會忽略此欄位，無副作用。",
+        "type": "bool",
         "category": "LLM 參數",
     },
     # === 後端端點設定 ===
@@ -197,6 +237,18 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
     "OPENROUTER_BASE_URL": {
         "label": "OpenRouter API URL",
         "description": "OpenRouter OpenAI 相容端點 URL，預設為 https://openrouter.ai/api/v1。",
+        "type": "url",
+        "category": "後端連線設定",
+    },
+    "GROQ_BASE_URL": {
+        "label": "Groq API URL",
+        "description": "Groq OpenAI 相容端點 URL，預設為 https://api.groq.com/openai/v1。",
+        "type": "url",
+        "category": "後端連線設定",
+    },
+    "VLLM_BASE_URL": {
+        "label": "vLLM 伺服器 URL",
+        "description": "本機 vLLM OpenAI 相容端點 URL，預設為 http://localhost:8000/v1。",
         "type": "url",
         "category": "後端連線設定",
     },
@@ -273,18 +325,146 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "max": 30,
         "category": "記憶與上下文",
     },
-    "MEMORY_EXTRACT_MODEL": {
-        "label": "記憶萃取模型",
-        "description": "即時萃取（每 N 句觸發）使用的模型。建議與主力模型一致以確保萃取品質。格式：前綴:模型名。",
-        "type": "model",
-        "category": "記憶與上下文",
-    },
     "MEMORY_PERMANENT_FACT_THRESHOLD": {
         "label": "永久保留 importance 門檻",
         "description": "importance 達到或超過此值的 facts 永久保留，不受每日衰減與數量上限影響。預設 4。",
         "type": "int",
         "min": 3,
         "max": 5,
+        "category": "記憶與上下文",
+    },
+    # === 記憶檢索（R14） ===
+    "MEMORY_RETRIEVAL_W_BM25": {
+        "label": "檢索權重：關鍵字 BM25",
+        "description": "FTS5 關鍵字相關性在融合分數中的權重。權重會自動正規化，不需湊成 1。預設 0.55。",
+        "type": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "category": "記憶與上下文",
+    },
+    "MEMORY_RETRIEVAL_W_COS_SIM": {
+        "label": "檢索權重：語意相似度",
+        "description": "Ollama embedding cosine 相似度權重。尚未回填向量或 Ollama 離線時自動視為 0。預設 0.25。",
+        "type": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "category": "記憶與上下文",
+    },
+    "MEMORY_RETRIEVAL_W_RECENCY": {
+        "label": "檢索權重：時效",
+        "description": "越新的事實分數越高，依半衰期衰減。預設 0.15。",
+        "type": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "category": "記憶與上下文",
+    },
+    "MEMORY_RETRIEVAL_W_AFFINITY": {
+        "label": "檢索權重：關係親和度",
+        "description": "使用者與雪莉關係分數（user_relations.affinity，0–100 正規化）的權重。預設 0.10。",
+        "type": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "category": "記憶與上下文",
+    },
+    "MEMORY_RETRIEVAL_W_IMPORTANCE": {
+        "label": "檢索權重：重要性",
+        "description": "事實 importance（1–5）正規化後的權重。預設 0.20。",
+        "type": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "category": "記憶與上下文",
+    },
+    "MEMORY_RETRIEVAL_W_SOURCE_PRIORITY": {
+        "label": "檢索權重：來源優先序",
+        "description": "rule／identity／preference 等事實類別的優先序權重（規則類最高）。預設 0.10。",
+        "type": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "category": "記憶與上下文",
+    },
+    "MEMORY_RETRIEVAL_RECENCY_HALFLIFE_DAYS": {
+        "label": "時效分數半衰期（天）",
+        "description": "事實每經過這麼多天，時效分數減半。越小越偏好近期記憶。預設 30。",
+        "type": "float",
+        "min": 1.0,
+        "max": 365.0,
+        "category": "記憶與上下文",
+    },
+    "MEMORY_RETRIEVAL_MAX_TERMS": {
+        "label": "檢索關鍵字上限",
+        "description": "單次查詢最多解析幾個關鍵字，避免長句產生過多 OR 條件。預設 8。",
+        "type": "int",
+        "min": 1,
+        "max": 32,
+        "category": "記憶與上下文",
+    },
+    "MEMORY_RETRIEVAL_TAIL_FACTS": {
+        "label": "動態記憶尾段條數",
+        "description": "每次回覆前，依當前話題即時檢索並注入 Prompt 動態尾段的記憶條數。預設 4。",
+        "type": "int",
+        "min": 1,
+        "max": 10,
+        "category": "記憶與上下文",
+    },
+    # === 記憶向量化（R15） ===
+    "MEMORY_EMBEDDING_ENABLED": {
+        "label": "啟用記憶向量化",
+        "description": "以 Ollama embeddings 補算事實向量並加入語意檢索。關閉時完全降級為關鍵字檢索。",
+        "type": "bool",
+        "category": "記憶與上下文",
+    },
+    "MEMORY_EMBEDDING_MODEL": {
+        "label": "Embedding 模型",
+        "description": "Ollama 上的 embedding 模型名稱（需先 ollama pull，例如 nomic-embed-text）。",
+        "type": "str",
+        "category": "記憶與上下文",
+    },
+    "MEMORY_EMBEDDING_TIMEOUT": {
+        "label": "Embedding 逾時（秒）",
+        "description": "單次 Ollama embeddings 請求的逾時秒數。逾時會自動重試，最終失敗則本次降級關鍵字檢索。",
+        "type": "float",
+        "min": 1.0,
+        "max": 60.0,
+        "category": "記憶與上下文",
+    },
+    "MEMORY_EMBEDDING_MAX_RETRIES": {
+        "label": "Embedding 重試次數",
+        "description": "單筆向量化失敗後的指數退避重試次數。預設 2。",
+        "type": "int",
+        "min": 0,
+        "max": 5,
+        "category": "記憶與上下文",
+    },
+    "MEMORY_EMBEDDING_MAX_CONCURRENCY": {
+        "label": "Embedding 併發上限",
+        "description": "同時送出的 Ollama embeddings 請求上限，避免佔滿本機 GPU。預設 2。",
+        "type": "int",
+        "min": 1,
+        "max": 8,
+        "category": "記憶與上下文",
+    },
+    "MEMORY_EMBEDDING_BATCH_SIZE": {
+        "label": "Embedding 批次大小",
+        "description": "背景佇列每次處理的事實數。預設 8。",
+        "type": "int",
+        "min": 1,
+        "max": 32,
+        "category": "記憶與上下文",
+    },
+    "MEMORY_EMBEDDING_MIN_SIMILARITY": {
+        "label": "語意候選最低相似度",
+        "description": "cosine 相似度低於此門檻的事實不會進入融合排序，用於抑制語意誤召。預設 0.25。",
+        "type": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "category": "記憶與上下文",
+    },
+    "MEMORY_EMBEDDING_QUERY_CACHE_SIZE": {
+        "label": "查詢向量快取筆數",
+        "description": "最近查詢向量的 LRU 快取數量，供 Prompt 動態尾段重用，避免重複呼叫 Ollama。預設 128。",
+        "type": "int",
+        "min": 0,
+        "max": 1024,
         "category": "記憶與上下文",
     },
     # === 氛圍系統 ===
@@ -526,12 +706,6 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "max": 2000,
         "category": "深夜記憶整合",
     },
-    "NIGHTLY_DIGEST_MODEL": {
-        "label": "深夜記憶整合模型",
-        "description": "進行每日深夜對話記憶摘要與精煉的模型前綴與名稱。",
-        "type": "model",
-        "category": "深夜記憶整合",
-    },
     "NIGHTLY_DIGEST_TIMEOUT": {
         "label": "深夜整合逾時秒數",
         "description": "深夜記憶整合任務的最長執行等待秒數。",
@@ -629,6 +803,15 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "min": 600,
         "max": 86400,
         "category": "雪莉人設與心跳",
+    },
+    "HEARTBEAT_MAX_TASKS_PER_ROUND": {
+        "label": "心跳每輪最多處理任務數",
+        "description": "每次掃描 heartbeat.md 時最多處理的任務數量，避免任務過多時單輪卡住或一次灌爆佇列。",
+        "type": "int",
+        "min": 1,
+        "max": 100,
+        "category": "雪莉人設與心跳",
+        "restart_required": True,
     },
     # === 語音辨識與合成 (TTS/STT) ===
     "VOICE_STT_MODEL": {
@@ -916,6 +1099,15 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "max": 120,
         "category": "外部資訊檢索",
     },
+    "STOCK_MAX_CONCURRENT_FETCHES": {
+        "label": "股市資料抓取併發上限",
+        "description": "全域同時執行的 yfinance／matplotlib 抓取數量上限，避免多頻道同時查詢時塞滿背景執行器。",
+        "type": "int",
+        "min": 1,
+        "max": 10,
+        "category": "外部資訊檢索",
+        "restart_required": True,
+    },
     "YOUTUBE_SEARCH_API_URL": {
         "label": "YouTube 搜尋 API URL",
         "description": "Google YouTube v3 搜尋 API 端點。",
@@ -978,6 +1170,14 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
     "PRIORITY_DRAW": {
         "label": "二次元生圖與修圖優先權",
         "description": "繪圖與圖片描述推論優先級別。預設 80。",
+        "type": "int",
+        "min": 1,
+        "max": 100,
+        "category": "任務佇列優先級",
+    },
+    "PRIORITY_VISION_REACTION": {
+        "label": "主動看圖優先權 (Priority)",
+        "description": "群聊多模態看圖反應於 BotBrain 之優先級。預設 60（數字越小越優先）。",
         "type": "int",
         "min": 1,
         "max": 100,
@@ -1104,7 +1304,55 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
     "HEALTH_ALERT_USER_IDS": {
         "label": "系統警報 Discord 私訊 User ID 清單",
         "description": "當系統發生 ERROR 錯誤日誌或模型離線時，額外以 Discord 私訊推播警報的使用者 ID 列表（ADMIN_USER_IDS 管理員會自動包含在內）。",
-        "type": "list[int]",
+        "type": "list",
+        "item_type": "int",
+        "category": "健康監控",
+    },
+    "PERF_WATCH_ENABLED": {
+        "label": "推論效能衰退告警開關",
+        "description": "開啟後持續觀測 LLM 生成速度（tok/s），連續多個窗口低於門檻即發出效能衰退提醒。",
+        "type": "bool",
+        "category": "健康監控",
+    },
+    "PERF_WATCH_TOK_S_THRESHOLD": {
+        "label": "效能衰退門檻（tok/s）",
+        "description": "窗口平均生成速度低於此值視為效能衰退，需連續多個窗口成立才發告警。",
+        "type": "float",
+        "min": 0.1,
+        "max": 1000.0,
+        "step": 0.1,
+        "category": "健康監控",
+    },
+    "PERF_WATCH_WINDOW_SECONDS": {
+        "label": "效能觀測窗口（秒）",
+        "description": "每次統計生成速度的觀察窗口長度，預設 900 秒（15 分鐘）。",
+        "type": "int",
+        "min": 60,
+        "max": 86400,
+        "category": "健康監控",
+    },
+    "PERF_WATCH_MIN_SAMPLES": {
+        "label": "效能窗口最少樣本數",
+        "description": "一個窗口內至少累積多少筆生成紀錄，統計結果才被視為可信。",
+        "type": "int",
+        "min": 1,
+        "max": 1000,
+        "category": "健康監控",
+    },
+    "PERF_WATCH_CONSECUTIVE_WINDOWS": {
+        "label": "連續衰退窗口數門檻",
+        "description": "需連續多少個窗口低於門檻才觸發告警，避免單一偶發慢速誤報。",
+        "type": "int",
+        "min": 1,
+        "max": 60,
+        "category": "健康監控",
+    },
+    "PERF_WATCH_COOLDOWN_SECONDS": {
+        "label": "效能告警冷卻時間（秒）",
+        "description": "兩次效能衰退提醒之間的最短間隔，預設 21600 秒（6 小時）。",
+        "type": "int",
+        "min": 60,
+        "max": 2592000,
         "category": "健康監控",
     },
     "RATE_LIMIT_REPLY_MESSAGE": {
@@ -1130,6 +1378,12 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
     "WEB_UI_HTTPS": {
         "label": "Web UI 啟用 HTTPS 加密",
         "description": "是否啟用 SSL/TLS 證書提供加密 https:// 連線，強烈建議 ON。",
+        "type": "bool",
+        "category": "系統與網路",
+    },
+    "WEB_UI_LIVE2D_ENABLED": {
+        "label": "Web UI 啟用 Live 2D 看板娘",
+        "description": "是否在主 Web UI 顯示 Live 2D 看板娘；關閉後重新整理頁面即可停用模型、設定與動畫資源。",
         "type": "bool",
         "category": "系統與網路",
     },
@@ -1163,6 +1417,29 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "max": 1440,
         "category": "系統與網路",
     },
+    "PARALLEL_MAX_TASKS": {
+        "label": "並行任務拆解上限",
+        "description": "PARALLEL 調度模式下單次請求最多拆解的並行子任務數量，越高越快但越耗資源。",
+        "type": "int",
+        "min": 1,
+        "max": 32,
+        "category": "系統與網路",
+    },
+    "ROAST_REPLY_TIMEOUT": {
+        "label": "吐槽回覆逾時（秒）",
+        "description": "Roast 機制等待 LLM 生成吐槽回覆的最長秒數。",
+        "type": "float",
+        "min": 5.0,
+        "max": 600.0,
+        "step": 5.0,
+        "category": "系統與網路",
+    },
+    "CONTEXT_MENU_EPHEMERAL": {
+        "label": "右鍵選單改用私密回覆",
+        "description": "開啟 (True) = 右鍵訊息應用程式的回覆僅自己可見（私密）；關閉 (False) = 公開發布於頻道中。",
+        "type": "bool",
+        "category": "系統與網路",
+    },
     # === ReAct 推論與思考 ===
     "REACT_MAX_STEPS": {
         "label": "ReAct 最大推理步數",
@@ -1170,6 +1447,15 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "type": "int",
         "min": 1,
         "max": 30,
+        "category": "Chain-of-Thought",
+    },
+    "REACT_STEP_TIMEOUT": {
+        "label": "ReAct 單步逾時（秒）",
+        "description": "每一步「思考→行動」的最長等待秒數，需涵蓋 prefill 與多模態圖片處理時間。建議 60–180。",
+        "type": "float",
+        "min": 5.0,
+        "max": 600.0,
+        "step": 5.0,
         "category": "Chain-of-Thought",
     },
     "REACT_MAX_OBSERVATION_LENGTH": {
@@ -1273,6 +1559,64 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "category": "模組與排程",
         "restart_required": True,
         "min": 1,
+    },
+    "SPARK_CHECKER_TIMEOUT_SECONDS": {
+        "label": "Spark 單一檢查器逾時 (秒)",
+        "description": "單一觸發條件檢查（含外部 API）的逾時上限，避免卡死整輪巡檢。",
+        "type": "float",
+        "category": "模組與排程",
+        "restart_required": True,
+        "min": 1.0,
+    },
+    "SPARK_MAX_CONCURRENT_CHECKS": {
+        "label": "Spark 檢查器併發上限",
+        "description": "每輪巡檢同時執行的條件檢查數量上限，避免外部 API 突發流量。",
+        "type": "int",
+        "category": "模組與排程",
+        "restart_required": True,
+        "min": 1,
+    },
+    "SPARK_CHECK_CYCLE_TIMEOUT_SECONDS": {
+        "label": "Spark 單輪巡檢逾時 (秒)",
+        "description": "每輪巡檢的整體 deadline；逾時會取消剩餘檢查並寫入執行摘要。",
+        "type": "float",
+        "category": "模組與排程",
+        "restart_required": True,
+        "min": 1.0,
+    },
+    "SPARK_DAILY_CATCHUP_MINUTES": {
+        "label": "Spark 每日排程補跑窗 (分鐘)",
+        "description": "每日定時任務錯過目標時間後，仍允許補跑的時間窗；0 表示關閉。",
+        "type": "int",
+        "category": "模組與排程",
+        "restart_required": True,
+        "min": 0,
+    },
+    "SPARK_LEADER_LEASE_ENABLED": {
+        "label": "Spark 多實例 Leader 租約",
+        "description": "啟用後只有取得 SQLite 租約的實例會執行巡檢與推播，避免雙實例重複發送。",
+        "type": "bool",
+        "category": "模組與排程",
+        "restart_required": True,
+        "runtime_safe": True,
+    },
+    "SPARK_LEADER_LEASE_TTL_SECONDS": {
+        "label": "Spark Leader 租約 TTL (秒)",
+        "description": "leader 租約有效時間；持有者需在到期前續約。",
+        "type": "float",
+        "category": "模組與排程",
+        "restart_required": True,
+        "min": 5.0,
+        "runtime_safe": True,
+    },
+    "SPARK_LEADER_HEARTBEAT_SECONDS": {
+        "label": "Spark Leader 心跳 (秒)",
+        "description": "leader 租約續約與接手檢查的間隔。",
+        "type": "float",
+        "category": "模組與排程",
+        "restart_required": True,
+        "min": 2.0,
+        "runtime_safe": True,
     },
     "DEEP_SEARCH_DEFAULT_ROUNDS": {
         "label": "深度研究預設輪數",
@@ -1388,6 +1732,288 @@ SETTINGS_META: dict[str, dict[str, Any]] = {
         "min": 0,
         "step": 0.01,
     },
+    "BOT_BRAIN_MAX_TIMEOUT_RETRIES": {
+        "label": "推論逾時最大重試次數",
+        "description": "LLM 串流或請求逾時後允許自動退避重試的上限次數。",
+        "type": "int",
+        "category": "推論引擎",
+        "min": 0,
+        "max": 5,
+    },
+    "BOT_BRAIN_RETRY_MAX_DELAY": {
+        "label": "推論重試最大延遲 (秒)",
+        "description": "推論重試退避等待時間上限。",
+        "type": "float",
+        "category": "推論引擎",
+        "min": 1.0,
+        "max": 300.0,
+        "step": 1.0,
+    },
+    "BOT_BRAIN_CLOUD_MAX_CONCURRENCY": {
+        "label": "雲端模型全域併發上限",
+        "description": "全系統同時連線雲端 API（Gemini/OpenAI 等）的最大在途請求數。",
+        "type": "int",
+        "category": "推論引擎",
+        "min": 1,
+        "max": 32,
+    },
+    "BOT_BRAIN_CLOUD_PER_USER_CONCURRENCY": {
+        "label": "雲端模型單使用者併發上限",
+        "description": "單一使用者同時在途的雲端推論請求數上限，防止單人塞滿配額。",
+        "type": "int",
+        "category": "推論引擎",
+        "min": 1,
+        "max": 8,
+    },
+    "BOT_BRAIN_WORKER_MAX_FAILURES": {
+        "label": "Worker 連續失敗上限",
+        "description": "背景推論 Worker 連續遇到不可恢復錯誤達此上限時標記降級。",
+        "type": "int",
+        "category": "推論引擎",
+        "min": 1,
+        "max": 20,
+    },
+    "BOT_BRAIN_WORKER_BACKOFF_CAP": {
+        "label": "Worker 指數退避上限 (秒)",
+        "description": "Worker 發生錯誤後的指數退避等待上限。",
+        "type": "float",
+        "category": "推論引擎",
+        "min": 5.0,
+        "max": 300.0,
+        "step": 5.0,
+    },
+    "OBSERVABILITY_PII_REDACTION": {
+        "label": "日誌個資脫敏遮罩 (PII)",
+        "description": "是否在系統日誌與推論觀測記錄中自動遮蔽敏感個人資訊與金鑰。",
+        "type": "bool",
+        "category": "系統與紀錄",
+    },
+    "OBSERVABILITY_WRITE_QUEUE_MAXSIZE": {
+        "label": "觀測事件寫入佇列上限",
+        "description": "記憶體中觀測日誌非同步落盤佇列的最大容量。",
+        "type": "int",
+        "category": "系統與紀錄",
+        "min": 100,
+        "max": 100000,
+    },
+    "VOICE_TTS_DEVICE": {
+        "label": "語音合成運算裝置 (TTS)",
+        "description": "語音合成模組執行的計算設備（cpu / cuda）。",
+        "type": "str",
+        "category": "語音模組",
+        "options": ["cpu", "cuda"],
+        "restart_required": True,
+    },
+    "SPARK_MAX_TRIGGERS_PER_USER": {
+        "label": "Spark 每位使用者最大觸發器數",
+        "description": "單一使用者可建立的主動事件與推播規則上限。",
+        "type": "int",
+        "category": "模組與排程",
+        "min": 1,
+        "max": 100,
+    },
+    "SPARK_MAX_PUSHES_PER_DAY": {
+        "label": "Spark 每日全域推播上限",
+        "description": "防止主動推播事件過於頻繁打擾群組的全域每日推播總數上限。",
+        "type": "int",
+        "category": "模組與排程",
+        "min": 1,
+        "max": 500,
+    },
+    "SPARK_MAX_CONCURRENT_ACTIONS": {
+        "label": "Spark 動作最大併發執行數",
+        "description": "同時執行的主動觸發動作任務上限。",
+        "type": "int",
+        "category": "模組與排程",
+        "min": 1,
+        "max": 20,
+    },
+    "SPARK_ACTION_TIMEOUT_SECONDS": {
+        "label": "Spark 觸發動作執行逾時 (秒)",
+        "description": "主動觸發動作任務執行的整體逾時上限。",
+        "type": "float",
+        "category": "模組與排程",
+        "min": 10.0,
+        "max": 1800.0,
+        "step": 10.0,
+    },
+    "CARE_WEEKLY_LIMIT_PER_USER": {
+        "label": "主動關懷每人每週上限",
+        "description": "主動關懷引擎對單一使用者每週最多主動發送的問候次數。",
+        "type": "int",
+        "category": "認知與人設",
+        "min": 1,
+        "max": 20,
+    },
+    "CARE_DAILY_LIMIT_GLOBAL": {
+        "label": "主動關懷每日全域上限",
+        "description": "全系統每日觸發主動關懷問候的總次數上限。",
+        "type": "int",
+        "category": "認知與人設",
+        "min": 1,
+        "max": 100,
+    },
+    "CARE_MIN_AFFINITY": {
+        "label": "主動關懷最低好感度門檻",
+        "description": "使用者與雪莉的好感度需達到此門檻才會納入主動關懷對象。",
+        "type": "float",
+        "category": "認知與人設",
+        "min": 0.0,
+        "max": 100.0,
+        "step": 5.0,
+    },
+    "CARE_INACTIVE_DAYS": {
+        "label": "主動關懷失聯天數判定",
+        "description": "使用者未在頻道互動超過此天數時判定為失聯／需要關懷。",
+        "type": "float",
+        "category": "認知與人設",
+        "min": 1.0,
+        "max": 90.0,
+        "step": 1.0,
+    },
+    "CARE_ADAPTIVE_BUDGET_ENABLED": {
+        "label": "主動關懷自適應預算開關",
+        "description": "是否依據使用者過往是否已讀不回自動動態調整推播頻率。",
+        "type": "bool",
+        "category": "認知與人設",
+    },
+    "CARE_FEEDBACK_WINDOW_DAYS": {
+        "label": "主動關懷反饋觀察窗口 (天)",
+        "description": "評估使用者對關懷訊息反饋（回覆/沉默）的歷史天數視窗。",
+        "type": "float",
+        "category": "認知與人設",
+        "min": 7.0,
+        "max": 90.0,
+        "step": 1.0,
+    },
+    "CARE_MIN_FEEDBACK_SAMPLES": {
+        "label": "主動關懷最少反饋樣本數",
+        "description": "累積達到此關懷次數後才啟動降級與停推判定。",
+        "type": "int",
+        "category": "認知與人設",
+        "min": 1,
+        "max": 10,
+    },
+    "CARE_SILENCE_DOWNGRADE_THRESHOLD": {
+        "label": "主動關懷沉默降級比例",
+        "description": "已讀不回比例達到此閥值時，將關懷頻率減半。",
+        "type": "float",
+        "category": "認知與人設",
+        "min": 0.1,
+        "max": 1.0,
+        "step": 0.05,
+    },
+    "CARE_SILENCE_STOP_THRESHOLD": {
+        "label": "主動關懷沉默停推比例",
+        "description": "已讀不回比例達到此閥值時，完全暫停對該使用者的主動關懷。",
+        "type": "float",
+        "category": "認知與人設",
+        "min": 0.1,
+        "max": 1.0,
+        "step": 0.05,
+    },
+    "CARE_SILENCE_SETTLE_HOURS": {
+        "label": "主動關懷等待回覆沉澱時數",
+        "description": "發送關懷後等候使用者回覆的小時數，超時未回計為一次沉默。",
+        "type": "float",
+        "category": "認知與人設",
+        "min": 1.0,
+        "max": 168.0,
+        "step": 1.0,
+    },
+    "CARE_SURFER_ENABLED": {
+        "label": "網活仔衝浪主動發文開關",
+        "description": "是否允許雪莉在單一測試頻道主動閱讀網路資訊並發文分享。",
+        "type": "bool",
+        "category": "社群互動",
+    },
+    "CARE_SURFER_CHANNEL_ID": {
+        "label": "網活仔衝浪單一測試頻道 ID",
+        "description": "強制沙盒限制：雪莉主動衝浪發文與 @Tag 分享僅限在此頻道，絕不外溢。",
+        "type": "int",
+        "category": "社群互動",
+    },
+    "CARE_SURFER_INTERVAL_MINUTES": {
+        "label": "網活仔衝浪巡航間隔 (分鐘)",
+        "description": "雪莉每次出門衝浪看文章的間隔時間。",
+        "type": "int",
+        "category": "社群互動",
+        "min": 15,
+        "max": 1440,
+        "step": 15,
+    },
+    "CARE_SURFER_PORT": {
+        "label": "雪莉上網衝浪實況台 Port",
+        "description": "雪莉虛擬瀏覽器上網衝浪 SSE 實況台伺服器埠號（預設 8765）。",
+        "type": "int",
+        "category": "社群互動",
+        "restart_required": True,
+    },
+    "EMOTION_ENABLED": {
+        "label": "情緒引擎開關",
+        "description": "是否啟用雪莉的情緒波動與動態好感度影響機制。",
+        "type": "bool",
+        "category": "認知與人設",
+    },
+    "EMOTION_HALF_LIFE_HOURS": {
+        "label": "情緒半衰期 (小時)",
+        "description": "雪莉情緒強度（開心/難過/憤怒）自然回歸平靜的半衰期時長。",
+        "type": "float",
+        "category": "認知與人設",
+        "min": 0.5,
+        "max": 48.0,
+        "step": 0.5,
+    },
+    "PERSONA_GUARD_ENABLED": {
+        "label": "人設守門員開關 (PersonaGuard)",
+        "description": "是否在回覆送出前自動檢查雪莉語氣，防止客服腔與破人設。",
+        "type": "bool",
+        "category": "認知與人設",
+    },
+    "VISION_REACTION_ENABLED": {
+        "label": "看圖主動搭話開關 (VisionReaction)",
+        "description": "群友在頻道發圖片或截圖時，是否允許雪莉主動吐槽插話。",
+        "type": "bool",
+        "category": "社群互動",
+    },
+    "VISION_REACTION_DISABLED_CHANNELS": {
+        "label": "看圖搭話停用頻道",
+        "description": "在此列表中的 Discord 頻道 ID 將不會觸發主動視覺反應。",
+        "type": "list",
+        "item_type": "int",
+        "category": "社群互動",
+    },
+    "VISION_REACTION_COOLDOWN_SECONDS": {
+        "label": "看圖搭話頻道冷卻時間 (秒)",
+        "description": "同頻道兩次看圖搭話之間的最小冷卻間隔時間。",
+        "type": "float",
+        "category": "社群互動",
+        "min": 10.0,
+        "max": 3600.0,
+        "step": 10.0,
+    },
+    "VISION_MAX_IMAGES": {
+        "label": "單次視覺分析最大圖片數",
+        "description": "單則訊息最多擷取並送入視覺模型的圖片上限。預設 3（避免顯存溢出或超時）。",
+        "type": "int",
+        "min": 1,
+        "max": 10,
+        "category": "社群互動",
+    },
+    "VISION_MAX_FILE_BYTES": {
+        "label": "單張圖片大小上限 (Bytes)",
+        "description": "送入視覺模型單張圖片的最大檔案大小限制（預設 8388608 即 8MB）。",
+        "type": "int",
+        "min": 1048576,
+        "max": 52428800,
+        "category": "社群互動",
+    },
+    "STATE_RECOVERY_ENABLED": {
+        "label": "重啟後工作自癒接續 (State Recovery Enabled)",
+        "description": "總開關（預設開啟）。開啟 (True) = 重啟或熱重載後自動接續音樂播放進度、佇列與未完成之 AI 任務；關閉 (False) = 停用快照存檔與開機自癒恢復。",
+        "type": "bool",
+        "category": "系統維護",
+    },
 }
 
 
@@ -1397,6 +2023,32 @@ RESTART_REQUIRED_KEYS: frozenset[str] = frozenset({
     "WEB_UI_HTTPS",
     "WEB_UI_TRUSTED_PROXIES",
 })
+
+# R2（§5.1.2 A3）：白名單反轉專用——除 SETTINGS_META 登錄鍵外，允許經 update_setting
+# 走「管理路徑」寫入的額外鍵（Web UI POST 不開放，例如密碼僅能由 env/管理面板/CLI 設定）。
+_RUNTIME_SAFE_EXTRA_KEYS: frozenset[str] = frozenset({
+    "WEB_UI_PASSWORD",
+})
+
+
+def is_runtime_safe_key(key: str) -> bool:
+    """判定鍵是否允許執行期寫入（update_setting 用）。
+
+    規則：SETTINGS_META 成員且未標記 runtime_safe=False，或屬於額外管理鍵。
+    """
+    key_str = str(key)
+    meta = SETTINGS_META.get(key_str)
+    if meta is not None:
+        return bool(meta.get("runtime_safe", True))
+    return key_str in _RUNTIME_SAFE_EXTRA_KEYS
+
+
+def is_web_editable_key(key: str) -> bool:
+    """判定鍵是否允許由 Web UI 編輯（POST /api/settings 用）。
+
+    規則：必須登錄於 SETTINGS_META（完全白名單，不再依賴關鍵字黑名單）。
+    """
+    return str(key) in SETTINGS_META
 
 
 def _infer_list_item_type(values: list[Any], key: str, meta: dict[str, Any]) -> str:
@@ -1416,6 +2068,37 @@ def _infer_list_item_type(values: list[Any], key: str, meta: dict[str, Any]) -> 
     if "_IDS" in key:
         return "int"
     return "str"
+
+
+_SOUL_CONTENT_CACHE: dict[str, tuple[int, str]] = {}
+_SOUL_CONTENT_CACHE_LOCK = threading.Lock()
+
+
+def _read_soul_content_cached(path: Path) -> str:
+    """讀取人設檔內容並依 mtime_ns 快取（呼叫端負責在工作執行緒中執行）。
+
+    Args:
+        path: 人設檔路徑。
+
+    Returns:
+        str: 檔案內容；不存在或讀取失敗時回傳空字串。
+    """
+    try:
+        mtime_ns = path.stat().st_mtime_ns
+    except OSError:
+        return ""
+    cache_key = str(path)
+    with _SOUL_CONTENT_CACHE_LOCK:
+        cached = _SOUL_CONTENT_CACHE.get(cache_key)
+    if cached is not None and cached[0] == mtime_ns:
+        return cached[1]
+    try:
+        content = path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+    with _SOUL_CONTENT_CACHE_LOCK:
+        _SOUL_CONTENT_CACHE[cache_key] = (mtime_ns, content)
+    return content
 
 
 def get_editable_settings(source_dict: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1438,7 +2121,7 @@ def get_editable_settings(source_dict: dict[str, Any] | None = None) -> dict[str
         "LLM_MAX_CONTEXT_TOKENS",
         "CONTEXT_COMPRESS_TOKEN_THRESHOLD",
     }
-    _EXCLUDED_KEYS = ("LLM_MODEL_NAME", "CORE_PERSONA")
+    _EXCLUDED_KEYS = ("CORE_PERSONA",)
     _SCALAR_TYPES = (int, float, str, bool)
 
     for k, v in source_dict.items():
@@ -1446,16 +2129,19 @@ def get_editable_settings(source_dict: dict[str, Any] | None = None) -> dict[str
             continue
         if k not in _NON_SENSITIVE_WHITELIST and any(kw in k for kw in _SENSITIVE_KEYWORDS):
             continue
+        if k not in SETTINGS_META:
+            continue
 
         meta = SETTINGS_META.get(k, {})
         item_type: str | None = None
 
         if type(v) in _SCALAR_TYPES:
             entry_type = meta.get("type", type(v).__name__)
-            entry_value: Any = v
+            entry_value: Any = str(v) if isinstance(v, int) and (abs(v) > 9007199254740991 or k.endswith(("_ID", "_IDS"))) else v
         elif isinstance(v, list) and all(type(e) in _SCALAR_TYPES for e in v):
-            entry_type = meta.get("type", "list")
-            entry_value = list(v)
+            declared_type = str(meta.get("type", "list"))
+            entry_type = "list" if declared_type.startswith("list") else declared_type
+            entry_value = [str(e) if isinstance(e, int) else e for e in v]
             item_type = _infer_list_item_type(v, k, meta)
         else:
             continue
@@ -1491,10 +2177,7 @@ def get_editable_settings(source_dict: dict[str, Any] | None = None) -> dict[str
                 if fallback_target.exists():
                     target_file = fallback_target
             if target_file.exists():
-                try:
-                    entry["value"] = target_file.read_text(encoding="utf-8")
-                except Exception:
-                    entry["value"] = ""
+                entry["value"] = _read_soul_content_cached(target_file)
             else:
                 entry["value"] = ""
 

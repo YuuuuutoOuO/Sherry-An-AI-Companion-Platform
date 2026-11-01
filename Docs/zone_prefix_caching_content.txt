@@ -1,0 +1,24 @@
+TITLE:雪莉 (Sherry) — Zone 1 / Zone 2 前綴快取對齊架構技術文件
+SUB:Inference & Prefix Caching 架構剖析與履歷技術亮點說明
+H1:架構簡介與背景問題
+P:在傳統雙階段（Two-Pass）AI Agent 架構中，Pass-1 負責意圖規劃與 Tool Calling 決策，Pass-2 負責結合工具執行結果合成最終擬人人格回覆。傳統做法在 Pass-2 經常重新組裝或調整 System Prompt，導致 LLM 推理引擎無法重用 Pass-1 已計算好的 KV Cache，產生嚴重的重複 Prefill、高延遲與 GPU 算力浪費。
+P:雪莉在推理核心採用「Zone 1 / Zone 2 前綴快取對齊架構」，透過嚴格的 System Prompt 前綴位元組一致性，徹底解決 Pass-2 重複 Prefill 的問題，將 Pass-2 的首字輸出延遲（TTFT）大幅壓降至 200ms 以內。
+IMG:【圖片位置】可在此插入 Zone 1 / Zone 2 架構流程圖（Mermaid 流程圖已保留於對應 .md 文件）
+H1:四項核心技術亮點
+H2:1. Zone 1 / Zone 2 前綴與動態內容分離 (Prefix Caching Alignment)
+B:Zone 1 (靜態系統前綴)：包含 SOUL 角色核心定義、通用交互守則與精簡工具索引（Compact Tool Index），跨輪次保持 100% 位元組一致，最大化命中各大推理引擎（如 Ollama、vLLM、雲端 Prompt Caching）的快取機制。
+B:Zone 2 (動態情境)：採標準化順序（頻道氛圍 ➔ 歷史對話 ➔ 視覺線索 ➔ 當前發話者記憶 ➔ 世界觀事實 ➔ 時間戳記），緊貼生成點，完全不破壞前綴快取結構。
+H2:2. Pass-1 與 Pass-2 靜態前綴 100% 嚴格對齊
+B:Pass-1 與 Pass-2 共享 100% 位元組一致的 System Prompt。
+B:Pass-2 直接命中 Pass-1 剛建立快取的 5,500+ tokens，免除二次 Prefill，Pass-2 TTFT 延遲降至 < 200ms。
+H2:3. 記憶系統檢索加權 (Selective Top-K Scoring)
+B:捨棄盲目定額注入，引入 _calculate_query_relevance 與 _fact_rank_score = base_imp + (rel * 5.0) 演算法。
+B:精準提取與當前問題最相關之長期記憶與好感度狀態，避免長度浮動破壞快取。
+H2:4. 工具精簡與 Tier-1 TTL 快取
+B:將工具 Prompt 規則精簡約 900 tokens/turn，並保留完整負向約束。
+B:對股市與頻繁查詢加入 TTL 快取，以 asyncio.gather 並行調度工具，大幅縮短端到端整體響應延遲。
+H1:履歷與面試亮點整合建議 (STAR 範例)
+B:情境 (Situation)：雙階段 Agent 在工具呼叫後的第二輪對話（Pass-2）需重新送入大量 Context，造成龐大 Token 運算開銷與高達數秒的等待延遲。
+B:任務 (Task)：在不犧牲細膩人設與動態情境前提下，最大化利用現代 LLM 推理引擎的 Prompt/KV Cache 特性以降低延遲與運算成本。
+B:行動 (Action)：設計 Zone 1 靜態前綴與 Zone 2 動態情境分離架構；Pass-1 與 Pass-2 維持 100% 位元組對齊的 System Prompt，將工具執行結果只注入於 User Prompt 尾部；並精簡工具索引與加入加權記憶檢索。
+B:成果 (Result)：使 Pass-2 能夠命中 5,500+ tokens 的既有前綴快取，完全免除二次 Prefill，將 Pass-2 TTFT（首字延遲）壓低至 < 200ms。

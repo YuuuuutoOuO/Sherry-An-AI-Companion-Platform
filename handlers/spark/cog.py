@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import socket
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -16,13 +18,22 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+import settings
+from core.autonomy_guard import AutonomyGuard, global_autonomy_guard
+from core.leader_lease import LeaderLease
+from handlers.social.observability import (
+    current_trace_id,
+    log_event,
+    new_trace_id,
+)
+
 from .checkers import is_market_open
-from .clients import RssClient, StockClient, WeatherClient
+from .clients import RssClient, StockClient, WeatherClient, WebMonitorClient
 from .config import DEFAULT_CHECK_INTERVAL_MINUTES, DEFAULT_COOLDOWN_SECONDS
 from .models import Trigger
 from .nlp import parse_spark_context
 from .repository import SparkRepository
-from .service import SparkService, build_spark_service
+from .service import SparkQuotaExceeded, SparkService, build_spark_service
 
 logger = logging.getLogger(__name__)
 
@@ -46,25 +57,51 @@ def format_spark_time_display(time_val: str) -> str:
 def format_condition_preview(cond: dict[str, Any]) -> str:
     """格式化推播條件字典為易讀字串（含 UTC+8 標示）。"""
     mode = str(cond.get("mode") or "").lower().strip()
+    suffix = ""
+    if "max_runs" in cond:
+        suffix = f" (最多 {cond['max_runs']} 次)"
+
     if mode in ("once", "one_shot", "timestamp"):
         t = cond.get("target_time") or cond.get("trigger_time") or cond.get("time") or ""
-        return f"單次提醒: {format_spark_time_display(str(t))}"
+        return f"單次提醒: {format_spark_time_display(str(t))}{suffix}"
     elif mode in ("daily_time", "daily", "fixed_time"):
         t = cond.get("time", "08:00")
-        return f"每日定時: {t} (UTC+8)"
+        dow_desc = "每日"
+        dow = cond.get("days_of_week")
+        if dow == [0, 1, 2, 3, 4]:
+            dow_desc = "工作日"
+        elif dow == [5, 6]:
+            dow_desc = "週末"
+        elif isinstance(dow, list) and dow:
+            day_names = ["一", "二", "三", "四", "五", "六", "日"]
+            dow_desc = f"每週{'、'.join(day_names[d] for d in dow if 0 <= d <= 6)}"
+        return f"{dow_desc}定時: {t} (UTC+8){suffix}"
     elif mode in ("interval", "periodic"):
-        return f"循環間隔: 每 {cond.get('interval_minutes')} 分鐘"
+        return f"循環間隔: 每 {cond.get('interval_minutes')} 分鐘{suffix}"
     elif "ticker" in cond:
         target_p = cond.get("target_price", 0)
         direction = "高於" if cond.get("direction") in ("above", "cross_above", ">=", ">") else "低於"
-        return f"{cond.get('ticker')} {direction} ${target_p:,.2f}"
+        return f"{cond.get('ticker')} {direction} ${target_p:,.2f}{suffix}"
+    elif "feed_url" in cond:
+        return f"RSS 訂閱: {cond.get('feed_url')[:30]}..."
+    elif "query" in cond and ("ai_condition" in cond or "interval_minutes" in cond):
+        ai_c = f"（條件：{cond['ai_condition']}）" if cond.get("ai_condition") else ""
+        return f"智慧巡檢: 每 {cond.get('interval_minutes', 30)} 分鐘監測「{cond.get('query')}」{ai_c}{suffix}"
     else:
-        return ", ".join(f"{k}:{v}" for k, v in list(cond.items())[:2])
+        return ", ".join(f"{k}:{v}" for k, v in list(cond.items())[:2]) + suffix
 
 
 # ===========================================================================
 # 1. 彈出式輸入表單 (Discord Modals)
 # ===========================================================================
+
+async def _send_quota_error(
+    interaction: discord.Interaction,
+    exc: SparkQuotaExceeded,
+) -> None:
+    """以 ephemeral 訊息回報 Spark 配額超限（避免 Interaction 無回應）。"""
+    await interaction.response.send_message(f"⚠️ **Spark 配額已滿**：{exc}", ephemeral=True)
+
 
 class PriceTriggerModal(discord.ui.Modal, title="💰 新增/編輯價格監控警報"):
     """價格監控警報表單。"""
@@ -142,14 +179,18 @@ class PriceTriggerModal(discord.ui.Modal, title="💰 新增/編輯價格監控�
         if self.trigger_id_to_replace:
             self.service.delete_trigger(self.trigger_id_to_replace)
 
-        trigger = self.service.create_trigger(
-            user_id=interaction.user.id,
-            channel_id=interaction.channel_id or 0,
-            trigger_type="price",
-            condition=condition,
-            message=self.message_input.value.strip(),
-            cooldown_seconds=DEFAULT_COOLDOWN_SECONDS,
-        )
+        try:
+            trigger = self.service.create_trigger(
+                user_id=interaction.user.id,
+                channel_id=interaction.channel_id or 0,
+                trigger_type="price",
+                condition=condition,
+                message=self.message_input.value.strip(),
+                cooldown_seconds=DEFAULT_COOLDOWN_SECONDS,
+            )
+        except SparkQuotaExceeded as exc:
+            await _send_quota_error(interaction, exc)
+            return
 
         act_text = "更新" if self.trigger_id_to_replace else "建立"
         await interaction.response.send_message(
@@ -224,14 +265,18 @@ class ScheduleTriggerModal(discord.ui.Modal, title="⏰ 新增/編輯定時推�
         if self.trigger_id_to_replace:
             self.service.delete_trigger(self.trigger_id_to_replace)
 
-        trigger = self.service.create_trigger(
-            user_id=interaction.user.id,
-            channel_id=interaction.channel_id or 0,
-            trigger_type="schedule",
-            condition=condition,
-            message=self.message_input.value.strip(),
-            cooldown_seconds=60,
-        )
+        try:
+            trigger = self.service.create_trigger(
+                user_id=interaction.user.id,
+                channel_id=interaction.channel_id or 0,
+                trigger_type="schedule",
+                condition=condition,
+                message=self.message_input.value.strip(),
+                cooldown_seconds=60,
+            )
+        except SparkQuotaExceeded as exc:
+            await _send_quota_error(interaction, exc)
+            return
 
         act_text = "更新" if self.trigger_id_to_replace else "建立"
         await interaction.response.send_message(
@@ -297,14 +342,18 @@ class RssTriggerModal(discord.ui.Modal, title="📰 新增/編輯 RSS / YouTube 
         if self.trigger_id_to_replace:
             self.service.delete_trigger(self.trigger_id_to_replace)
 
-        trigger = self.service.create_trigger(
-            user_id=interaction.user.id,
-            channel_id=interaction.channel_id or 0,
-            trigger_type="rss",
-            condition=condition,
-            message=self.message_input.value.strip(),
-            cooldown_seconds=300,
-        )
+        try:
+            trigger = self.service.create_trigger(
+                user_id=interaction.user.id,
+                channel_id=interaction.channel_id or 0,
+                trigger_type="rss",
+                condition=condition,
+                message=self.message_input.value.strip(),
+                cooldown_seconds=300,
+            )
+        except SparkQuotaExceeded as exc:
+            await _send_quota_error(interaction, exc)
+            return
 
         act_text = "更新" if self.trigger_id_to_replace else "建立"
         await interaction.response.send_message(
@@ -374,18 +423,22 @@ class WeatherTriggerModal(discord.ui.Modal, title="🌤️ 新增/編輯即時�
             try:
                 condition["threshold"] = float(thresh_val)
             except ValueError:
-                pass
+                logger.debug("[Spark] 天氣閾值無法解析為數字: %s", thresh_val, exc_info=True)
 
         if self.trigger_id_to_replace:
             self.service.delete_trigger(self.trigger_id_to_replace)
 
-        trigger = self.service.create_trigger(
-            user_id=interaction.user.id,
-            channel_id=interaction.channel_id or 0,
-            trigger_type="weather",
-            condition=condition,
-            cooldown_seconds=DEFAULT_COOLDOWN_SECONDS,
-        )
+        try:
+            trigger = self.service.create_trigger(
+                user_id=interaction.user.id,
+                channel_id=interaction.channel_id or 0,
+                trigger_type="weather",
+                condition=condition,
+                cooldown_seconds=DEFAULT_COOLDOWN_SECONDS,
+            )
+        except SparkQuotaExceeded as exc:
+            await _send_quota_error(interaction, exc)
+            return
 
         act_text = "更新" if self.trigger_id_to_replace else "建立"
         await interaction.response.send_message(
@@ -448,9 +501,22 @@ class SparkConfirmView(discord.ui.View):
             cond_desc_lines.append("• **觸發模式**: 單次達標後自動完成 (One-shot)")
         elif ttype == "schedule":
             mode = cond.get("mode", "interval")
-            cond_desc_lines.append("• **類型**: ⏰ 定時排程推播任務")
+            max_r = cond.get("max_runs")
+            max_r_str = f"（最多執行 {max_r} 次）" if max_r else ""
+            cond_desc_lines.append(f"• **類型**: ⏰ 定時排程推播任務 {max_r_str}".strip())
+
+            dow = cond.get("days_of_week")
+            dow_desc = ""
+            if dow == [0, 1, 2, 3, 4]:
+                dow_desc = "【工作日】"
+            elif dow == [5, 6]:
+                dow_desc = "【週末】"
+            elif isinstance(dow, list) and dow:
+                day_names = ["一", "二", "三", "四", "五", "六", "日"]
+                dow_desc = f"【每週{'、'.join(day_names[d] for d in dow if 0 <= d <= 6)}】"
+
             if mode == "interval":
-                cond_desc_lines.append(f"• **排程模式**: `循環間隔`（每 `{cond.get('interval_minutes')}` 分鐘）")
+                cond_desc_lines.append(f"• **排程模式**: `循環間隔`（{dow_desc}每 `{cond.get('interval_minutes')}` 分鐘）")
             elif mode in ("once", "one_shot", "timestamp"):
                 t_raw = cond.get("target_time") or cond.get("time") or ""
                 formatted_time = format_spark_time_display(str(t_raw))
@@ -458,7 +524,14 @@ class SparkConfirmView(discord.ui.View):
                 cond_desc_lines.append("• **生命週期**: 到期觸發後自動封存結案 (One-shot)")
             else:
                 daily_t = cond.get("time", "08:00")
-                cond_desc_lines.append(f"• **排程模式**: `每日定時`（每日 `{daily_t}` UTC+8）")
+                cond_desc_lines.append(f"• **排程模式**: `每日定時`（{dow_desc}每日 `{daily_t}` UTC+8）")
+        elif ttype == "web_monitor":
+            cond_desc_lines.append("• **類型**: 🔎 智慧網頁巡檢守門員")
+            cond_desc_lines.append(f"• **監控目標**: `{cond.get('query', '最新消息')}`")
+            cond_desc_lines.append(f"• **巡檢頻率**: 每 `{cond.get('interval_minutes', 30)}` 分鐘主動檢索")
+            if cond.get("ai_condition"):
+                cond_desc_lines.append(f"• **AI 語意條件**: `{cond.get('ai_condition')}`")
+            cond_desc_lines.append("• **去重防擾**: SHA-256 內容指紋比對（零重複洗版）")
         elif ttype == "weather":
             cond_desc_lines.append("• **類型**: 🌤️ 即時天氣預警")
             cond_desc_lines.append(f"• **城市**: `{cond.get('city')}`")
@@ -478,11 +551,18 @@ class SparkConfirmView(discord.ui.View):
             topic = action.get("payload", {}).get("topic") or self.candidate.get("message") or "未指定"
             cond_desc_lines.append("• **觸發動作**: 🔬 【特權模組】多輪自主深度研究")
             cond_desc_lines.append(f"• **研究主題**: `{topic}`")
+        elif action_type == "agent_prompt":
+            prompt = action.get("payload", {}).get("prompt") or self.candidate.get("message") or "未指定"
+            cond_desc_lines.append("• **觸發動作**: 🤖 【自主代理】`AGENT_PROMPT` (多工具自主調度)")
+            cond_desc_lines.append(f"• **任務指令**: `{prompt}`")
         elif action_type == "core_tool":
-            target = str(action.get("target") or "TOOL").upper().strip()
+            from handlers.social.tool_specs import resolve_tool_name
+            target = resolve_tool_name(str(action.get("target") or "TOOL").upper().strip())
             query = action.get("payload", {}).get("query") or self.candidate.get("message") or ""
             if target == "CHAT":
                 cond_desc_lines.append("• **觸發動作**: 💬 【名偵探對話】`CHAT` (動態人設發話)")
+            elif target == "SEARCH":
+                cond_desc_lines.append("• **觸發動作**: 🛠️ 【核心工具】`SEARCH` (強制即時聯網檢索)")
             else:
                 cond_desc_lines.append(f"• **觸發動作**: 🛠️ 【核心工具】`{target}`")
             if query:
@@ -505,15 +585,19 @@ class SparkConfirmView(discord.ui.View):
     @discord.ui.button(label="✅ 確認建立", style=discord.ButtonStyle.success)
     async def btn_confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """確認建立推播任務。"""
-        trigger = self.service.create_trigger(
-            user_id=self.candidate["user_id"],
-            channel_id=self.candidate["channel_id"],
-            trigger_type=self.candidate["trigger_type"],
-            condition=self.candidate["condition"],
-            message=self.candidate.get("message", ""),
-            cooldown_seconds=self.candidate.get("cooldown_seconds", 3600),
-            action=self.candidate.get("action", {}),
-        )
+        try:
+            trigger = self.service.create_trigger(
+                user_id=self.candidate["user_id"],
+                channel_id=self.candidate["channel_id"],
+                trigger_type=self.candidate["trigger_type"],
+                condition=self.candidate["condition"],
+                message=self.candidate.get("message", ""),
+                cooldown_seconds=self.candidate.get("cooldown_seconds", 3600),
+                action=self.candidate.get("action", {}),
+            )
+        except SparkQuotaExceeded as exc:
+            await _send_quota_error(interaction, exc)
+            return
         for child in self.children:
             child.disabled = True  # type: ignore[attr-defined]
 
@@ -840,7 +924,7 @@ class SparkMainView(discord.ui.View):
             return
 
         await interaction.response.defer(ephemeral=True)
-        result, _ = await self.service.check_trigger(trigger)
+        result, _ = await self.service.check_trigger(trigger, dry_run=True)
         icon = "✅" if result.should_fire else "❌"
         await interaction.followup.send(
             f"🔍 **觸發器測試成果** (`{trigger.trigger_id[:8]}`):\n"
@@ -889,7 +973,9 @@ class _DummyAuthor:
                 if user:
                     display_name = user.display_name
             except Exception:
-                pass
+                logger.debug(
+                    "[Spark] 取得使用者顯示名稱失敗（user_id=%s）", user_id, exc_info=True
+                )
         self.display_name = display_name
         self.name = display_name
         self.mention = f"<@{user_id}>" if user_id else "@Spark"
@@ -899,31 +985,190 @@ class _DummyAuthor:
 class SparkChannelContext:
     """提供給 Core Tool 執行的通道上下文，模擬 discord.Message 以便工具直接發送。"""
 
-    def __init__(self, channel: Any, user_id: int = 0, bot: Any = None) -> None:
+    def __init__(
+        self,
+        channel: Any,
+        user_id: int = 0,
+        bot: Any = None,
+        follow_up_view: discord.ui.View | None = None,
+    ) -> None:
         self.channel = channel
         self.author = _DummyAuthor(user_id=user_id, bot=bot)
         self.id = int(time.time() * 1000)
         self.clean_content = ""
+        self.content = ""
         self.guild = getattr(channel, "guild", None)
         self.reference = None
+        self.follow_up_view = follow_up_view
+        self._has_mentioned = False
 
     async def reply(self, *args: Any, **kwargs: Any) -> Any:
-        """轉導 reply 至 channel.send。"""
+        """轉導 reply 至 channel.send，並主動 @Tag 委託人與掛載互動按鈕。"""
         kwargs.pop("mention_author", None)
+        new_args = list(args)
+        content = kwargs.get("content")
+
+        if new_args:
+            first_arg = new_args[0]
+            if isinstance(first_arg, str) and self.author.id and not self._has_mentioned:
+                mention = f"<@{self.author.id}>"
+                if mention not in first_arg:
+                    first_arg = f"{mention} {first_arg}"
+                self._has_mentioned = True
+                new_args[0] = first_arg
+        elif content is not None:
+            if self.author.id and not self._has_mentioned:
+                mention = f"<@{self.author.id}>"
+                if mention not in str(content):
+                    content = f"{mention} {content}"
+                self._has_mentioned = True
+                kwargs["content"] = content
+        elif self.author.id and not self._has_mentioned:
+            kwargs["content"] = f"<@{self.author.id}>"
+            self._has_mentioned = True
+
+        kwargs.setdefault("allowed_mentions", discord.AllowedMentions(users=True))
+        if self.follow_up_view and "view" not in kwargs:
+            kwargs["view"] = self.follow_up_view
+            self.follow_up_view = None
+
         if hasattr(self.channel, "send"):
-            return await self.channel.send(*args, **kwargs)
+            return await self.channel.send(*new_args, **kwargs)
         return None
+
+    send = reply
 
     async def add_reaction(self, emoji: str) -> None:
         """忽略反應添加。"""
         pass
 
 
+class SparkFollowUpView(discord.ui.View):
+    """推播觸發後的互動延伸按鈕 View（提供貪睡10分鐘、轉深度研究與停用排程）。"""
+
+    def __init__(
+        self,
+        bot: commands.Bot,
+        trigger: Trigger,
+        service: Optional[SparkService] = None,
+        timeout: float = 300.0,
+    ) -> None:
+        super().__init__(timeout=timeout)
+        self.bot = bot
+        self.trigger = trigger
+        self.service = service
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self.trigger.user_id and interaction.user.id != self.trigger.user_id:
+            await interaction.response.send_message("⚠️ 只有設定此推播排程的委託人才能操作此按鈕喔！", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="💤 延後 10 分鐘", style=discord.ButtonStyle.secondary)
+    async def btn_snooze(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """一鍵以原動作與訊息建立一個 10 分鐘後的單次 (once) 排程。"""
+        if not self.service:
+            await interaction.response.send_message("❌ 服務未初始化，無法延後。", ephemeral=True)
+            return
+
+        now_utc = datetime.now(timezone.utc)
+        target_time = (now_utc + timedelta(minutes=10)).astimezone(TAIPEI_TZ).isoformat()
+        new_cond = {"mode": "once", "target_time": target_time, "tz_offset": 8}
+
+        try:
+            new_trig = self.service.create_trigger(
+                user_id=self.trigger.user_id,
+                channel_id=self.trigger.channel_id,
+                trigger_type="schedule",
+                condition=new_cond,
+                message=self.trigger.message,
+                cooldown_seconds=60,
+                action=self.trigger.action,
+            )
+        except SparkQuotaExceeded as exc:
+            await _send_quota_error(interaction, exc)
+            return
+        button.disabled = True
+        try:
+            if interaction.message:
+                await interaction.message.edit(view=self)
+        except Exception:
+            logger.debug("[Spark] 更新延後提醒按鈕狀態失敗", exc_info=True)
+        await interaction.response.send_message(
+            f"💤 已成功為您延後 10 分鐘！新的單次提醒任務 ID 為 `{new_trig.trigger_id[:8]}`～",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="🔬 轉深度研究", style=discord.ButtonStyle.primary)
+    async def btn_deep_search(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """針對本次主題一鍵啟動 DeepSearch 多輪自主研究。"""
+        payload = self.trigger.action.get("payload", {}) if isinstance(self.trigger.action, dict) else {}
+        topic = (
+            payload.get("query")
+            or payload.get("topic")
+            or payload.get("prompt")
+            or self.trigger.message
+            or "最新情報研究"
+        )
+        deep_search_cog: Any = getattr(self.bot, "_deep_search_cog", None) or self.bot.get_cog("DeepSearch")
+        if not deep_search_cog:
+            await interaction.response.send_message("⚠️ DeepSearch 模組未載入，無法啟動深度研究。", ephemeral=True)
+            return
+
+        button.disabled = True
+        try:
+            if interaction.message:
+                await interaction.message.edit(view=self)
+        except Exception:
+            logger.debug("[Spark] 更新深度研究按鈕狀態失敗", exc_info=True)
+        await interaction.response.defer(ephemeral=True)
+        runner = SparkActionRunner(self.bot, service=self.service)
+        deep_action = {
+            "action_type": "mod_deep_search",
+            "payload": {"topic": topic, "rounds": 3},
+        }
+        await runner._run_deep_search(self.trigger, interaction.channel, deep_action)
+        try:
+            await interaction.followup.send(f"🔬 已針對主題「`{topic}`」啟動多輪自主深度研究！", ephemeral=True)
+        except Exception:
+            logger.debug("[Spark] 發送深度研究啟動提示失敗", exc_info=True)
+
+    @discord.ui.button(label="⏹️ 停用此排程", style=discord.ButtonStyle.danger)
+    async def btn_stop(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """針對週期性任務一鍵切換為暫停/停用。"""
+        if not self.service:
+            await interaction.response.send_message("❌ 服務未初始化，無法停用。", ephemeral=True)
+            return
+
+        trig = self.service.get_trigger(self.trigger.trigger_id)
+        if not trig:
+            await interaction.response.send_message("❌ 找不到該排程任務。", ephemeral=True)
+            return
+
+        if trig.is_active:
+            self.service.toggle_trigger(trig.trigger_id)
+
+        for child in self.children:
+            child.disabled = True  # type: ignore[attr-defined]
+
+        try:
+            if interaction.message:
+                await interaction.message.edit(view=self)
+        except Exception:
+            logger.debug("[Spark] 更新停用排程按鈕狀態失敗", exc_info=True)
+
+        await interaction.response.send_message(
+            f"⏹️ 已成功為您停用此排程任務 `[{trig.trigger_type.upper()}]` `{trig.trigger_id[:8]}`！",
+            ephemeral=True,
+        )
+
+
 class SparkActionRunner:
     """Spark 觸發動作執行分發器。"""
 
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: commands.Bot, service: Optional[SparkService] = None) -> None:
         self.bot = bot
+        self.service = service
 
     async def run_action(self, trigger: Trigger, content: str) -> bool:
         """根據 Trigger 設定執行對應動作。
@@ -950,7 +1195,6 @@ class SparkActionRunner:
         if not raw_type and trigger.message:
             from handlers.spark.nlp import detect_action_from_message_fallback
             inferred = detect_action_from_message_fallback(trigger.message)
-            # 只有當推導出明確的核心工具（PIXIV, DRAW, STOCK, WEATHER, MUSIC）或深度研究時才覆蓋，避免純文字備忘被誤判
             if inferred.get("action_type") == "core_tool" and inferred.get("target") != "CHAT":
                 logger.info(
                     "[SparkActionRunner] 歷史任務缺漏 Action 自動相容推導: %s -> %s (%s)",
@@ -960,7 +1204,7 @@ class SparkActionRunner:
                 )
                 action_dict = inferred
                 raw_type = inferred["action_type"]
-            elif inferred.get("action_type") == "mod_deep_search":
+            elif inferred.get("action_type") in ("mod_deep_search", "agent_prompt"):
                 action_dict = inferred
                 raw_type = inferred["action_type"]
 
@@ -975,6 +1219,8 @@ class SparkActionRunner:
 
         if act_type in ("mod_deep_search", "deep_search"):
             return await self._run_deep_search(trigger, channel, action_dict)
+        elif act_type in ("agent_prompt", "agent"):
+            return await self._run_agent_prompt(trigger, channel, action_dict, content)
         elif act_type in ("core_tool", "tool"):
             return await self._run_core_tool(trigger, channel, action_dict, content)
         else:
@@ -1015,10 +1261,17 @@ class SparkActionRunner:
         if trigger.message:
             embed.add_field(name="💬 備忘/訊息", value=trigger.message, inline=False)
 
-        embed.set_footer(text=f"Trigger ID: {trigger.trigger_id[:8]} | 委託人: <@{trigger.user_id}>")
+        embed.set_footer(text=f"Trigger ID: {trigger.trigger_id[:8]}")
+
+        view = SparkFollowUpView(self.bot, trigger, self.service) if getattr(self, "service", None) else None
 
         try:
-            await channel.send(embed=embed)
+            await channel.send(
+                content=f"<@{trigger.user_id}>",
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions(users=True),
+                view=view,
+            )
             return True
         except Exception as exc:
             logger.error("[SparkActionRunner] 發送推播 Embed 失敗 (%s): %s", trigger.trigger_id, exc)
@@ -1031,13 +1284,15 @@ class SparkActionRunner:
         action_dict: dict[str, Any],
         trigger_summary: str,
     ) -> bool:
-        """調用核心日常工具 (如 PIXIV, STOCK, WEATHER, DRAW, CHAT, MUSIC)。"""
-        target_tool_name = str(action_dict.get("target") or "").upper().strip()
+        """調用核心日常工具 (如 PIXIV, STOCK, SEARCH, DRAW, CHAT, MUSIC)。"""
+        raw_target_name = str(action_dict.get("target") or "").upper().strip()
+        from handlers.social.tool_specs import resolve_tool_name
+        target_tool_name = resolve_tool_name(raw_target_name)
         payload = action_dict.get("payload") or {}
         query = str(payload.get("query") or trigger.message or "").strip()
 
-        # 若非 CHAT 對話，發送定時調度提示橫幅；若為 CHAT 則免去橫幅，讓名偵探自然發話！
-        if target_tool_name != "CHAT":
+        # 若非 CHAT/SEARCH 對話，發送定時調度提示橫幅；若為 CHAT/SEARCH 則免去橫幅，讓名偵探自然發話！
+        if target_tool_name not in ("CHAT", "SEARCH"):
             try:
                 intro_embed = discord.Embed(
                     title=f"📡 Spark 定時調度：發動核心工具【{target_tool_name}】",
@@ -1046,9 +1301,17 @@ class SparkActionRunner:
                     timestamp=datetime.now(timezone.utc),
                 )
                 intro_embed.set_footer(text=f"Trigger ID: {trigger.trigger_id[:8]}")
-                await channel.send(embed=intro_embed)
+                await channel.send(
+                    content=f"<@{trigger.user_id}>",
+                    embed=intro_embed,
+                    allowed_mentions=discord.AllowedMentions(users=True),
+                )
             except Exception:
-                pass
+                logger.debug(
+                    "[SparkActionRunner] 發送核心工具啟動訊息失敗（trigger=%s）",
+                    trigger.trigger_id[:8],
+                    exc_info=True,
+                )
 
         from handlers.social.registry import TOOL_LIST
 
@@ -1060,23 +1323,89 @@ class SparkActionRunner:
 
         if not target_tool:
             logger.error("[SparkActionRunner] 找不到指定核心工具: %s", target_tool_name)
-            await channel.send(f"⚠️ Spark 執行失敗：找不到核心工具 `{target_tool_name}`")
+            await channel.send(f"<@{trigger.user_id}> ⚠️ Spark 執行失敗：找不到核心工具 `{target_tool_name}`")
             return False
 
-        ctx_msg = SparkChannelContext(channel=channel, user_id=trigger.user_id, bot=self.bot)
+        view = SparkFollowUpView(self.bot, trigger, self.service) if getattr(self, "service", None) else None
+        ctx_msg = SparkChannelContext(channel=channel, user_id=trigger.user_id, bot=self.bot, follow_up_view=view)
         try:
-            res = await target_tool.execute(
-                bot=self.bot,
-                message=ctx_msg,  # type: ignore[arg-type]
-                user_query=query,
-                vibe_snippet="",
-                full_context=f"Spark 定時自動觸發工具 {target_tool_name}，查詢為：{query}",
-            )
+            kwargs: dict[str, Any] = {
+                "bot": self.bot,
+                "message": ctx_msg,
+                "user_query": query,
+                "vibe_snippet": "",
+                "full_context": f"Spark 定時自動觸發工具 {target_tool_name}，查詢為：{query}",
+            }
+            if payload.get("force_search") or target_tool_name == "SEARCH":
+                kwargs["force_search"] = True
+            prev_mem = trigger.extra_data.get("last_output_summary", "") if isinstance(trigger.extra_data, dict) else ""
+            if prev_mem:
+                kwargs["spark_previous_memory"] = prev_mem
+
+            res = await target_tool.execute(**kwargs)
             logger.info("[SparkActionRunner] 核心工具 %s 執行完成: %s", target_tool_name, res)
+
+            # 更新跨輪記憶
+            summary = ""
+            if isinstance(res, str):
+                summary = res
+            elif hasattr(res, "content") and res.content:
+                summary = str(res.content)
+            if summary and getattr(self, "service", None):
+                self.service.update_trigger_memory(trigger.trigger_id, summary)
+
             return True
         except Exception as exc:
             logger.error("[SparkActionRunner] 執行核心工具 %s 異常: %s", target_tool_name, exc, exc_info=True)
-            await channel.send(f"❌ Spark 執行核心工具 `{target_tool_name}` 發生異常：{exc}")
+            await channel.send(f"<@{trigger.user_id}> ❌ Spark 執行核心工具 `{target_tool_name}` 發生異常：{exc}")
+            return False
+
+    async def _run_agent_prompt(
+        self,
+        trigger: Trigger,
+        channel: Any,
+        action_dict: dict[str, Any],
+        trigger_summary: str,
+    ) -> bool:
+        """調用 Agentic Spark 多工具自主調度 (IntegratedStrategy)。"""
+        payload = action_dict.get("payload") or {}
+        prompt = str(payload.get("prompt") or trigger.message or "").strip()
+        if not prompt:
+            prompt = trigger_summary
+
+        view = SparkFollowUpView(self.bot, trigger, self.service) if getattr(self, "service", None) else None
+        ctx_msg = SparkChannelContext(channel=channel, user_id=trigger.user_id, bot=self.bot, follow_up_view=view)
+        ctx_msg.clean_content = prompt
+
+        from handlers.social.registry import TOOL_LIST
+        from handlers.social.dispatch_agent import DispatchAgentTool
+
+        dispatch_agent = DispatchAgentTool(TOOL_LIST, mode="INTEGRATED")
+        try:
+            kwargs: dict[str, Any] = {
+                "bot": self.bot,
+                "message": ctx_msg,
+                "user_query": prompt,
+                "vibe_snippet": "",
+                "full_context": f"Spark 定時自主代理任務：{prompt}",
+            }
+            prev_mem = trigger.extra_data.get("last_output_summary", "") if isinstance(trigger.extra_data, dict) else ""
+            if prev_mem:
+                kwargs["spark_previous_memory"] = prev_mem
+
+            res = await dispatch_agent.execute(**kwargs)
+            summary = ""
+            if isinstance(res, str):
+                summary = res
+            elif hasattr(res, "content") and res.content:
+                summary = str(res.content)
+            if summary and getattr(self, "service", None):
+                self.service.update_trigger_memory(trigger.trigger_id, summary)
+
+            return True
+        except Exception as exc:
+            logger.error("[SparkActionRunner] 執行 Agent Prompt 異常: %s", exc, exc_info=True)
+            await channel.send(f"<@{trigger.user_id}> ❌ Spark 執行自主代理任務發生異常：{exc}")
             return False
 
     async def _run_deep_search(
@@ -1093,13 +1422,13 @@ class SparkActionRunner:
 
         if not topic:
             logger.warning("[SparkActionRunner] 深度研究缺少主題 topic")
-            await channel.send("⚠️ Spark 深度研究觸發失敗：未指定研究主題！")
+            await channel.send(f"<@{trigger.user_id}> ⚠️ Spark 深度研究觸發失敗：未指定研究主題！")
             return False
 
         deep_search_cog: Any = getattr(self.bot, "_deep_search_cog", None) or self.bot.get_cog("DeepSearch")
         if not deep_search_cog:
             logger.error("[SparkActionRunner] DeepSearchCog 未掛載，無法發動深度研究")
-            await channel.send("⚠️ Spark 深度研究觸發失敗：系統未載入 DeepSearch 模組！")
+            await channel.send(f"<@{trigger.user_id}> ⚠️ Spark 深度研究觸發失敗：系統未載入 DeepSearch 模組！")
             return False
 
         session_id = f"spark-{trigger.trigger_id[:8]}-{int(time.time())}"
@@ -1114,18 +1443,27 @@ class SparkActionRunner:
             color=discord.Color.purple(),
             timestamp=datetime.now(timezone.utc),
         )
-        start_embed.set_footer(text=f"Trigger ID: {trigger.trigger_id[:8]} | 委託人: <@{trigger.user_id}>")
+        start_embed.set_footer(text=f"Trigger ID: {trigger.trigger_id[:8]}")
 
+        view = SparkFollowUpView(self.bot, trigger, self.service) if getattr(self, "service", None) else None
         initial_msg = None
         try:
-            initial_msg = await channel.send(embed=start_embed)
+            initial_msg = await channel.send(
+                content=f"<@{trigger.user_id}>",
+                embed=start_embed,
+                allowed_mentions=discord.AllowedMentions(users=True),
+                view=view,
+            )
         except Exception as exc:
             logger.warning("[SparkActionRunner] 發送深度研究起始訊息失敗: %s", exc)
 
-        asyncio.create_task(
+        import settings
+        default_model = getattr(settings, "PRIMARY_MODEL", "gemini-2.5-flash")
+
+        research_task = asyncio.create_task(
             deep_search_cog._run_research_flow(
                 topic=topic,
-                model="",
+                model=default_model,
                 rounds=rounds,
                 session_id=session_id,
                 channel_id=channel.id,
@@ -1134,6 +1472,17 @@ class SparkActionRunner:
             ),
             name=f"spark-deep-search-{session_id}",
         )
+        # 複審 2：深度研究同屬可取消的長任務，納入 DeepSearchCog 追蹤表，
+        # 讓 Web UI 取消入口與 Cog 卸載能真正傳播 CancelledError。
+        active_tasks = getattr(deep_search_cog, "_active_tasks", None)
+        if isinstance(active_tasks, dict):
+            active_tasks[session_id] = research_task
+
+            def _discard_done(task: asyncio.Task[Any], sid: str = session_id) -> None:
+                if active_tasks.get(sid) is task:
+                    active_tasks.pop(sid, None)
+
+            research_task.add_done_callback(_discard_done)
         return True
 
 
@@ -1144,10 +1493,14 @@ class SparkActionRunner:
 class SparkCog(commands.Cog, name="SparkCog"):
     """Spark 泛用條件推播系統 Cog。"""
 
-    def __init__(self, bot: commands.Bot, service: Optional[SparkService] = None) -> None:
+    def __init__(
+        self,
+        bot: commands.Bot,
+        service: Optional[SparkService] = None,
+        autonomy_guard: AutonomyGuard | None = None,
+    ) -> None:
         """初始化 SparkCog。"""
         self.bot = bot
-        self.action_runner = SparkActionRunner(bot)
         if service is not None:
             self.service = service
         else:
@@ -1156,44 +1509,184 @@ class SparkCog(commands.Cog, name="SparkCog"):
                 "stock": StockClient(),
                 "rss": RssClient(),
                 "weather": WeatherClient(),
+                "web_monitor": WebMonitorClient(),
             }
             self.service = build_spark_service(repo, clients)
+        self.action_runner = SparkActionRunner(bot, service=self.service)
+        # 治理閘門：派發前檢查風險／健康／熔斷／預算（預設共用全域單例）
+        self._autonomy_guard = autonomy_guard or global_autonomy_guard
+        # 動作任務的長生命週期並發上限與強引用集合（避免無界累積與 GC 靜默消失）
+        try:
+            max_actions = int(getattr(settings, "SPARK_MAX_CONCURRENT_ACTIONS", 4))
+        except (TypeError, ValueError):
+            max_actions = 4
+        self._action_sem = asyncio.Semaphore(max(1, max_actions))
+        self._action_tasks: set[asyncio.Task[Any]] = set()
+        # R17：跨實例 leader 租約（防雙實例重複巡檢／重複推播）
+        self._lease_started = False
+        self._leader_task: asyncio.Task[Any] | None = None
+        self._leader_lease = LeaderLease(
+            "spark_scheduler",
+            owner=f"{socket.gethostname()}:{os.getpid()}",
+        )
+
+    def _leader_ttl(self) -> float:
+        try:
+            return max(5.0, float(getattr(settings, "SPARK_LEADER_LEASE_TTL_SECONDS", 90.0)))
+        except (TypeError, ValueError):
+            return 90.0
+
+    def _is_leader(self) -> bool:
+        # 未經 cog_load（單元測試／CLI）時維持單行程語意。
+        return (not self._lease_started) or self._leader_lease.is_leader()
+
+    async def _leader_heartbeat_loop(self) -> None:
+        try:
+            interval = max(2.0, float(getattr(settings, "SPARK_LEADER_HEARTBEAT_SECONDS", 30.0)))
+        except (TypeError, ValueError):
+            interval = 30.0
+        while True:
+            try:
+                if self._leader_lease.renew(self._leader_ttl()):
+                    if not getattr(self, "_leader_logged", False):
+                        logger.info("Spark leader 租約持有中（owner=%s）", self._leader_lease.owner)
+                        self._leader_logged = True
+                elif self._leader_lease.acquire(self._leader_ttl()):
+                    logger.info("Spark 取得 leader 租約（owner=%s）", self._leader_lease.owner)
+                    self._leader_logged = True
+                else:
+                    if getattr(self, "_leader_logged", False):
+                        logger.warning("Spark 失去 leader 租約，巡檢暫停")
+                    self._leader_logged = False
+            except Exception as exc:
+                logger.warning("Spark leader 心跳失敗：%s", exc)
+            await asyncio.sleep(interval)
 
     async def cog_load(self) -> None:
         """Cog 載入時啟動背景巡檢排程迴圈。"""
+        self._lease_started = True
+        lease_enabled = bool(getattr(settings, "SPARK_LEADER_LEASE_ENABLED", True))
+        acquired = self._leader_lease.acquire(self._leader_ttl()) if lease_enabled else False
+        if not lease_enabled:
+            self._lease_started = False
+            logger.info("Spark leader 租約已停用（單實例模式）")
+        logger.info(
+            "Spark leader 租約%s（owner=%s）",
+            "已取得" if acquired else ("停用" if not lease_enabled else "由其他實例持有，待接手"),
+            self._leader_lease.owner,
+        )
         if not self._spark_check_loop.is_running():
             self._spark_check_loop.start()
+        if lease_enabled and (self._leader_task is None or self._leader_task.done()):
+            self._leader_task = asyncio.create_task(self._leader_heartbeat_loop())
         logger.info("📡 Spark 推播系統 Cog 與巡檢排程已成功啟動！")
 
     async def cog_unload(self) -> None:
-        """Cog 卸載時停止巡檢迴圈。"""
+        """Cog 卸載時停止巡檢迴圈，並取消所有未完成的動作任務。"""
         if self._spark_check_loop.is_running():
             self._spark_check_loop.cancel()
-        logger.info("📡 Spark 推播系統 Cog 已卸載。")
+        if self._leader_task is not None:
+            self._leader_task.cancel()
+            self._leader_task = None
+        try:
+            self._leader_lease.release()
+        except Exception as exc:
+            logger.debug("Spark leader 租約釋放失敗：%s", exc)
+        pending = list(self._action_tasks)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self._action_tasks.clear()
+        logger.info("📡 Spark 推播系統 Cog 已卸載（取消 %d 個未完成動作）。", len(pending))
 
     @tasks.loop(minutes=DEFAULT_CHECK_INTERVAL_MINUTES)
     async def _spark_check_loop(self) -> None:
         """每分鐘巡檢所有處於啟用狀態的 Trigger（並行無阻塞評估）。"""
+        await self._run_check_cycle()
+
+    async def _run_check_cycle(self) -> None:
+        """執行單輪巡檢：並行評估所有啟用中的 Trigger，並派發達標動作。
+
+        每個 checker 由 ``SparkService.check_trigger`` 套用個別 timeout；本輪
+        另以 ``asyncio.timeout`` 設定整體 deadline，任何卡死都不會讓背景迴圈
+        永久停擺。每輪結束後產生 trace 與執行摘要，寫入觀測與
+        ``SparkService``（供 /api/spark/stats 查詢）。
+
+        此處的 semaphore 僅覆蓋 checker 評估（網路 I/O）；真正耗時的動作
+        交由 `self._action_sem` 的長生命週期 semaphore 控管，避免每輪重建。
+        """
         active_triggers = self.service.list_active_triggers()
         if not active_triggers:
             return
+        if not self._is_leader():
+            logger.debug("Spark 非 leader，跳過本輪巡檢（owner=%s）", self._leader_lease.owner)
+            return
 
-        sem = asyncio.Semaphore(8)  # 控制並行度，防止網路突發阻塞
+        try:
+            cycle_timeout = float(
+                getattr(settings, "SPARK_CHECK_CYCLE_TIMEOUT_SECONDS", 60.0)
+            )
+        except (TypeError, ValueError):
+            cycle_timeout = 60.0
+        if cycle_timeout <= 0:
+            cycle_timeout = 60.0
+
+        try:
+            max_checkers = max(
+                1, int(getattr(settings, "SPARK_MAX_CONCURRENT_CHECKS", 8))
+            )
+        except (TypeError, ValueError):
+            max_checkers = 8
+
+        trace_id = new_trace_id("spark")
+        summary: dict[str, Any] = {
+            "triggers": len(active_triggers),
+            "cooldown_skipped": 0,
+            "fired": 0,
+            "not_fired": 0,
+            "checker_timeouts": 0,
+            "failed": 0,
+            "guard_rejected": 0,
+            "quota_rejected": 0,
+            "actions_dispatched": 0,
+            "cycle_timed_out": False,
+            "duration_ms": 0,
+        }
+        started = time.monotonic()
+        sem = asyncio.Semaphore(max_checkers)  # 控制檢查並行度，防止網路突發阻塞
 
         async def _eval_trigger(trig: Trigger) -> None:
             async with sem:
                 try:
                     if self.service.is_in_cooldown(trig):
+                        summary["cooldown_skipped"] += 1
                         return
 
                     result, updated = await self.service.check_trigger(trig)
-                    if result.should_fire:
-                        target_trig = updated or trig
-                        # 異步非阻塞派發動作，不延遲後續檢查
-                        asyncio.create_task(
-                            self.action_runner.run_action(target_trig, result.current_value)
-                        )
+                    if not result.should_fire:
+                        if bool((getattr(result, "detail_data", None) or {}).get("timeout")):
+                            summary["checker_timeouts"] += 1
+                        else:
+                            summary["not_fired"] += 1
+                        return
+
+                    summary["fired"] += 1
+                    target_trig = updated or trig
+                    # 治理閘門與配額通過後才建立受控動作任務（非阻塞）
+                    status = self._dispatch_action(
+                        target_trig, result.current_value, trace_id=trace_id
+                    )
+                    if status == "dispatched":
+                        summary["actions_dispatched"] += 1
+                    elif status == "guard_rejected":
+                        summary["guard_rejected"] += 1
+                    elif status == "quota_rejected":
+                        summary["quota_rejected"] += 1
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
+                    summary["failed"] += 1
                     logger.error(
                         "[Spark Loop] 檢查 Trigger (%s) 發生異常: %s",
                         trig.trigger_id,
@@ -1201,7 +1694,151 @@ class SparkCog(commands.Cog, name="SparkCog"):
                         exc_info=True,
                     )
 
-        await asyncio.gather(*[_eval_trigger(t) for t in active_triggers])
+        try:
+            from core.compat import async_timeout
+            async with async_timeout(cycle_timeout):
+                await asyncio.gather(*[_eval_trigger(t) for t in active_triggers])
+        except (asyncio.TimeoutError, TimeoutError):
+            summary["cycle_timed_out"] = True
+            logger.error(
+                "[Spark Loop] 本輪巡檢超過 %.1f 秒，已取消剩餘檢查（trace=%s）",
+                cycle_timeout,
+                trace_id,
+            )
+
+        summary["duration_ms"] = int((time.monotonic() - started) * 1000)
+        self._publish_cycle_summary(summary, trace_id)
+
+    def _publish_cycle_summary(self, summary: dict[str, Any], trace_id: str) -> None:
+        """將本輪巡檢摘要寫入 SparkService 與結構化觀測。"""
+        try:
+            self.service.record_cycle_summary(dict(summary))
+        except Exception:
+            logger.debug("[Spark] 記錄巡檢摘要失敗", exc_info=True)
+
+        try:
+            log_event(
+                event="spark_cycle",
+                trace_id=trace_id,
+                latency_ms=int(summary.get("duration_ms", 0)),
+                **summary,
+            )
+            logger.info(
+                "[Spark] 巡檢摘要 trace=%s 觸發=%d 派發=%d 未達=%d 跳過=%d "
+                "逾時=%d 失敗=%d 治理拒絕=%d 配額拒絕=%d 本輪逾時=%s 耗時=%dms",
+                trace_id,
+                summary["fired"],
+                summary["actions_dispatched"],
+                summary["not_fired"],
+                summary["cooldown_skipped"],
+                summary["checker_timeouts"],
+                summary["failed"],
+                summary["guard_rejected"],
+                summary["quota_rejected"],
+                summary["cycle_timed_out"],
+                summary["duration_ms"],
+            )
+        except Exception:
+            logger.debug("[Spark] 寫入巡檢摘要觀測事件失敗", exc_info=True)
+
+    def _dispatch_action(
+        self, trigger: Trigger, content: str, trace_id: str = ""
+    ) -> str:
+        """在治理閘門與每日配額通過後，派發受控的動作任務。
+
+        派發前依序檢查：
+        1. `AutonomyGuard`：風險等級／系統健康／熔斷／行動預算。
+        2. 每位使用者的每日推送配額。
+        通過後才建立背景任務，並以 `_action_tasks` 強引用與 `_action_sem`
+        長生命週期 semaphore 管理，避免 fire-and-forget 無界累積。
+
+        Args:
+            trigger: 已達觸發條件（或更新後）的 Trigger。
+            content: 觸發摘要文字，供動作執行器使用。
+            trace_id: 本輪巡檢的 trace ID（供動作日誌關聯）。
+
+        Returns:
+            str: ``dispatched``／``guard_rejected``／``quota_rejected``。
+        """
+        decision = self._autonomy_guard.check(
+            "spark_push",
+            params={
+                "trigger_id": trigger.trigger_id,
+                "trigger_type": trigger.trigger_type,
+                "user_id": trigger.user_id,
+            },
+            description=f"SPARK 推播 {trigger.trigger_id[:8]}",
+        )
+        if not decision.allowed:
+            logger.warning(
+                "[Spark] 行動被治理閘門拒絕（trigger=%s，trace=%s）：%s",
+                trigger.trigger_id[:8],
+                trace_id or "-",
+                decision.reason,
+            )
+            return "guard_rejected"
+
+        allowed, reason = self.service.consume_push_quota(trigger.user_id)
+        if not allowed:
+            logger.warning(
+                "[Spark] 使用者 %s 推送配額不足（trigger=%s，trace=%s）：%s",
+                trigger.user_id,
+                trigger.trigger_id[:8],
+                trace_id or "-",
+                reason,
+            )
+            return "quota_rejected"
+
+        task = asyncio.create_task(
+            self._run_action_guarded(trigger, content, trace_id=trace_id),
+            name=f"spark-action-{trigger.trigger_id[:8]}",
+        )
+        self._action_tasks.add(task)
+        task.add_done_callback(self._action_tasks.discard)
+        return "dispatched"
+
+    async def _run_action_guarded(
+        self, trigger: Trigger, content: str, trace_id: str = ""
+    ) -> None:
+        """在 semaphore 與 timeout 保護下執行單一 Spark 動作。
+
+        動作失敗或逾時只記錄日誌，不影響巡檢迴圈；`asyncio.wait_for` 會
+        取消底層 `run_action` 任務，避免殘留的 LLM 呼叫或網路 I/O。
+        """
+        if trace_id:
+            current_trace_id.set(trace_id)
+        async with self._action_sem:
+            try:
+                timeout = float(getattr(settings, "SPARK_ACTION_TIMEOUT_SECONDS", 300.0))
+            except (TypeError, ValueError):
+                timeout = 300.0
+            try:
+                await asyncio.wait_for(
+                    self.action_runner.run_action(trigger, content),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "[Spark] 動作超過 %.1f 秒已取消（trigger=%s，trace=%s）",
+                    timeout,
+                    trigger.trigger_id[:8],
+                    trace_id or "-",
+                )
+            except asyncio.CancelledError:
+                logger.info(
+                    "[Spark] 動作已取消（trigger=%s，trace=%s）",
+                    trigger.trigger_id[:8],
+                    trace_id or "-",
+                )
+                raise
+            except Exception as exc:
+                logger.error(
+                    "[Spark] 動作執行失敗（trigger=%s，trace=%s）：%s",
+                    trigger.trigger_id[:8],
+                    trace_id or "-",
+                    exc,
+                    exc_info=True,
+                )
 
     @_spark_check_loop.before_loop
     async def _before_spark_check_loop(self) -> None:
@@ -1488,7 +2125,7 @@ class SparkCog(commands.Cog, name="SparkCog"):
             if not target:
                 await ctx.reply(f"❌ 找不到開頭為 `{target_id}` 的推播任務。", mention_author=True)
                 return
-            result, _ = await self.service.check_trigger(target)
+            result, _ = await self.service.check_trigger(target, dry_run=True)
             icon = "✅" if result.should_fire else "❌"
             await ctx.reply(
                 f"🔍 **觸發器測試成果** (`{target.trigger_id[:8]}`):\n"

@@ -107,6 +107,7 @@ class TestCoreGuardDeadCodeCleanup:
     def test_guard_rate_limit_and_tool_loop_still_work(self) -> None:
         """確認 CoreGuard 核心安全限流與死循環熔斷功能正常運作。"""
         guard = CoreGuard()
+        guard.clear_user_history(999)
 
         # 正常呼叫通過
         ok, wait = guard.check_rate_limit(user_id=999, max_calls=2, window_sec=10.0)

@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
 import settings
+from core.concurrency import heavy_io_pool
 from handlers.bot_brain import InferenceTask
 from handlers.social.contracts import ToolResult
 from handlers.social.observability import log_event, make_timer
@@ -48,6 +49,34 @@ logger = logging.getLogger(__name__)
 # Tier-1 記憶體 TTL 快取 (ticker -> (timestamp, png_bytes, indicators_dict))
 _STOCK_DATA_CACHE: dict[str, tuple[float, bytes | None, dict[str, Any]]] = {}
 _STOCK_CACHE_TTL_SEC: float = 120.0  # 2 分鐘快取
+_MAX_STOCK_CACHE_SIZE: int = 64  # 快取容量上限，防止無界增長
+
+# 全域 yfinance／matplotlib 併發閘門；semaphore 綁定 event loop，跨 loop 自動重建。
+_STOCK_FETCH_SEMAPHORE: asyncio.Semaphore | None = None
+_STOCK_FETCH_SEMAPHORE_LOOP: asyncio.AbstractEventLoop | None = None
+
+
+def _get_stock_fetch_semaphore() -> asyncio.Semaphore:
+    """取得目前 event loop 專屬的股市抓取 semaphore。"""
+    global _STOCK_FETCH_SEMAPHORE, _STOCK_FETCH_SEMAPHORE_LOOP
+    loop = asyncio.get_running_loop()
+    if _STOCK_FETCH_SEMAPHORE is None or _STOCK_FETCH_SEMAPHORE_LOOP is not loop:
+        limit = max(1, int(getattr(settings, "STOCK_MAX_CONCURRENT_FETCHES", 3)))
+        _STOCK_FETCH_SEMAPHORE = asyncio.Semaphore(limit)
+        _STOCK_FETCH_SEMAPHORE_LOOP = loop
+    return _STOCK_FETCH_SEMAPHORE
+
+
+def _store_stock_cache(ticker: str, now: float, png_bytes: bytes | None, indicators: dict[str, Any]) -> None:
+    """寫入股市快取並自動淘汰過期與超額項目。"""
+    if len(_STOCK_DATA_CACHE) >= _MAX_STOCK_CACHE_SIZE:
+        expired_keys = [k for k, v in _STOCK_DATA_CACHE.items() if now - v[0] >= _STOCK_CACHE_TTL_SEC]
+        for k in expired_keys:
+            _STOCK_DATA_CACHE.pop(k, None)
+        while len(_STOCK_DATA_CACHE) >= _MAX_STOCK_CACHE_SIZE:
+            oldest_k = min(_STOCK_DATA_CACHE.keys(), key=lambda k: _STOCK_DATA_CACHE[k][0])
+            _STOCK_DATA_CACHE.pop(oldest_k, None)
+    _STOCK_DATA_CACHE[ticker] = (now, png_bytes, indicators)
 
 # ---------------------------------------------------------------------------
 # 常用中文名稱 → yfinance ticker 對照表
@@ -185,6 +214,11 @@ def _quick_extract_tickers(text: str) -> list[str]:
         if resolved and resolved not in seen:
             seen.add(resolved)
             tickers.append(resolved)
+
+    # 0. Mask dates and times
+    cleaned_text = re.sub(r"\b\d{4}[-/\u5e74]\d{1,2}(?:[-/\u6708]\d{1,2}(?:\u65e5)?)?\b", " ", cleaned_text)
+    cleaned_text = re.sub(r"\b\d{1,2}:\d{2}(?::\d{2})?\b", " ", cleaned_text)
+    cleaned_text = re.sub(r"\b20[2-3]\d\s*\u5e74\b", " ", cleaned_text)
 
     # 1. 中文名稱對照
     for cn, t in _CN_TO_TICKER.items():
@@ -372,6 +406,7 @@ def _fetch_and_plot(ticker: str) -> tuple[bytes | None, dict]:
     同步函式：抓資料、計算指標、抓取新聞、畫圖（在 executor 中執行，不阻塞 event loop）。
     回傳 (png_bytes, indicators_dict)。
     """
+    orig_ticker = ticker
     now = time.time()
     if ticker in _STOCK_DATA_CACHE:
         ts, cached_png, cached_indicators = _STOCK_DATA_CACHE[ticker]
@@ -396,21 +431,24 @@ def _fetch_and_plot(ticker: str) -> tuple[bytes | None, dict]:
             timeout=getattr(settings, "DEFAULT_TIMEOUT_SEC", 8),
         )
 
-        # 若抓取失敗或資料筆數不足，且標的為純英文字母與數字（未含 .TW / - / ^ ），嘗試自動備援加上 -USD 抓取加密貨幣行情
+        # Fallback to index (^ticker) and crypto (ticker-USD)
         if (df.empty or len(df) < 20) and re.fullmatch(r"[A-Z0-9]{2,10}", ticker):
-            fallback_ticker = f"{ticker}-USD"
-            df_fallback = yf.download(
-                fallback_ticker,
-                period="180d",
-                interval="1d",
-                progress=False,
-                auto_adjust=True,
-                timeout=getattr(settings, "DEFAULT_TIMEOUT_SEC", 8),
-            )
-            if not df_fallback.empty and len(df_fallback) >= 20:
-                df = df_fallback
-                ticker = fallback_ticker
-
+            for candidate in (f"^{ticker}", f"{ticker}-USD"):
+                try:
+                    df_fallback = yf.download(
+                        candidate,
+                        period="180d",
+                        interval="1d",
+                        progress=False,
+                        auto_adjust=True,
+                        timeout=getattr(settings, "DEFAULT_TIMEOUT_SEC", 8),
+                    )
+                    if not df_fallback.empty and len(df_fallback) >= 20:
+                        df = df_fallback
+                        ticker = candidate
+                        break
+                except Exception as fb_exc:
+                    logger.debug("StockTool: fallback candidate %s failed: %s", candidate, fb_exc)
         if df.empty or len(df) < 15:
             return None, {}
 
@@ -587,7 +625,9 @@ def _fetch_and_plot(ticker: str) -> tuple[bytes | None, dict]:
             fig.savefig(buf, format="png", dpi=100, bbox_inches="tight", facecolor="white")
             buf.seek(0)
             res_png = buf.read()
-            _STOCK_DATA_CACHE[ticker] = (now, res_png, indicators)
+            _store_stock_cache(ticker, now, res_png, indicators)
+            if orig_ticker != ticker:
+                _store_stock_cache(orig_ticker, now, res_png, indicators)
             return res_png, indicators
         finally:
             plt.close(fig)
@@ -595,6 +635,43 @@ def _fetch_and_plot(ticker: str) -> tuple[bytes | None, dict]:
     except Exception as exc:
         logger.warning("StockTool: 資料獲取/繪圖失敗 (%s): %s", ticker, exc)
         return None, {}
+
+
+async def fetch_and_plot_bounded(
+    ticker: str, timeout_sec: float | None = None
+) -> tuple[str, bytes | None, dict[str, Any] | None]:
+    """在專用執行器中抓取股市資料，受全域併發上限與逾時保護。
+
+    Args:
+        ticker: 已解析的 yfinance ticker。
+        timeout_sec: 等候抓取完成的秒數；``None`` 時使用 ``DEFAULT_TIMEOUT_SEC``。
+
+    Returns:
+        tuple[str, bytes | None, dict | None]: (ticker, PNG bytes, 指標字典)；
+        逾時或失敗時後兩者為 ``None``。
+    """
+    timeout_val = float(
+        timeout_sec
+        if timeout_sec is not None
+        else getattr(settings, "DEFAULT_TIMEOUT_SEC", 15)
+    )
+    semaphore = _get_stock_fetch_semaphore()
+    async with semaphore:
+        try:
+            res = await asyncio.wait_for(
+                asyncio.get_running_loop().run_in_executor(
+                    heavy_io_pool, _fetch_and_plot, ticker
+                ),
+                timeout=timeout_val,
+            )
+            resolved_ticker = res[1].get("ticker", ticker) if res[1] else ticker
+            return resolved_ticker, res[0], res[1]
+        except asyncio.TimeoutError:
+            logger.warning("StockTool: _fetch_and_plot 超時 (ticker=%s)", ticker)
+            return ticker, None, None
+        except Exception as e:
+            logger.warning("StockTool: _fetch_and_plot 異常 (ticker=%s): %s", ticker, e)
+            return ticker, None, None
 
 
 class StockTool(BaseTool):
@@ -647,7 +724,7 @@ class StockTool(BaseTool):
                 system_prompt=_TICKER_EXTRACT_SYSTEM_PROMPT,
                 user_prompt=user_query,
                 callback=_on_extract_reply,
-                model=settings.CLASSIFIER_MODEL,
+                model=settings.LIGHT_MODEL,
                 task_id=f"stock-extract-{message.id}",
             )
             await brain.enqueue_task(extract_task)
@@ -664,28 +741,13 @@ class StockTool(BaseTool):
                 await message.reply("唔⋯⋯名偵探沒看懂你想查哪支股票或幣耶！可以提供代號嗎？（例如：`2330`、`AAPL`、`BTC`）", mention_author=True)
             return ToolResult.no_data("未能識別出股票或加密貨幣代號。", is_direct_rendered=not silent)
 
-        # ── Step 2: 平行抓取數據並繪圖 ──────────────────────────────────────
+        # ── Step 2: 平行抓取數據並繪圖（受全域併發上限保護）────────────────
         indicator_summaries: list[str] = []
         files: list[discord.File] = []
-        loop = asyncio.get_running_loop()
         timeout_val = getattr(settings, "DEFAULT_TIMEOUT_SEC", 15)
 
-        async def _fetch_single(t: str) -> tuple[str, bytes | None, dict[str, Any] | None]:
-            try:
-                res = await asyncio.wait_for(
-                    loop.run_in_executor(None, _fetch_and_plot, t),
-                    timeout=timeout_val,
-                )
-                return t, res[0], res[1]
-            except asyncio.TimeoutError:
-                logger.warning("StockTool: _fetch_and_plot 超時 (ticker=%s)", t)
-                return t, None, None
-            except Exception as e:
-                logger.warning("StockTool: _fetch_and_plot 異常 (ticker=%s): %s", t, e)
-                return t, None, None
-
         target_tickers = tickers[:3]  # 最多查 3 檔，防濫用
-        tasks = [_fetch_single(t) for t in target_tickers]
+        tasks = [fetch_and_plot_bounded(t, timeout_val) for t in target_tickers]
         results = await asyncio.gather(*tasks)
 
         for ticker, png_bytes, indicators in results:
@@ -835,6 +897,7 @@ class StockTool(BaseTool):
             callback=_on_stock_reply,
             model=settings.PRIMARY_MODEL,
             task_id=f"stock-reply-{message.id}",
+            max_tokens=max(2048, int(getattr(settings, "LLM_MAX_OUTPUT_TOKENS", 2048))) if wants_analysis else int(getattr(settings, "LLM_MAX_OUTPUT_TOKENS", 2048)),
         )
         await brain.enqueue_task(reply_task)
 

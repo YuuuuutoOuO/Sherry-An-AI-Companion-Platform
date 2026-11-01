@@ -24,6 +24,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
+import re
 import settings
 from core.db import db_transaction
 from core.sys_inspector import notify_failure_sync, notify_slow_response_sync
@@ -31,6 +32,38 @@ from core.sys_inspector import notify_failure_sync, notify_slow_response_sync
 logger = logging.getLogger(__name__)
 
 _TZ_TW = timezone(timedelta(hours=8))  # 台灣時間 UTC+8
+
+_RE_EMAIL = re.compile(r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?![A-Za-z0-9.-])")
+_RE_BEARER = re.compile(r"(?i)(?<![A-Za-z0-9])bearer\s+[A-Za-z0-9_\-\.]{15,}(?![A-Za-z0-9_\-\.])")
+_RE_API_KEY = re.compile(r"(?i)(?<![A-Za-z0-9])(?:sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{30,}|discord[_-]?(?:token|bot)[:=]\s*[A-Za-z0-9_\-\.]{20,}|token[:=]\s*[A-Za-z0-9_\-\.]{20,}|api[_-]?key[:=]\s*[A-Za-z0-9_\-\.]{20,})")
+_RE_PHONE = re.compile(r"(?<![0-9])(?:\+?886[- ]?|0)9\d{2}[- ]?\d{3}[- ]?\d{3}(?![0-9])")
+_RE_TW_ID = re.compile(r"(?<![A-Za-z0-9])[A-Za-z][1289]\d{8}(?![0-9])")
+_RE_CREDIT_CARD = re.compile(r"(?<![0-9])(?:\d{4}[- ]?){3}\d{4}(?![0-9])")
+
+
+def redact_pii(value: Any) -> Any:
+    """自動偵測並遮罩個人機敏資料 (PII) 與安全憑據 (Token/API Key)。
+
+    支援遞歸過濾字串、字典、列表及元組。
+    """
+    if isinstance(value, str):
+        if not value:
+            return value
+        text = _RE_EMAIL.sub("[EMAIL_REDACTED]", value)
+        text = _RE_BEARER.sub("Bearer [TOKEN_REDACTED]", text)
+        text = _RE_API_KEY.sub("[API_KEY_REDACTED]", text)
+        text = _RE_PHONE.sub("[PHONE_REDACTED]", text)
+        text = _RE_TW_ID.sub("[TW_ID_REDACTED]", text)
+        text = _RE_CREDIT_CARD.sub("[CREDIT_CARD_REDACTED]", text)
+        return text
+    elif isinstance(value, dict):
+        return {k: redact_pii(v) for k, v in value.items()}
+    elif isinstance(value, list):
+        return [redact_pii(v) for v in value]
+    elif isinstance(value, tuple):
+        return tuple(redact_pii(v) for v in value)
+    return value
+
 
 # ---------------------------------------------------------------------------
 # Trace ID & ContextVar (全域鏈路追蹤機制)
@@ -148,8 +181,44 @@ _DB_INITIALIZED = False
 import threading
 import queue as _pyqueue
 
-_WRITE_QUEUE: "_pyqueue.Queue[tuple[Path, dict] | None]" = _pyqueue.Queue()
+# 有界佇列：觀測事件暴增（例如上游故障造成重試風暴）時寧可丟棄並計數，
+# 也不能讓記憶體無上限成長拖垮整個 Bot 行程。
+_WRITE_QUEUE_MAXSIZE = max(1, int(getattr(settings, "OBSERVABILITY_WRITE_QUEUE_MAXSIZE", 10000)))
+_WRITE_QUEUE: "_pyqueue.Queue[tuple[Path, dict] | None]" = _pyqueue.Queue(maxsize=_WRITE_QUEUE_MAXSIZE)
 _WRITE_THREAD_STARTED = False
+_WRITE_THREAD: threading.Thread | None = None
+_WRITE_SHUTDOWN = False
+_WRITE_STATS_LOCK = threading.Lock()
+_WRITE_OVERFLOW = 0
+
+
+def _record_overflow(reason: str) -> None:
+    """累計被捨棄的事件數；採樣式告警避免日誌本身成為風暴來源。"""
+    global _WRITE_OVERFLOW
+    with _WRITE_STATS_LOCK:
+        _WRITE_OVERFLOW += 1
+        dropped = _WRITE_OVERFLOW
+    if dropped == 1 or dropped % 1000 == 0:
+        logger.warning(
+            "observability: 事件被捨棄（%s，累計 %d 筆；佇列上限 %d）",
+            reason,
+            dropped,
+            _WRITE_QUEUE.maxsize,
+        )
+
+
+def get_observability_stats() -> dict[str, Any]:
+    """回傳觀測寫入器的健康狀態（供關機檢查與測試）。"""
+    with _WRITE_STATS_LOCK:
+        dropped = _WRITE_OVERFLOW
+    return {
+        "queue_size": _WRITE_QUEUE.qsize(),
+        "queue_maxsize": _WRITE_QUEUE.maxsize,
+        "dropped": dropped,
+        "writer_started": _WRITE_THREAD_STARTED,
+        "shutdown": _WRITE_SHUTDOWN,
+        "pii_redaction_enabled": bool(getattr(settings, "OBSERVABILITY_PII_REDACTION", True)),
+    }
 
 
 def _flush_batch(batch: list[tuple[Path, dict]]) -> None:
@@ -190,17 +259,20 @@ def _flush_batch(batch: list[tuple[Path, dict]]) -> None:
             files_map.setdefault(path, []).append(data_json)
 
         # 1. 單一 Transaction 批次寫入 SQLite
-        with db_transaction(_CHAT_DB_PATH) as cur:
-            if error_rows:
-                cur.executemany("""
-                    INSERT INTO error_events (timestamp, trace_id, event, error_type, message, data_json)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, error_rows)
-            if runtime_rows:
-                cur.executemany("""
-                    INSERT INTO runtime_events (timestamp, trace_id, event, user, channel_id, latency_ms, data_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, runtime_rows)
+        try:
+            with db_transaction(_CHAT_DB_PATH) as cur:
+                if error_rows:
+                    cur.executemany("""
+                        INSERT INTO error_events (timestamp, trace_id, event, error_type, message, data_json)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, error_rows)
+                if runtime_rows:
+                    cur.executemany("""
+                        INSERT INTO runtime_events (timestamp, trace_id, event, user, channel_id, latency_ms, data_json)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, runtime_rows)
+        except Exception as sqlite_err:
+            logger.debug("observability: 批次寫入 SQLite 失敗: %s", sqlite_err)
 
         # 2. 批次寫入 JSONL
         for target_path, lines in files_map.items():
@@ -212,67 +284,132 @@ def _flush_batch(batch: list[tuple[Path, dict]]) -> None:
                 logger.debug("observability: 批次寫入 JSONL 失敗: %s", json_err)
 
     except Exception as exc:
-        logger.debug("observability: 批次寫入 SQLite 失敗: %s", exc)
+        logger.debug("observability: 批次寫入處理失敗: %s", exc)
 
 
 def _writer_worker() -> None:
-    """背景執行緒：持續取出事件並批次寫入 SQLite 與 JSONL。"""
+    """背景執行緒：持續取出事件並批次寫入 SQLite 與 JSONL。
+
+    收到 ``None`` 哨兵時先排空當前批次再結束；哨兵本身也計入
+    ``task_done()``，否則 ``flush_observability_logs()`` 會永遠等不到 join。
+    """
     batch: list[tuple[Path, dict]] = []
-    while True:
+    stop = False
+    while not stop:
         item = _WRITE_QUEUE.get()
+        extra_tokens = 0
         try:
             if item is None:
-                if batch:
-                    _flush_batch(batch)
-                break
-            batch.append(item)
+                stop = True
+                extra_tokens += 1
+            else:
+                batch.append(item)
 
-            # 累積最多 50 筆或排空當前隊列
-            while len(batch) < 50:
-                try:
-                    next_item = _WRITE_QUEUE.get_nowait()
+                # 累積最多 50 筆或排空當前隊列
+                while len(batch) < 50:
+                    try:
+                        next_item = _WRITE_QUEUE.get_nowait()
+                    except _pyqueue.Empty:
+                        break
                     if next_item is None:
+                        stop = True
+                        extra_tokens += 1
                         break
                     batch.append(next_item)
-                except _pyqueue.Empty:
-                    break
-
-            _flush_batch(batch)
         except Exception:
             logger.debug("observability: 背景寫入異常", exc_info=True)
         finally:
-            for _ in range(len(batch)):
+            try:
+                _flush_batch(batch)
+            except Exception:
+                logger.debug("observability: 批次落盤異常", exc_info=True)
+            for _ in range(len(batch) + extra_tokens):
                 _WRITE_QUEUE.task_done()
             batch.clear()
 
 
 def _ensure_writer_thread() -> None:
-    """確保背景寫入執行緒已啟動（daemon，隨行程結束）。"""
-    global _WRITE_THREAD_STARTED
+    """確保背景寫入執行緒已啟動（daemon，隨行程結束）。執行緒安全。"""
+    global _WRITE_THREAD_STARTED, _WRITE_THREAD
     if _WRITE_THREAD_STARTED:
         return
-    _WRITE_THREAD_STARTED = True
-    t = threading.Thread(target=_writer_worker, name="observability-writer", daemon=True)
-    t.start()
+    with _WRITE_STATS_LOCK:
+        if _WRITE_THREAD_STARTED:
+            return
+        _WRITE_THREAD_STARTED = True
+        t = threading.Thread(target=_writer_worker, name="observability-writer", daemon=True)
+        _WRITE_THREAD = t
+        t.start()
 
 
 def _write_line(path: Path, entry: dict) -> None:
     """將事件推入背景佇列，非阻塞。由 _writer_worker 執行緒實際批次落盤。"""
+    global _WRITE_SHUTDOWN
+    if _WRITE_SHUTDOWN:
+        _record_overflow("writer_shutdown")
+        return
+    if getattr(settings, "OBSERVABILITY_PII_REDACTION", True):
+        entry = redact_pii(entry)
     try:
         _ensure_writer_thread()
         _WRITE_QUEUE.put_nowait((path, entry))
+    except _pyqueue.Full:
+        # 有界佇列滿載：計數後丟棄，絕不在熱路徑同步落盤。
+        _record_overflow("queue_full")
     except Exception:
-        # 佇列滿（不應發生）或執行緒未就緒時，改為同步兜底，避免丟失事件
+        # 執行緒未就緒等非預期狀況，改為同步兜底，避免丟失事件
         try:
             _flush_batch([(path, entry)])
         except Exception:
             logger.debug("observability: 同步兜底寫入失敗", exc_info=True)
 
 
-def flush_observability_logs() -> None:
-    """等待背景寫入佇列清空（供測試與優雅關機使用）。"""
+def flush_observability_logs(timeout: float | None = None) -> None:
+    """等待背景寫入佇列清空（供測試與優雅關機使用）。
+
+    Args:
+        timeout: 最長等待秒數；``None`` 表示等到佇列清空為止。
+    """
     if _WRITE_THREAD_STARTED:
-        _WRITE_QUEUE.join()
+        if timeout is None:
+            _WRITE_QUEUE.join()
+        else:
+            deadline = time.monotonic() + max(0.0, timeout)
+            while _WRITE_QUEUE.unfinished_tasks > 0 and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+
+def shutdown_observability_logs(timeout: float = 5.0) -> None:
+    """排空並停止背景寫入執行緒（可重複呼叫、執行緒安全）。
+
+    先送入 ``None`` 哨兵讓 writer 排空現有批次後退出，再 join 執行緒。
+    程序關閉前務必呼叫，否則記憶體佇列中的事件會全部遺失。
+    """
+    global _WRITE_SHUTDOWN, _WRITE_THREAD
+    with _WRITE_STATS_LOCK:
+        if not _WRITE_THREAD_STARTED:
+            _WRITE_SHUTDOWN = True
+            return
+        thread = _WRITE_THREAD
+        already_shutdown = _WRITE_SHUTDOWN
+        _WRITE_SHUTDOWN = True
+
+    if not already_shutdown:
+        try:
+            _WRITE_QUEUE.put(None, timeout=max(0.1, timeout))
+        except _pyqueue.Full:
+            # Writer 無法在期限內取得哨兵（佇列持續滿載）；daemon 執行緒
+            # 會隨行程結束，剩餘事件無限期等待也沒有意義。
+            logger.warning(
+                "observability: 關機時寫入佇列仍滿載（%d 筆），剩餘事件將被捨棄。",
+                _WRITE_QUEUE.qsize(),
+            )
+            return
+
+    if thread is not None and thread is not threading.current_thread():
+        thread.join(timeout=max(0.1, timeout))
+        if thread.is_alive():
+            logger.warning("observability: 寫入執行緒未能在 %.1fs 內結束。", timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +479,15 @@ def log_event(
       error                — 任何 exception 發生
     """
     actual_tid = trace_id or get_trace_id()
+    if getattr(settings, "OBSERVABILITY_PII_REDACTION", True):
+        clean_raw_input = redact_pii(raw_input)
+        clean_cot = redact_pii(cot_thought)
+        clean_reply = redact_pii(reply_preview)
+    else:
+        clean_raw_input = raw_input
+        clean_cot = cot_thought
+        clean_reply = reply_preview
+
     entry: dict[str, Any] = {
         "ts": datetime.now(_TZ_TW).strftime("%Y-%m-%d %H:%M:%S"),
         "trace_id": actual_tid,
@@ -349,7 +495,7 @@ def log_event(
         "message_id": message_id,
         "user": user,
         "channel_id": channel_id,
-        "raw_input": raw_input[:500] if raw_input else "",
+        "raw_input": clean_raw_input[:500] if clean_raw_input else "",
         "intent": intent,
         "intent_source": intent_source,
         "veto_fired": veto_fired,
@@ -357,8 +503,8 @@ def log_event(
         "vision_hit_count": vision_hit_count,
         "tags_resolved": tags_resolved or [],
         "tools_invoked": tools_invoked or [],
-        "cot_thought": cot_thought[:1000] if cot_thought else "",
-        "reply_preview": reply_preview[:500] if reply_preview else "",
+        "cot_thought": clean_cot[:1000] if clean_cot else "",
+        "reply_preview": clean_reply[:500] if clean_reply else "",
         "model_used": model_used,
         "latency_ms": latency_ms,
         "queue_size": queue_size,
@@ -371,9 +517,10 @@ def log_event(
         "cache_hit_ratio": round(cache_hit_ratio, 4),
     }
     if extra:
+        extra_dict = redact_pii(extra) if getattr(settings, "OBSERVABILITY_PII_REDACTION", True) else extra
         entry["extra"] = {
             k: (v if isinstance(v, (int, float, bool, dict, list)) else str(v)[:1000])
-            for k, v in extra.items()
+            for k, v in extra_dict.items()
         }
 
     _write_line(_RUNTIME_LOG_PATH, entry)
@@ -438,7 +585,7 @@ def log_event(
                         completion_tokens=c_tokens,
                     )
     except Exception:
-        pass
+        logger.debug("observability: 記錄回覆工具指標失敗", exc_info=True)
 
     # 自我監控鉤子：單筆回覆超過 90 秒時發送慢速警報信號
     if latency_ms >= 90000:
@@ -451,7 +598,7 @@ def log_event(
                 raw_prompt=raw_input,
             )
         except Exception:
-            pass
+            logger.debug("observability: 發送慢速回應警報失敗", exc_info=True)
 
 
 def log_error(
@@ -466,6 +613,7 @@ def log_error(
 ) -> None:
     """記錄一筆錯誤/降級事件，同時寫入 runtime_log 與 error_log。"""
     actual_tid = trace_id or get_trace_id()
+    clean_msg = redact_pii(message) if getattr(settings, "OBSERVABILITY_PII_REDACTION", True) else message
     entry: dict[str, Any] = {
         "ts": datetime.now(_TZ_TW).strftime("%Y-%m-%d %H:%M:%S"),
         "trace_id": actual_tid,
@@ -473,12 +621,13 @@ def log_error(
         "message_id": message_id,
         "task_id": task_id,
         "error_type": error_type,
-        "message": message[:1000] if message else "",
+        "message": clean_msg[:1000] if clean_msg else "",
     }
     if extra:
+        extra_dict = redact_pii(extra) if getattr(settings, "OBSERVABILITY_PII_REDACTION", True) else extra
         entry["extra"] = {
             k: (v if isinstance(v, (int, float, bool, dict, list)) else str(v)[:1000])
-            for k, v in extra.items()
+            for k, v in extra_dict.items()
         }
 
     # Write to both logs
@@ -513,7 +662,7 @@ def log_error(
                 is_fatal=is_fatal or has_fatal_keyword,
             )
         except Exception:
-            pass
+            logger.debug("observability: 發送失敗通知失敗", exc_info=True)
 
 
 def log_command(
@@ -662,7 +811,7 @@ def log_tool_exec(
             completion_tokens=c_tok,
         )
     except Exception:
-        pass
+        logger.debug("observability: 記錄工具執行指標失敗", exc_info=True)
 
 
 def log_inference(
@@ -732,7 +881,7 @@ def log_inference(
             trace_id=trace_id,
         )
     except Exception:
-        pass
+        logger.debug("observability: 記錄推論指標失敗", exc_info=True)
 
 
 def make_timer() -> Callable[[], int]:

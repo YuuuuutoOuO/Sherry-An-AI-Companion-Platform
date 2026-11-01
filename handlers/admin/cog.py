@@ -104,14 +104,20 @@ class MemoryControlView(discord.ui.View):
             
         mem_mgr: Any = getattr(interaction.client, "get_cog", lambda _: None)("MemoryManager")
         if mem_mgr:
-            user_id_str = str(self.target_user_id)
-            if user_id_str in mem_mgr._store:
-                del mem_mgr._store[user_id_str]
-                from handlers.memory.storage import save_user_memory
-                save_user_memory(mem_mgr._store, settings.USER_MEMORY_PATH)
+            from handlers.memory.storage import purge_user_data
+
+            store = getattr(mem_mgr, "_store", None)
+            if isinstance(store, dict):
+                store.pop(str(self.target_user_id), None)
+            results = await purge_user_data(
+                self.target_user_id, relations=getattr(mem_mgr, "relations", None)
+            )
+            if results.get("ok"):
                 await interaction.response.send_message("🗑️ 已經幫你把錯亂的記憶刪除囉，雪莉會重新認識你！", ephemeral=True)
             else:
-                await interaction.response.send_message("目前沒有記憶可以清除。", ephemeral=True)
+                await interaction.response.send_message(
+                    "⚠️ 記憶清除僅部分完成，請稍後再點一次；未完成範圍已寫入稽核紀錄。", ephemeral=True
+                )
 
 class AdminCog(commands.Cog):
     """提供伺服器管理、記憶維護、氛圍操作與除錯指令。"""
@@ -177,12 +183,13 @@ class AdminCog(commands.Cog):
     @app_commands.command(name="memory", description="🧠 檢視或清除成員長期記憶 / 查看世界記憶")
     @app_commands.describe(
         action="選擇執行的動作",
-        user="選擇目標成員（show/clear 適用；world 時可略）",
+        user="選擇目標成員（show/clear 適用；world/self 時可略）",
     )
     @app_commands.choices(action=[
         app_commands.Choice(name="👀 檢視記憶 (show) — 檢視成員長期記憶 (僅自己可見)", value="show"),
-        app_commands.Choice(name="🧹 清除記憶 (clear) — 清除成員長期記憶 (管理員)", value="clear"),
+        app_commands.Choice(name="🧠 雪莉自我記憶 (self) — 查看雪莉自己的經歷日記、衝浪觀點與近期行動", value="self"),
         app_commands.Choice(name="🌍 世界記憶 (world) — 查看當前伺服器世界記憶", value="world"),
+        app_commands.Choice(name="🧹 清除記憶 (clear) — 清除成員長期記憶 (管理員)", value="clear"),
     ])
     async def memory_command(
         self,
@@ -201,8 +208,109 @@ class AdminCog(commands.Cog):
             None
         """
         mem_mgr: Any = self.bot.get_cog("MemoryManager")
-        if not mem_mgr and action.value != "world":
+        if not mem_mgr and action.value not in ("world", "self"):
             await interaction.response.send_message("記憶管理器未加載！", ephemeral=True)
+            return
+
+        if action.value == "self":
+            # ── 查看雪莉自己的專屬自我記憶 ────────────────────────────
+            defer_func = getattr(interaction.response, "defer", None)
+            deferred = False
+            if asyncio.iscoroutinefunction(defer_func):
+                await interaction.response.defer(ephemeral=True)
+                deferred = True
+            elif callable(defer_func):
+                try:
+                    res = defer_func(ephemeral=True)
+                    if asyncio.iscoroutine(res):
+                        await res
+                        deferred = True
+                except TypeError:
+                    pass
+
+            async def _reply_self(embed: discord.Embed | None = None, content: str | None = None) -> None:
+                if deferred:
+                    if embed:
+                        await interaction.followup.send(embed=embed, ephemeral=True)
+                    else:
+                        await interaction.followup.send(content or "", ephemeral=True)
+                else:
+                    if embed:
+                        await interaction.response.send_message(embed=embed, ephemeral=True)
+                    else:
+                        await interaction.response.send_message(content or "", ephemeral=True)
+
+            try:
+                from handlers.memory import self_memory
+                from handlers.care.surfer import _gather_sherry_live_stats
+
+                episodes = await asyncio.to_thread(self_memory.list_self_episodes, limit=4)
+                actions = await asyncio.to_thread(self_memory.list_self_actions, limit=4)
+                readings = await asyncio.to_thread(self_memory.list_reading_logs, limit=3)
+
+                embed = discord.Embed(
+                    title="🧠 雪莉自我記憶庫 (Sherry's Self-Memory)",
+                    description="名偵探雪莉自己的專屬日記、近期行動對線與衝浪觀點。",
+                    color=0x8b5cf6,
+                )
+
+                # 1. 近期日記與心境想法
+                if episodes:
+                    ep_lines = []
+                    cat_map = {
+                        "diary": "💭 日記",
+                        "reading": "📰 讀書心得",
+                        "activity": "🏃 行動紀錄",
+                        "interest": "✨ 新興趣",
+                    }
+                    for ep in episodes:
+                        cat_key = str(ep.get("category", "")).lower()
+                        cat_label = cat_map.get(cat_key, f"📌 {cat_key or '想法'}")
+                        content_str = ep.get("content", "")
+                        tags = ep.get("tags") or []
+                        tag_str = f" [{', '.join(tags[:2])}]" if tags else ""
+                        ep_lines.append(f"• **{cat_label}**{tag_str}\n  > {content_str[:90]}")
+                    embed.add_field(name="💭 近期日記與心境 (Episodes)", value="\n".join(ep_lines)[:1024], inline=False)
+                else:
+                    embed.add_field(name="💭 近期日記與心境", value="尚無日記篇章，等雪莉在頻道閒逛時會自行記錄～", inline=False)
+
+                # 2. 近期自我行動記憶 (對線、摸魚、窺屏等)
+                if actions:
+                    act_lines = []
+                    for act in actions:
+                        created = act.get("created_at")
+                        ts_str = f"<t:{int(created)}:R>" if created else ""
+                        verb = act.get("verb", "行動")
+                        summary = act.get("summary", "")
+                        detail = act.get("detail") or {}
+                        thought = detail.get("thought", "") if isinstance(detail, dict) else ""
+                        thought_str = f"（OS: {thought[:35]}）" if thought else ""
+                        act_lines.append(f"• {ts_str} **{verb}** — {summary[:55]} {thought_str}")
+                    embed.add_field(name="🎬 近期自我行動 (Self Actions)", value="\n".join(act_lines)[:1024], inline=False)
+                else:
+                    embed.add_field(name="🎬 近期自我行動", value="尚無近期行動紀錄。", inline=False)
+
+                # 3. 衝浪閱讀觀點
+                if readings:
+                    rd_lines = []
+                    for rd in readings:
+                        title = rd.get("title", "未命名文章")
+                        opinion = rd.get("sherry_opinion") or rd.get("post_text") or rd.get("summary", "")
+                        source = rd.get("source", "Web")
+                        rd_lines.append(f"• **《{title[:25]}》** ({source})\n  > 雪莉吐槽：{opinion[:75]}")
+                    embed.add_field(name="📰 衝浪閱讀觀點 (Reading Insights)", value="\n".join(rd_lines)[:1024], inline=False)
+
+                # 4. 今日賽博白飯統計
+                try:
+                    stats = _gather_sherry_live_stats(self.bot, str(interaction.channel_id or ""))
+                    embed.set_footer(text=f"🍚 今日白飯：{stats['bowls_of_rice']} 碗 ({stats['tokens_today']:,} tokens) ｜ 累積任務：{stats['tasks_today']} 次")
+                except Exception:
+                    embed.set_footer(text="🍚 賽博白飯與心智狀態正常運作中")
+
+                await _reply_self(embed=embed)
+            except Exception as exc:
+                logger.warning("/memory self 查詢失敗: %s", exc, exc_info=True)
+                await _reply_self(content=f"❌ 查詢雪莉自我記憶失敗：{exc}")
             return
 
         if action.value == "world":
@@ -277,14 +385,23 @@ class AdminCog(commands.Cog):
             if not self._is_super_admin(interaction):
                 await interaction.response.send_message("權限不足！只有最高管理員能刪除使用者記憶。", ephemeral=True)
                 return
+            from handlers.memory.storage import purge_user_data
+
             user_id_str = str(user.id)
-            if user_id_str in mem_mgr._store:
-                del mem_mgr._store[user_id_str]
-                from handlers.memory.storage import save_user_memory
-                save_user_memory(mem_mgr._store, settings.USER_MEMORY_PATH)
-                await interaction.response.send_message(f"已成功清除 {user.mention} 的長期記憶資料並寫入檔案。")
+            store = getattr(mem_mgr, "_store", None)
+            if isinstance(store, dict):
+                store.pop(user_id_str, None)
+            results = await purge_user_data(
+                user.id, relations=getattr(mem_mgr, "relations", None)
+            )
+            if results.get("ok"):
+                await interaction.response.send_message(
+                    f"已成功清除 {user.mention} 的長期記憶資料（含對話紀錄與歸檔）並寫入稽核。"
+                )
             else:
-                await interaction.response.send_message(f"{user.mention} 尚無任何長期記憶可以清除。")
+                await interaction.response.send_message(
+                    f"⚠️ {user.mention} 的清除僅部分完成，請稍後重試；未完成範圍已寫入稽核紀錄。"
+                )
 
     # ── /admin ─────────────────────────────────────────────────
     @app_commands.command(name="admin", description="⚙️ 系統維護、指令同步與熱重載管理")
@@ -336,8 +453,20 @@ class AdminCog(commands.Cog):
                 await interaction.response.send_message("❌ 請在 `target` 輸入欲重新加載的 Cog 名稱 (如 `handlers.music`)！", ephemeral=True)
                 return
             await interaction.response.defer(ephemeral=True)
+            from core.recovery.manager import get_recovery_manager
+            from core.recovery.reconciler import get_boot_reconciler
+
+            try:
+                await get_recovery_manager().capture_all()
+            except Exception as exc:
+                logger.warning("熱重載前快照失敗: %s", exc)
+
             try:
                 await self.bot.reload_extension(target)
+                try:
+                    await get_boot_reconciler().reconcile_all(bot=self.bot, force=True)
+                except Exception as rec_exc:
+                    logger.warning("熱重載後狀態對帳失敗: %s", rec_exc)
                 await interaction.followup.send(f"✅ 已成功重新加載模組 `{target}`！")
             except Exception as e:
                 await interaction.followup.send(f"❌ 重新加載失敗：{e}")
@@ -345,6 +474,14 @@ class AdminCog(commands.Cog):
         elif act == "restart":
             module_name = target or "all"
             await interaction.response.defer(ephemeral=True)
+            from core.recovery.manager import get_recovery_manager
+            from core.recovery.reconciler import get_boot_reconciler
+
+            try:
+                await get_recovery_manager().capture_all()
+            except Exception as exc:
+                logger.warning("模組重啟前快照失敗: %s", exc)
+
             import importlib
             try:
                 import main
@@ -367,6 +504,11 @@ class AdminCog(commands.Cog):
                     success_list.append(target_ext)
                 except Exception as e:
                     fail_list.append(f"{target_ext} ({e})")
+
+            try:
+                await get_boot_reconciler().reconcile_all(bot=self.bot, force=True)
+            except Exception as rec_exc:
+                logger.warning("模組重啟後狀態對帳失敗: %s", rec_exc)
 
             sync_info = ""
             try:
@@ -448,8 +590,8 @@ class AdminCog(commands.Cog):
         early_term = getattr(settings, "ACTION_EARLY_TERMINATION_ENABLED", True)
         dispatch_mode = getattr(settings, "AGENT_DISPATCH_MODE", "INTEGRATED").upper()
         primary_model = getattr(settings, "PRIMARY_MODEL", "未設定")
-        planner_model = getattr(settings, "PARALLEL_PLANNER_MODEL", getattr(settings, "CLASSIFIER_MODEL", "未設定"))
-        react_model = getattr(settings, "REACT_MODEL", getattr(settings, "CLASSIFIER_MODEL", "未設定"))
+        planner_model = getattr(settings, "LIGHT_MODEL", "未設定")
+        react_model = getattr(settings, "PRIMARY_MODEL", "未設定")
         vision_model = getattr(settings, "VISION_MODEL", "") or "（原生端到端多模態）"
         temp = getattr(settings, "LLM_TEMPERATURE", 0.85)
         step_timeout = getattr(
@@ -571,7 +713,7 @@ class AdminCog(commands.Cog):
         )
         agent = DispatchAgentTool(TOOL_LIST, mode=agent_mode)
 
-        planner_model = getattr(settings, "PARALLEL_PLANNER_MODEL", settings.CLASSIFIER_MODEL)
+        planner_model = settings.LIGHT_MODEL
         planner_timeout = getattr(settings, "PARALLEL_STEP_TIMEOUT", 60.0)
 
         try:

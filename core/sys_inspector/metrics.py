@@ -198,6 +198,7 @@ class ComponentMetricsCollector:
     def __init__(self, auto_bootstrap: bool = False) -> None:
         self._stats: dict[str, ComponentStat] = {}
         self._stat_lock = threading.Lock()
+        self._bootstrap_lock = threading.Lock()
         self._bootstrapped = False
         # 初始化常見核心與外掛
         for name, cat in _DEFAULT_CATEGORIES.items():
@@ -456,9 +457,12 @@ class ComponentMetricsCollector:
 
     def get_summary(self) -> dict[str, Any]:
         """取得全域統計快照、排行與總計。"""
-        # 若尚未啟動歷史資料庫繼承且為初次讀取，自動載入歷史數據
+        # 若尚未啟動歷史資料庫繼承且為初次讀取，自動載入歷史數據。
+        # R12：預熱與請求可能並行呼叫，以雙重檢查鎖避免重複 bootstrap 造成重複計數。
         if not getattr(self, "_bootstrapped", False):
-            self.bootstrap_from_db()
+            with self._bootstrap_lock:
+                if not self._bootstrapped:
+                    self.bootstrap_from_db()
 
         with self._stat_lock:
             components_dict = {k: v.to_dict() for k, v in self._stats.items()}

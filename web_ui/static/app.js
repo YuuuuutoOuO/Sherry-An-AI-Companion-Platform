@@ -18,6 +18,17 @@ const state = {
   serviceCheckTimer: null,
   botStatusTimer: null,
   dashboardTimer: null,
+  inFlight: {
+    dashboard: false,
+    metrics: false,
+    botStatus: false,
+    services: false,
+    logs: false,
+    tasks: false,
+    selfMonitoring: false,
+  },
+  tasksTimer: null,
+  isPageVisible: !document.hidden,
   autoRefreshEnabled: true,
   currentSettingsTab: 'tab-ai',
   settingsSearch: '',
@@ -25,11 +36,29 @@ const state = {
   dirtyKeys: new Set(),   // keys that have been changed but not saved
   ollamaModels: [],
   lmsModels: {},           // keyed by model prefix for caching
-  adminToken: localStorage.getItem('sherry_admin_token') || null,
   isAdmin: false,
   lastActivityTime: Date.now(),
   inactivityCheckTimer: null,
+  availableMods: {},
+  loadedModViews: new Set(),
 };
+
+// ── Anti-Stampede Self-Scheduling Helper ─────────────────
+function scheduleNextPoll(timerKey, callback, intervalMs, viewRequired) {
+  if (state[timerKey]) {
+    clearTimeout(state[timerKey]);
+    state[timerKey] = null;
+  }
+  if (!state.isPageVisible) return;
+  if (viewRequired && state.currentView !== viewRequired) return;
+
+  state[timerKey] = setTimeout(async () => {
+    state[timerKey] = null;
+    if (!state.isPageVisible) return;
+    if (viewRequired && state.currentView !== viewRequired) return;
+    await callback();
+  }, intervalMs);
+}
 
 // ── SherryUI Ecosystem for Dynamic Mod Plugins ───────────
 window.SherryUI = {
@@ -37,40 +66,82 @@ window.SherryUI = {
   activePluginId: null,
   registerPlugin(id, config) {
     this.plugins[id] = config;
+    if (config.viewId && config.viewId !== id) {
+      this.plugins[config.viewId] = config;
+    }
     console.log(`[SherryUI] Registered plugin: ${id}`, config);
     // If user is currently looking at this mod view, trigger onActivate immediately
-    if (state.currentView === (config.viewId || id) && typeof config.onActivate === 'function') {
-      try { config.onActivate(); } catch (e) { console.error(e); }
+    if (state.currentView === (config.viewId || id) || state.currentView === id) {
+      this.activePluginId = id;
+      if (config.title) {
+        const titleEl = document.getElementById('view-title');
+        if (titleEl) titleEl.textContent = config.title;
+      }
+      if (typeof config.onActivate === 'function') {
+        try { config.onActivate(); } catch (e) { console.error(e); }
+      }
     }
   },
   getAuthHeaders,
   showToast,
   switchView,
   escapeHtml,
+  sanitizeHtml,
 };
 
 // ── Init ─────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', async () => {
-  await checkAdminAuth();
-  startInactivityTracker();
-  await checkDynamicModules();
-  await loadLogFiles();
+document.addEventListener('DOMContentLoaded', () => {
+  // 1. 即時秒開預設首頁（總覽主控台），消弭任何串行阻塞 (LCP 0ms 延遲)
   switchView('dashboard');
+
+  // R20：主動關懷導覽按鈕以事件監聽綁定（避免新增 inline handler）。
+  const navCare = document.getElementById('nav-care');
+  if (navCare) navCare.addEventListener('click', () => switchView('care'));
+
+  startInactivityTracker();
   startAutoRefresh();
+  startUserHeartbeatTracker();
+
+  // 2. 背景平行非同步處理權限驗證與動態外掛按鈕建置（日誌清單改為切換至日誌分頁時 Lazy 載入）
+  Promise.allSettled([
+    checkAdminAuth(),
+    checkDynamicModules()
+  ]).catch(err => console.warn('[Init] Background init warning:', err));
+});
+
+// ── Page Visibility Listener ─────────────────────────────
+document.addEventListener('visibilitychange', () => {
+  state.isPageVisible = !document.hidden;
+  if (state.isPageVisible) {
+    // 使用者切回分頁，立即喚醒當前視圖資料更新
+    if (state.currentView === 'dashboard') loadDashboard();
+    else if (state.currentView === 'metrics') loadMetrics();
+    else if (state.currentView === 'bot-status') loadBotStatus();
+    else if (state.currentView === 'services') loadServiceStatus();
+    else if (state.currentView === 'logs' && state.autoRefreshEnabled) loadLogs();
+    else if (state.currentView === 'audit') refreshCurrentAuditTab();
+  } else {
+    // 進入背景待機，清除所有高頻輪詢定時器以節省系統資源
+    if (state.metricsTimer) { clearTimeout(state.metricsTimer); state.metricsTimer = null; }
+    if (state.serviceCheckTimer) { clearTimeout(state.serviceCheckTimer); state.serviceCheckTimer = null; }
+    if (state.botStatusTimer) { clearTimeout(state.botStatusTimer); state.botStatusTimer = null; }
+    if (state.dashboardTimer) { clearTimeout(state.dashboardTimer); state.dashboardTimer = null; }
+    if (state.autoRefreshTimer) { clearTimeout(state.autoRefreshTimer); state.autoRefreshTimer = null; }
+  }
 });
 
 /**
- * Dynamically discover and mount mods from /api/modules.
- * Builds sidebar navigation buttons, injects view HTML, and executes mod scripts.
+ * Dynamically discover and mount mod buttons from /api/modules.
+ * Builds sidebar navigation buttons without eager fetching of view HTML/scripts (Lazy Loading).
  */
 async function checkDynamicModules() {
   try {
     const res = await fetch('/api/modules');
     const data = await res.json();
     const mods = data.modules || {};
+    state.availableMods = mods;
     const dynamicNavGroup = document.getElementById('sidebar-dynamic-mods');
     const dynamicNavWrap = document.getElementById('sidebar-dynamic-mods-wrap');
-    const dynamicViewsContainer = document.getElementById('dynamic-mod-views');
 
     if (dynamicNavGroup) dynamicNavGroup.innerHTML = '';
 
@@ -82,7 +153,6 @@ async function checkDynamicModules() {
       mountedModsCount++;
 
       const navId = `nav-${mod.nav_id || mod.id}`;
-      const viewId = `view-${mod.nav_id || mod.id}`;
 
       // 1. Sidebar navigation button
       if (dynamicNavGroup) {
@@ -92,45 +162,9 @@ async function checkDynamicModules() {
           btn.className = 'nav-btn' + (mod.admin_only ? ' admin-only' : '');
           btn.id = navId;
           btn.onclick = () => switchView(mod.nav_id || mod.id);
-          btn.innerHTML = `<span class="nav-icon">${mod.nav_icon || '🧩'}</span><span>${mod.nav_title || mod.display_name}</span>`;
+          btn.title = mod.nav_title || mod.display_name || mod.id;
+          btn.innerHTML = `<span class="nav-icon">${escHtml(mod.nav_icon || '🧩')}</span><span class="nav-label">${escHtml(mod.nav_title || mod.display_name || mod.id)}</span>`;
           dynamicNavGroup.appendChild(btn);
-        }
-      }
-
-      // 2. Fetch and mount dynamic view snippet if has view
-      if (dynamicViewsContainer && mod.has_view && mod.view_url) {
-        let existingView = document.getElementById(viewId);
-        if (!existingView) {
-          try {
-            const viewRes = await fetch(mod.view_url);
-            if (viewRes.ok) {
-              const html = await viewRes.text();
-              const tempWrapper = document.createElement('div');
-              tempWrapper.innerHTML = html.trim();
-              while (tempWrapper.firstChild) {
-                const node = tempWrapper.firstChild;
-                if (node.nodeType === Node.ELEMENT_NODE && node.classList && node.classList.contains('view')) {
-                  if (!node.id) node.id = viewId;
-                  node.classList.add('hidden');
-                }
-                dynamicViewsContainer.appendChild(node);
-              }
-            }
-          } catch (err) {
-            console.error(`Failed to load view for mod [${mod.id}]:`, err);
-          }
-        }
-      }
-
-      // 3. Dynamically inject script tag if has script
-      if (mod.script_url) {
-        const scriptId = `script-mod-${mod.id}`;
-        if (!document.getElementById(scriptId)) {
-          const script = document.createElement('script');
-          script.id = scriptId;
-          script.src = `${mod.script_url}?v=${Date.now()}`;
-          script.async = true;
-          document.body.appendChild(script);
         }
       }
     }
@@ -139,10 +173,113 @@ async function checkDynamicModules() {
       dynamicNavWrap.style.display = mountedModsCount > 0 ? 'flex' : 'none';
     }
   } catch (e) {
-    console.warn('Failed to discover & mount dynamic modules:', e);
+    console.error('Failed to discover dynamic modules:', e);
   }
 }
 
+/**
+ * Lazy-loads view snippet and script for a dynamic mod on-demand with LocalStorage 0ms caching.
+ */
+async function ensureModViewMounted(modKey) {
+  const mod = Object.values(state.availableMods).find(m => (m.nav_id || m.id) === modKey || m.id === modKey);
+  if (!mod || !mod.enabled || !mod.has_web_ui) return;
+
+  const viewId = `view-${mod.nav_id || mod.id}`;
+  const dynamicViewsContainer = document.getElementById('dynamic-mod-views');
+  const cacheKey = `mod_view_${mod.id}_${mod.version || '1.0.0'}`;
+
+  // Helper to mount HTML into DOM safely
+  const mountHtml = (html) => {
+    if (!html || !dynamicViewsContainer) return;
+    const tempWrapper = document.createElement('div');
+    tempWrapper.innerHTML = html.trim();
+    while (tempWrapper.firstChild) {
+      const node = tempWrapper.firstChild;
+      if (node.nodeType === Node.ELEMENT_NODE && node.classList && node.classList.contains('view')) {
+        if (!node.id) node.id = viewId;
+        const isCurrent = (state.currentView === modKey || state.currentView === (mod.nav_id || mod.id));
+        if (isCurrent) {
+          node.classList.remove('hidden');
+        } else {
+          node.classList.add('hidden');
+        }
+      }
+      dynamicViewsContainer.appendChild(node);
+    }
+    state.loadedModViews.add(viewId);
+    // Remove loading placeholder
+    const spinner = document.getElementById('mod-loading-placeholder');
+    if (spinner) spinner.remove();
+  };
+
+  // 1. Check if already mounted in DOM
+  let existingView = document.getElementById(viewId);
+  if (existingView) {
+    state.loadedModViews.add(viewId);
+    if (state.currentView === modKey || state.currentView === (mod.nav_id || mod.id)) {
+      existingView.classList.remove('hidden');
+    }
+  } else if (dynamicViewsContainer && mod.has_view && mod.view_url) {
+    // 2. Check LocalStorage Cache for 0ms instant render
+    let cachedHtml = null;
+    try { cachedHtml = localStorage.getItem(cacheKey); } catch (e) {}
+
+    if (cachedHtml) {
+      mountHtml(cachedHtml);
+    } else {
+      // 3. Fetch from server with loading placeholder
+      try {
+        const viewRes = await fetch(mod.view_url);
+        if (viewRes.ok) {
+          const html = await viewRes.text();
+          if (html) {
+            try { localStorage.setItem(cacheKey, html); } catch (e) {}
+            mountHtml(html);
+          }
+        }
+      } catch (err) {
+        console.error(`Failed to load view for mod [${mod.id}]:`, err);
+      }
+    }
+  }
+
+  // 4. Inject script tag if not already injected
+  if (mod.script_url) {
+    const scriptId = `script-mod-${mod.id}`;
+    let script = document.getElementById(scriptId);
+    if (!script) {
+      script = document.createElement('script');
+      script.id = scriptId;
+      script.src = `${mod.script_url}?v=${Date.now()}`;
+      script.async = true;
+      script.onload = () => {
+        if (window.SherryUI && window.SherryUI.plugins) {
+          const plugin = window.SherryUI.plugins[modKey] || window.SherryUI.plugins[mod.nav_id || mod.id];
+          if (plugin && (state.currentView === modKey || state.currentView === (mod.nav_id || mod.id))) {
+            window.SherryUI.activePluginId = modKey;
+            if (plugin.title) document.getElementById('view-title').textContent = plugin.title;
+            if (typeof plugin.onActivate === 'function') {
+              try { plugin.onActivate(); } catch (e) { console.error(e); }
+            }
+          }
+        }
+      };
+      document.body.appendChild(script);
+    }
+  }
+
+  // 5. Activate plugin if already registered
+  const activePlugin = (window.SherryUI && window.SherryUI.plugins) ? (window.SherryUI.plugins[modKey] || window.SherryUI.plugins[mod.nav_id || mod.id]) : null;
+  if (activePlugin) {
+    if (state.currentView === modKey || state.currentView === (mod.nav_id || mod.id)) {
+      window.SherryUI.activePluginId = modKey;
+      if (activePlugin.title) document.getElementById('view-title').textContent = activePlugin.title;
+      if (typeof activePlugin.onActivate === 'function') {
+        try { activePlugin.onActivate(); } catch (e) { console.error(e); }
+      }
+    }
+  }
+}
 
 // =========================================================
 // VIEW SWITCHING
@@ -159,26 +296,38 @@ function switchView(view) {
 
   state.currentView = view;
 
+  // Notify Live2D Companion of view change
+  if (window.sherryCompanion && typeof window.sherryCompanion.onViewChanged === 'function') {
+    window.sherryCompanion.onViewChanged(view);
+  }
+
   document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
   document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
   document.querySelectorAll('[id$="-toolbar"]').forEach(tb => tb.classList.add('hidden'));
 
   if (state.metricsTimer) {
-    clearInterval(state.metricsTimer);
+    clearTimeout(state.metricsTimer);
     state.metricsTimer = null;
   }
   if (state.serviceCheckTimer) {
-    clearInterval(state.serviceCheckTimer);
+    clearTimeout(state.serviceCheckTimer);
     state.serviceCheckTimer = null;
   }
   if (state.botStatusTimer) {
-    clearInterval(state.botStatusTimer);
+    clearTimeout(state.botStatusTimer);
     state.botStatusTimer = null;
   }
   if (state.dashboardTimer) {
-    clearInterval(state.dashboardTimer);
+    clearTimeout(state.dashboardTimer);
     state.dashboardTimer = null;
   }
+  if (state.tasksTimer) {
+    clearTimeout(state.tasksTimer);
+    state.tasksTimer = null;
+  }
+
+  // 延遲載入並啟動外掛視圖
+  ensureModViewMounted(view);
 
   if (view === 'dashboard') {
     const navDb = document.getElementById('nav-dashboard');
@@ -186,32 +335,34 @@ function switchView(view) {
     document.getElementById('view-dashboard').classList.remove('hidden');
     const dTb = document.getElementById('dashboard-toolbar');
     if (dTb) dTb.classList.remove('hidden');
-    document.getElementById('view-title').textContent = '📊 總覽主控台';
+    document.getElementById('view-title').textContent = '總覽主控台';
     loadDashboard();
-    state.dashboardTimer = setInterval(loadDashboard, 5000);
   } else if (view === 'logs') {
     document.getElementById('nav-logs').classList.add('active');
     document.getElementById('view-logs').classList.remove('hidden');
     document.getElementById('logs-toolbar').classList.remove('hidden');
     document.getElementById('view-title').textContent = '即時日誌';
-    if (state.totalEntries === 0) loadLogs();
+    if (!state.logFilesLoaded) {
+      loadLogFiles().then(() => { if (state.totalEntries === 0) loadLogs(); });
+    } else if (state.totalEntries === 0) {
+      loadLogs();
+    }
   } else if (view === 'metrics') {
     document.getElementById('nav-metrics').classList.add('active');
     document.getElementById('view-metrics').classList.remove('hidden');
     document.getElementById('metrics-toolbar').classList.remove('hidden');
-    document.getElementById('view-title').textContent = '💻 系統資源監控';
+    document.getElementById('view-title').textContent = '系統資源監控';
     loadMetrics();
-    state.metricsTimer = setInterval(loadMetrics, 2000);
   } else if (view === 'tasks') {
     document.getElementById('nav-tasks').classList.add('active');
     document.getElementById('view-tasks').classList.remove('hidden');
     document.getElementById('tasks-toolbar').classList.remove('hidden');
-    document.getElementById('view-title').textContent = '⏰ 任務排程管理';
+    document.getElementById('view-title').textContent = '即時工作與自癒中樞';
     loadTasks();
   } else if (view === 'chat') {
     document.getElementById('nav-chat').classList.add('active');
     document.getElementById('view-chat').classList.remove('hidden');
-    document.getElementById('view-title').textContent = '💬 橘雪莉穩定性測試室 (必定觸發 CHAT)';
+    document.getElementById('view-title').textContent = '雪莉穩定性測試室';
     setTimeout(() => {
       const inputEl = document.getElementById('chat-input');
       if (inputEl && !inputEl.classList.contains('hidden')) inputEl.focus();
@@ -221,26 +372,28 @@ function switchView(view) {
     document.getElementById('view-services').classList.remove('hidden');
     const sTb = document.getElementById('services-toolbar');
     if (sTb) sTb.classList.remove('hidden');
-    document.getElementById('view-title').textContent = '📡 地端 AI 服務即時監測';
+    document.getElementById('view-title').textContent = '地端 AI 服務監測';
     loadServiceStatus();
-    state.serviceCheckTimer = setInterval(loadServiceStatus, 5000);
   } else if (view === 'bot-status') {
     const navBs = document.getElementById('nav-bot-status');
     if (navBs) navBs.classList.add('active');
     document.getElementById('view-bot-status').classList.remove('hidden');
     const bTb = document.getElementById('bot-status-toolbar');
     if (bTb) bTb.classList.remove('hidden');
-    document.getElementById('view-title').textContent = '🎵 雪莉語音與音樂動態監控';
+    document.getElementById('view-title').textContent = '語音與音樂監控';
     loadBotStatus();
-    state.botStatusTimer = setInterval(loadBotStatus, 3000);
   } else if (view === 'audit') {
     const navAudit = document.getElementById('nav-audit');
     if (navAudit) navAudit.classList.add('active');
     document.getElementById('view-audit').classList.remove('hidden');
     const aTb = document.getElementById('audit-toolbar');
     if (aTb) aTb.classList.remove('hidden');
-    document.getElementById('view-title').textContent = '🛡️ 管理員審計紀錄';
-    loadAuditLogs();
+    document.getElementById('view-title').textContent = '審計與連線監控';
+    if (typeof currentAuditTab !== 'undefined' && currentAuditTab === 'user') {
+      loadUserConnections();
+    } else {
+      loadAuditLogs();
+    }
   } else if (view === 'mod-manager') {
     const navMM = document.getElementById('nav-mod-manager');
     if (navMM) navMM.classList.add('active');
@@ -248,14 +401,14 @@ function switchView(view) {
     if (viewMM) viewMM.classList.remove('hidden');
     const mmTb = document.getElementById('mod-manager-toolbar');
     if (mmTb) mmTb.classList.remove('hidden');
-    document.getElementById('view-title').textContent = '🧩 功能模組管理中心';
+    document.getElementById('view-title').textContent = '功能模組管理';
     loadModManager();
   } else if (view === 'self-monitoring') {
     const navSM = document.getElementById('nav-self-monitoring');
     if (navSM) navSM.classList.add('active');
     const viewSM = document.getElementById('view-self-monitoring');
     if (viewSM) viewSM.classList.remove('hidden');
-    document.getElementById('view-title').textContent = '🛡️ 系統自我監控與延遲稽核主控台';
+    document.getElementById('view-title').textContent = '自我監控與延遲稽核';
     loadSelfMonitoringData();
   } else if (view === 'roast') {
     const navRoast = document.getElementById('nav-roast');
@@ -264,16 +417,25 @@ function switchView(view) {
     if (viewRoast) viewRoast.classList.remove('hidden');
     const rTb = document.getElementById('roast-toolbar');
     if (rTb) rTb.classList.remove('hidden');
-    document.getElementById('view-title').textContent = '🎯 關鍵字吐槽管理中心';
+    document.getElementById('view-title').textContent = '關鍵字吐槽管理';
     loadRoastConfig();
   } else if (view === 'spark') {
     const navSpark = document.getElementById('nav-spark');
     if (navSpark) navSpark.classList.add('active');
     const viewSpark = document.getElementById('view-spark');
     if (viewSpark) viewSpark.classList.remove('hidden');
-    document.getElementById('view-title').textContent = '📡 Spark 泛用條件推播主控台';
+    document.getElementById('view-title').textContent = 'Spark 條件推播';
     if (window.SparkApp) {
       SparkApp.init();
+    }
+  } else if (view === 'care') {
+    const navCare = document.getElementById('nav-care');
+    if (navCare) navCare.classList.add('active');
+    const viewCare = document.getElementById('view-care');
+    if (viewCare) viewCare.classList.remove('hidden');
+    document.getElementById('view-title').textContent = '賽博群友與自我記憶';
+    if (window.CareApp) {
+      CareApp.init();
     }
   } else if (view === 'settings') {
     document.getElementById('nav-settings').classList.add('active');
@@ -289,8 +451,28 @@ function switchView(view) {
     // Dynamic Mod Plugin View activation
     const navBtn = document.getElementById(`nav-${view}`) || document.getElementById(`nav-mod-${view}`);
     if (navBtn) navBtn.classList.add('active');
+
+    // Immediate title synchronization from availableMods
+    const mod = Object.values(state.availableMods || {}).find(m => (m.nav_id || m.id) === view || m.id === view);
+    if (mod && mod.view_title) {
+      const titleEl = document.getElementById('view-title');
+      if (titleEl) titleEl.textContent = mod.view_title;
+    }
+
     const viewEl = document.getElementById(`view-${view}`);
-    if (viewEl) viewEl.classList.remove('hidden');
+    if (viewEl) {
+      viewEl.classList.remove('hidden');
+    } else {
+      // Show smooth loading placeholder if view is downloading
+      const dynamicViewsContainer = document.getElementById('dynamic-mod-views');
+      if (dynamicViewsContainer && !document.getElementById('mod-loading-placeholder')) {
+        const placeholder = document.createElement('div');
+        placeholder.id = 'mod-loading-placeholder';
+        placeholder.className = 'view';
+        placeholder.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:50vh;color:var(--text-muted);font-size:1.1rem;gap:16px;"><div class="spinner" style="width:36px;height:36px;border:3px solid rgba(56,189,248,0.2);border-top-color:#38bdf8;border-radius:50%;animation:spin 0.8s linear infinite;"></div><span>載入模組介面中...</span></div>';
+        dynamicViewsContainer.appendChild(placeholder);
+      }
+    }
     const tbEl = document.getElementById(`${view}-toolbar`);
     if (tbEl) tbEl.classList.remove('hidden');
 
@@ -329,6 +511,7 @@ async function loadLogFiles() {
     const resp = await fetch('/api/logs/files', { headers: getAuthHeaders() });
     if (!resp.ok) return;
     const files = await resp.json();
+    state.logFilesLoaded = true;
     const sel = document.getElementById('log-file-select');
     sel.innerHTML = '<option value="">— 選擇日誌/資料庫 —</option>';
     files.forEach(f => {
@@ -364,8 +547,11 @@ function reloadLogs() {
 
 async function loadLogs() {
   if (state.currentView !== 'logs') return;
+  if (state.inFlight.logs) return;
+  state.inFlight.logs = true;
+
   const sizeSel = document.getElementById('log-size-select');
-  const size = parseInt(sizeSel.value || '50');
+  const size = parseInt(sizeSel?.value || '50');
 
   try {
     const url = `/api/logs?file=${encodeURIComponent(state.currentLogFile)}&page=${state.currentPage}&size=${size}`;
@@ -386,6 +572,11 @@ async function loadLogs() {
   } catch (e) {
     setStatus(false, '連線錯誤');
     console.error('Failed to load logs:', e);
+  } finally {
+    state.inFlight.logs = false;
+    if (state.autoRefreshEnabled && state.currentView === 'logs') {
+      scheduleNextPoll('autoRefreshTimer', loadLogs, 5000, 'logs');
+    }
   }
 }
 
@@ -407,7 +598,7 @@ function renderLogs(entries) {
     const event = log.event || 'raw';
     el.className = 'log-entry';
     el.dataset.event = event;
-    el.innerHTML = buildLogHTML(log, event);
+    el.innerHTML = sanitizeHtml(buildLogHTML(log, event));
     el.addEventListener('click', () => showLogDetail(log));
     container.appendChild(el);
   });
@@ -442,7 +633,7 @@ function buildLogHTML(log, event) {
   let body = '';
   if (event === 'command_exec' || event === 'component_interaction' || event === 'modal_submit') {
     const u = log.user ? `👤 ${escHtml(log.user)}` : '';
-    const ch = log.channel_id ? ` • 💬 #${log.channel_id}` : '';
+    const ch = log.channel_id ? ` • 💬 #${escHtml(log.channel_id)}` : '';
     const lat = log.latency_ms ? ` • ⚡ ${log.latency_ms} ms` : '';
     const tid = log.trace_id ? ` • 🔗 <code>${escHtml(log.trace_id)}</code>` : '';
     body += `<div class="log-user-text">${u}${ch}${lat}${tid}</div>`;
@@ -469,7 +660,7 @@ function buildLogHTML(log, event) {
     body += `<div class="log-user-text">👤 ${escHtml(log.raw_input || '')}</div>`;
     const latStr = log.latency_ms ? ` • ⚡ 耗時 ${log.latency_ms} ms` : '';
     const modelStr = log.model_used ? ` • 🤖 ${escHtml(log.model_used)}` : '';
-    const toolsStr = (log.tools_invoked && log.tools_invoked.length) ? ` • 🛠️ [${log.tools_invoked.join(', ')}]` : '';
+    const toolsStr = (log.tools_invoked && log.tools_invoked.length) ? ` • 🛠️ [${log.tools_invoked.map(t => escHtml(String(t))).join(', ')}]` : '';
     const tidStr = log.trace_id ? ` • 🔗 <code>${escHtml(log.trace_id)}</code>` : '';
     if (log.intent) body += `<div class="log-intent">Intent: ${escHtml(log.intent)}${latStr}${modelStr}${toolsStr}${tidStr}</div>`;
     if (log.reply_preview) body += `<div class="log-reply-text">🤖 ${escHtml(log.reply_preview)}</div>`;
@@ -481,7 +672,7 @@ function buildLogHTML(log, event) {
     const score = log.extra?.extra_score ?? log.score ?? '';
     const reason = log.extra?.extra_reasoning ?? log.reasoning ?? '';
     const reply = log.extra?.extra_reply ?? '';
-    if (score !== '') body += `<div class="log-intent">Score: ${score}</div>`;
+    if (score !== '') body += `<div class="log-intent">Score: ${escHtml(score)}</div>`;
     if (reason) body += `<div class="log-thought-text">💭 ${escHtml(reason)}</div>`;
     if (reply) body += `<div class="log-reply-text">🤖 ${escHtml(reply)}</div>`;
   } else {
@@ -494,7 +685,7 @@ function buildLogHTML(log, event) {
   return `
     <div class="log-header">
       <span class="log-time">${escHtml(ts)}</span>
-      <span class="log-badge ${badgeClass}">${badgeLabel}</span>
+      <span class="log-badge ${badgeClass}">${escHtml(badgeLabel)}</span>
     </div>
     ${body}
   `;
@@ -526,16 +717,24 @@ function setEventFilter(event) {
 
 // ── Auto Refresh ───────────────────────────────────────
 function startAutoRefresh() {
-  if (state.autoRefreshTimer) clearInterval(state.autoRefreshTimer);
-  state.autoRefreshTimer = setInterval(() => {
-    if (state.autoRefreshEnabled && state.currentView === 'logs') {
-      loadLogs();
-    }
-  }, 5000);
+  if (state.autoRefreshTimer) {
+    clearTimeout(state.autoRefreshTimer);
+    state.autoRefreshTimer = null;
+  }
+  if (state.autoRefreshEnabled && state.currentView === 'logs') {
+    scheduleNextPoll('autoRefreshTimer', loadLogs, 5000, 'logs');
+  }
 }
 
 function toggleAutoRefresh() {
-  state.autoRefreshEnabled = document.getElementById('auto-refresh-chk').checked;
+  const chk = document.getElementById('auto-refresh-chk');
+  state.autoRefreshEnabled = chk ? chk.checked : true;
+  if (state.autoRefreshEnabled) {
+    startAutoRefresh();
+  } else if (state.autoRefreshTimer) {
+    clearTimeout(state.autoRefreshTimer);
+    state.autoRefreshTimer = null;
+  }
 }
 
 // ── Log Detail Modal ────────────────────────────────────
@@ -612,7 +811,7 @@ function renderSettings() {
   if (!wrapper) return;
 
   if (!state.settingsData || Object.keys(state.settingsData).length === 0) {
-    if (!state.isAdmin && !state.adminToken) {
+    if (!state.isAdmin) {
       wrapper.innerHTML = `
         <div class="placeholder-msg" style="padding: 3.5rem 1rem; text-align: center;">
           <div style="font-size: 2.2rem; margin-bottom: 12px;">🔒</div>
@@ -774,7 +973,7 @@ function buildSettingItem({ key, value, label, description, type, min, max, step
       </select>`;
   } else if (type === 'model') {
     control = buildModelPicker(key, value);
-  } else if (type === 'list') {
+  } else if (type === 'list' || (typeof type === 'string' && type.startsWith('list'))) {
     control = buildListEditor(key, value, item_type);
   } else if (type === 'float' || type === 'int') {
     const stepVal = step || (type === 'float' ? 0.1 : 1);
@@ -833,7 +1032,7 @@ function buildSettingItem({ key, value, label, description, type, min, max, step
 }
 
 function buildModelPicker(key, value) {
-  const PREFIXES = ['freetoken', 'ollama', 'lms', 'vllm', 'openai', 'deepseek', 'gemini', 'openrouter', 'claude'];
+  const PREFIXES = ['freetoken', 'ollama', 'lms', 'vllm', 'openai', 'deepseek', 'gemini', 'openrouter', 'claude', 'groq'];
   // Parse current value
   const colonIdx = (value || '').indexOf(':');
   const currentPrefix = colonIdx > -1 ? (value || '').slice(0, colonIdx) : 'freetoken';
@@ -937,7 +1136,10 @@ function collectListValues(key) {
   const chips = document.querySelectorAll(`#list-chips-${key} .list-chip`);
   return Array.from(chips).map(c => {
     const val = c.dataset.val;
-    if (itemType === 'int') return parseInt(val, 10);
+    if (itemType === 'int') {
+      // 保留字串傳遞，避免 JS IEEE 754 雙精度浮點數截斷 64-bit Discord Snowflake ID
+      return String(val ?? '').trim();
+    }
     if (itemType === 'float') return parseFloat(val);
     if (itemType === 'bool') return val === 'true';
     return val;
@@ -1036,7 +1238,7 @@ async function fetchModelsForPicker(key) {
     ).join('');
     // Also add manual option at end
     optionsHtml += `<option value="__manual__">✏️ 手動輸入...</option>`;
-    sel.innerHTML = optionsHtml;
+    sel.innerHTML = sanitizeHtml(optionsHtml);
 
     // Sync input with selected
     if (sel.value !== undefined && sel.value !== '__manual__' && inp) {
@@ -1139,7 +1341,7 @@ async function saveSettings() {
       if (picker) {
         currentVal = getModelValue(key);
       }
-    } else if (type === 'list') {
+    } else if (type === 'list' || (typeof type === 'string' && type.startsWith('list'))) {
       const editor = document.getElementById(`list-${key}`);
       if (editor) currentVal = collectListValues(key);
     } else if (type === 'float') {
@@ -1147,7 +1349,14 @@ async function saveSettings() {
       if (el) currentVal = parseFloat(el.value) || 0;
     } else if (type === 'int') {
       const el = document.getElementById(`inp-${key}`);
-      if (el) currentVal = parseInt(el.value) || 0;
+      if (el) {
+        const strVal = el.value.trim();
+        if (strVal.length > 15 && /^-?\d+$/.test(strVal)) {
+          currentVal = strVal;
+        } else {
+          currentVal = parseInt(strVal, 10) || 0;
+        }
+      }
     } else {
       const el = document.getElementById(`inp-${key}`);
       if (el) currentVal = el.value;
@@ -1268,7 +1477,9 @@ function _pollForRestart(maxAttempts, successMsg, timeoutMsg) {
     attempts++;
     if (desc) desc.textContent = `等待雪莉重新上線... (${attempts}s)`;
     try {
-      const check = await fetch('/api/logs/files', { cache: 'no-store' });
+      // R3：/api/logs/files 已收斂為管理員專用（且重啟後舊 Session 必然失效），
+      // 改以公開的 /api/version 作為存活探測。
+      const check = await fetch('/api/version', { cache: 'no-store' });
       if (check.ok && attempts >= 4) {
         clearInterval(pollInterval);
         if (desc) desc.textContent = successMsg;
@@ -1303,13 +1514,26 @@ function showToast(message, type = 'info') {
 // =========================================================
 function escHtml(str) {
   return String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 function escAttr(str) {
-  return String(str ?? '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  // R4：統一轉義工具——屬性情境沿用 escHtml 同一實作
+  return escHtml(str);
 }
 function sanitizeId(str) {
   return String(str).replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+// R5：DOMPurify 統一淨化入口（vendored：/static/vendor/purify.min.js；離線可用）
+// 政策：動態 HTML 進 innerHTML 前，一律經 escHtml 轉義或 sanitizeHtml 淨化；
+// 例外（必含 inline 事件屬性之模板）另見清點文件。DOMPurify 未載入時降級為保守過濾。
+function sanitizeHtml(html) {
+  if (typeof DOMPurify !== 'undefined' && typeof DOMPurify.sanitize === 'function') {
+    return DOMPurify.sanitize(String(html ?? ''), { USE_PROFILES: { html: true } });
+  }
+  return String(html ?? '')
+    .replace(/<\s*\/?\s*script/gi, '&lt;script')
+    .replace(/\son\w+\s*=/gi, ' data-blocked-handler=');
 }
 function formatBytes(b) {
   if (b < 1024) return b + ' B';
@@ -1350,6 +1574,10 @@ function formatToUtc8(val) {
 // SYSTEM METRICS & TASKS
 // =========================================================
 async function loadMetrics() {
+  if (state.currentView !== 'metrics') return;
+  if (state.inFlight.metrics) return;
+  state.inFlight.metrics = true;
+
   try {
     const resp = await fetch('/api/system/metrics');
     if (!resp.ok) return;
@@ -1358,69 +1586,92 @@ async function loadMetrics() {
     // 1. CPU
     const cpu = data.cpu || {};
     const cpuP = Math.round(cpu.percent || 0);
-    document.getElementById('cpu-percent-val').textContent = cpuP + '%';
-    document.getElementById('cpu-percent-badge').textContent = cpuP + '%';
-    document.getElementById('cpu-bar').style.width = Math.min(100, cpuP) + '%';
-    document.getElementById('cpu-cores-text').textContent = `核心數: ${cpu.count || '--'}`;
-    document.getElementById('cpu-freq-text').textContent = `時脈: ${cpu.freq_mhz || '--'} MHz`;
+    const cpuValEl = document.getElementById('cpu-percent-val');
+    const cpuBadgeEl = document.getElementById('cpu-percent-badge');
+    const cpuBarEl = document.getElementById('cpu-bar');
+    const cpuCoresEl = document.getElementById('cpu-cores-text');
+    const cpuFreqEl = document.getElementById('cpu-freq-text');
+
+    if (cpuValEl) cpuValEl.textContent = cpuP + '%';
+    if (cpuBadgeEl) cpuBadgeEl.textContent = cpuP + '%';
+    if (cpuBarEl) cpuBarEl.style.width = Math.min(100, cpuP) + '%';
+    if (cpuCoresEl) cpuCoresEl.textContent = `核心數: ${cpu.count || '--'}`;
+    if (cpuFreqEl) cpuFreqEl.textContent = `時脈: ${cpu.freq_mhz || '--'} MHz`;
 
     // 2. RAM
     const ram = data.ram || {};
     const ramP = Math.round(ram.percent || 0);
-    document.getElementById('ram-usage-val').textContent = `${ram.used_gb || 0} GB / ${ram.total_gb || 0} GB`;
-    document.getElementById('ram-percent-badge').textContent = ramP + '%';
-    document.getElementById('ram-percent-text').textContent = `使用率: ${ramP}%`;
-    document.getElementById('ram-bar').style.width = Math.min(100, ramP) + '%';
+    const ramValEl = document.getElementById('ram-usage-val');
+    const ramBadgeEl = document.getElementById('ram-percent-badge');
+    const ramTextEl = document.getElementById('ram-percent-text');
+    const ramBarEl = document.getElementById('ram-bar');
+
+    if (ramValEl) ramValEl.textContent = `${ram.used_gb || 0} GB / ${ram.total_gb || 0} GB`;
+    if (ramBadgeEl) ramBadgeEl.textContent = ramP + '%';
+    if (ramTextEl) ramTextEl.textContent = `使用率: ${ramP}%`;
+    if (ramBarEl) ramBarEl.style.width = Math.min(100, ramP) + '%';
 
     // 3. Network
     const net = data.network || {};
     const sentRate = net.sent_rate_kbps > 1024 ? (net.sent_rate_kbps / 1024).toFixed(2) + ' MB/s' : (net.sent_rate_kbps || 0) + ' KB/s';
     const recvRate = net.recv_rate_kbps > 1024 ? (net.recv_rate_kbps / 1024).toFixed(2) + ' MB/s' : (net.recv_rate_kbps || 0) + ' KB/s';
-    document.getElementById('net-sent-rate').textContent = sentRate;
-    document.getElementById('net-recv-rate').textContent = recvRate;
-    document.getElementById('net-total-sent').textContent = `總發送: ${net.total_sent_mb || 0} MB`;
-    document.getElementById('net-total-recv').textContent = `總接收: ${net.total_recv_mb || 0} MB`;
+    const netSentEl = document.getElementById('net-sent-rate');
+    const netRecvEl = document.getElementById('net-recv-rate');
+    const netTotSentEl = document.getElementById('net-total-sent');
+    const netTotRecvEl = document.getElementById('net-total-recv');
+
+    if (netSentEl) netSentEl.textContent = sentRate;
+    if (netRecvEl) netRecvEl.textContent = recvRate;
+    if (netTotSentEl) netTotSentEl.textContent = `總發送: ${net.total_sent_mb || 0} MB`;
+    if (netTotRecvEl) netTotRecvEl.textContent = `總接收: ${net.total_recv_mb || 0} MB`;
 
     // 4. GPU
     const gpus = data.gpu || [];
     const gpuBadge = document.getElementById('gpu-status-badge');
     const gpuBody = document.getElementById('gpu-card-body');
 
-    if (gpus.length === 0) {
-      gpuBadge.textContent = '無獨顯 / 未偵測到';
-      gpuBadge.className = 'metric-badge';
-      gpuBody.innerHTML = '<div class="placeholder-msg" style="padding: 1rem 0;">系統以 CPU/NPU 運算，未偵測到獨立 NVIDIA 顯示卡。</div>';
-    } else {
-      gpuBadge.textContent = `${gpus.length} 顯卡上線`;
-      gpuBadge.className = 'metric-badge badge-gpu';
-      let html = '';
-      gpus.forEach(g => {
-        html += `
-          <div class="gpu-item">
-            <div class="gpu-name">🎮 ${escHtml(g.name)} (${g.temperature_c}°C)</div>
-            <div class="progress-bar-bg" style="margin-bottom: 0.5rem;">
-              <div class="progress-bar-fill bar-gpu" style="width: ${Math.min(100, g.utilization)}%"></div>
-            </div>
-            <div class="gpu-stats">
-              <div class="gpu-stat-box">
-                <div class="gpu-stat-lbl">GPU 核心算力使用率</div>
-                <div class="gpu-stat-num">${g.utilization}%</div>
+    if (gpuBadge && gpuBody) {
+      if (gpus.length === 0) {
+        gpuBadge.textContent = '無獨顯 / 未偵測到';
+        gpuBadge.className = 'metric-badge';
+        gpuBody.innerHTML = '<div class="placeholder-msg" style="padding: 1rem 0;">系統以 CPU/NPU 運算，未偵測到獨立 NVIDIA 顯示卡。</div>';
+      } else {
+        gpuBadge.textContent = `${gpus.length} 顯卡上線`;
+        gpuBadge.className = 'metric-badge badge-gpu';
+        let html = '';
+        gpus.forEach(g => {
+          html += `
+            <div class="gpu-item">
+              <div class="gpu-name">🎮 ${escHtml(g.name)} (${g.temperature_c}°C)</div>
+              <div class="progress-bar-bg" style="margin-bottom: 0.5rem;">
+                <div class="progress-bar-fill bar-gpu" style="width: ${Math.min(100, g.utilization)}%"></div>
               </div>
-              <div class="gpu-stat-box">
-                <div class="gpu-stat-lbl">VRAM 顯存使用量</div>
-                <div class="gpu-stat-num">${g.memory_used_mb} MB / ${g.memory_total_mb} MB (${g.memory_percent}%)</div>
+              <div class="gpu-stats">
+                <div class="gpu-stat-box">
+                  <div class="gpu-stat-lbl">GPU 核心算力使用率</div>
+                  <div class="gpu-stat-num">${g.utilization}%</div>
+                </div>
+                <div class="gpu-stat-box">
+                  <div class="gpu-stat-lbl">VRAM 顯存使用量</div>
+                  <div class="gpu-stat-num">${g.memory_used_mb} MB / ${g.memory_total_mb} MB (${g.memory_percent}%)</div>
+                </div>
               </div>
             </div>
-          </div>
-        `;
-      });
-      gpuBody.innerHTML = html;
+          `;
+        });
+        gpuBody.innerHTML = sanitizeHtml(html);
+      }
     }
 
     // 5. Component Metrics (Admin Only)
     await loadComponentMetrics();
   } catch (e) {
     console.warn('Failed to fetch system metrics:', e);
+  } finally {
+    state.inFlight.metrics = false;
+    if (state.currentView === 'metrics') {
+      scheduleNextPoll('metricsTimer', loadMetrics, 2000, 'metrics');
+    }
   }
 }
 
@@ -1519,6 +1770,13 @@ async function loadComponentMetrics() {
   const tbody = document.getElementById('component-metrics-tbody');
   if (!container || !tbody) return;
 
+  if (!state.isAdmin) {
+    if (notice) notice.classList.remove('hidden');
+    container.classList.add('hidden');
+    if (actions) actions.classList.add('hidden');
+    return;
+  }
+
   try {
     const headers = typeof getAuthHeaders === 'function' ? getAuthHeaders() : {};
     const resp = await fetch('/api/system/components/metrics', {
@@ -1526,11 +1784,7 @@ async function loadComponentMetrics() {
       credentials: 'same-origin',
     });
     if (resp.status === 401) {
-      if (!state.isAdmin && !state.adminToken) {
-        if (notice) notice.classList.remove('hidden');
-        container.classList.add('hidden');
-        if (actions) actions.classList.add('hidden');
-      }
+      updateAuthUI(false);
       return;
     }
     if (!resp.ok) return;
@@ -2084,6 +2338,9 @@ async function openAuditDetail(recordId) {
       : '<span style="color: #64748b;">無特定關鍵日誌證據</span>';
 
     const snap = r.log_snapshot || {};
+    const snapSnippet = (snap.bot_log_snippet && snap.runtime_event_snippet)
+      ? `--- Bot Log ---\n${snap.bot_log_snippet}\n\n--- Runtime Events ---\n${snap.runtime_event_snippet}`
+      : (snap.bot_log_snippet || snap.runtime_event_snippet || (typeof snap === 'string' ? snap : (Object.keys(snap).length > 0 ? JSON.stringify(snap, null, 2) : '(無日誌節錄)')));
     const extraMetrics = r.extra_metrics || {};
     let metricsHtml = '';
     const metricKeys = Object.keys(extraMetrics);
@@ -2138,7 +2395,7 @@ async function openAuditDetail(recordId) {
       </div>
     `;
   } catch (err) {
-    content.innerHTML = `<div style="color: #f87171;">載入異常: ${escHtml(err.message)}</div>`;
+    content.innerHTML = sanitizeHtml(`<div style="color: #f87171;">載入異常: ${escHtml(err.message)}</div>`);
   }
 }
 
@@ -2147,21 +2404,70 @@ function closeSelfMonModal() {
   if (modal) modal.style.display = 'none';
 }
 
-async function loadTasks() {
-  const bContainer = document.getElementById('brain-queue-container');
-  const sContainer = document.getElementById('tasks-container');
+async function loadRecoveryStatus() {
+  const badgeEl = document.getElementById('recovery-enabled-badge');
+  const provEl = document.getElementById('recovery-providers-count');
+  const actEl = document.getElementById('recovery-active-snapshots');
+  const quarEl = document.getElementById('recovery-quarantined-snapshots');
+  const savedEl = document.getElementById('recovery-last-saved');
+  if (!badgeEl) return;
 
-  // 1. Fetch Brain Inference Queue
-  if (bContainer) {
+  try {
+    const resp = await fetch('/api/recovery/status', {
+      headers: getAuthHeaders(),
+      credentials: 'same-origin',
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      const enabled = data.enabled !== false;
+      badgeEl.textContent = enabled ? '🟢 運作中' : '⚪ 已停用';
+      badgeEl.style.color = enabled ? '#4ade80' : '#94a3b8';
+      badgeEl.style.background = enabled ? 'rgba(34, 197, 94, 0.15)' : 'rgba(148, 163, 184, 0.15)';
+      badgeEl.style.borderColor = enabled ? 'rgba(34, 197, 94, 0.3)' : 'rgba(148, 163, 184, 0.3)';
+
+      if (provEl) provEl.textContent = `${(data.registered_providers || []).length} 個`;
+      const snap = data.snapshots || {};
+      if (actEl) actEl.textContent = `${snap.active ?? 0} 份`;
+      if (quarEl) quarEl.textContent = `${snap.quarantined ?? 0} 份`;
+      if (savedEl) {
+        if (snap.last_saved_at) {
+          savedEl.textContent = formatToUtc8(snap.last_saved_at);
+        } else {
+          savedEl.textContent = '尚無紀錄';
+        }
+      }
+    } else if (resp.status === 401) {
+      badgeEl.textContent = '🔒 未認證';
+      badgeEl.style.color = '#f87171';
+    }
+  } catch (e) {
+    console.error('loadRecoveryStatus error:', e);
+  }
+}
+
+async function loadTasks() {
+  if (state.currentView !== 'tasks') return;
+  if (state.inFlight.tasks) return;
+  state.inFlight.tasks = true;
+
+  const bContainer = document.getElementById('brain-queue-container');
+  const aiContainer = document.getElementById('ai-tasks-container');
+
+  const fetchBrain = async () => {
+    if (!bContainer) return;
     try {
-      const bResp = await fetch('/api/brain/queue');
-      if (bResp.ok) {
+      const bResp = await fetch('/api/brain/queue', { headers: getAuthHeaders(), credentials: 'same-origin' });
+      let bHtml = '';
+      if (bResp.status === 401) {
+        bHtml = '<div class="placeholder-msg" style="padding: 1.5rem 1rem;">請先登入管理員以檢視大腦佇列 🔒</div>';
+      } else if (!bResp.ok) {
+        bHtml = `<div class="placeholder-msg">載入大腦佇列失敗 (HTTP ${bResp.status})</div>`;
+      } else {
         const bData = await bResp.json();
         const bQueue = bData.queue || [];
         if (bQueue.length === 0) {
-          bContainer.innerHTML = '<div class="placeholder-msg" style="padding: 1.5rem 1rem;">目前大腦空閒中，無佇列等待中的推理任務 ✨</div>';
+          bHtml = '<div class="placeholder-msg" style="padding: 1.5rem 1rem;">目前大腦空閒中，無佇列等待中的推理任務 ✨</div>';
         } else {
-          let bHtml = '';
           bQueue.forEach(item => {
             bHtml += `
               <div class="task-card" style="border-left: 4px solid #00e5ff;">
@@ -2171,64 +2477,71 @@ async function loadTasks() {
                     <span class="task-id">Task ID: ${escHtml(item.task_id)}</span>
                     <span style="font-size: 0.8rem; background: rgba(255,255,255,0.06); padding: 2px 8px; border-radius: 4px; color: var(--text-muted);">🤖 ${escHtml(item.model)}</span>
                   </div>
-                  <div class="task-prompt" style="margin-top: 6px; font-family: monospace;">${escHtml(item.prompt_preview || '(無文字預覽)')}</div>
+                  <div class="task-prompt" style="margin-top: 6px; font-family: monospace; overflow-wrap: break-word; word-break: break-word;">${escHtml(item.prompt_preview || '(無文字預覽)')}</div>
                 </div>
               </div>
             `;
           });
-          bContainer.innerHTML = bHtml;
         }
       }
+      bContainer.innerHTML = sanitizeHtml(bHtml);
     } catch (e) {
-      bContainer.innerHTML = '<div class="placeholder-msg">載入大腦佇列時發生錯誤。</div>';
+      bContainer.innerHTML = sanitizeHtml('<div class="placeholder-msg">載入大腦佇列時發生錯誤。</div>');
     }
-  }
+  };
 
-  // 2. Fetch Scheduled Reminders
-  if (sContainer) {
+  const fetchAiTasks = async () => {
+    if (!aiContainer) return;
     try {
-      const resp = await fetch('/api/system/tasks');
-      if (!resp.ok) return;
-      const data = await resp.json();
-      const tasks = data.tasks || [];
-
-      if (tasks.length === 0) {
-        sContainer.innerHTML = '<div class="placeholder-msg" style="padding: 1.5rem 1rem;">目前沒有正在監控中的排程或提醒事項 ✨</div>';
-        return;
-      }
-
-      let html = '';
-      tasks.forEach(t => {
-        const isCron = !!t.cron_expression;
-        const typeBadge = isCron
-          ? `<span class="task-type-badge badge-cron">CRON 週期 (${t.cron_expression})</span>`
-          : `<span class="task-type-badge badge-once">單次提醒</span>`;
-
-        let timeText = '--';
-        if (t.trigger_timestamp) {
-          timeText = formatToUtc8(t.trigger_timestamp);
+      const aiResp = await fetch('/api/recovery/ai-tasks', { headers: getAuthHeaders(), credentials: 'same-origin' });
+      let aiHtml = '';
+      if (aiResp.status === 401) {
+        aiHtml = '<div class="placeholder-msg" style="padding: 1.5rem 1rem;">請先登入管理員以檢視進行中 AI 任務 🔒</div>';
+      } else if (!aiResp.ok) {
+        aiHtml = `<div class="placeholder-msg">載入進行中 AI 任務失敗 (HTTP ${aiResp.status})</div>`;
+      } else {
+        const aiData = await aiResp.json();
+        const aiTasks = aiData.tasks || [];
+        if (aiTasks.length === 0) {
+          aiHtml = '<div class="placeholder-msg" style="padding: 1.5rem 1rem;">目前無進行中的 AI 推演任務，系統狀態平穩 ✨</div>';
+        } else {
+          aiTasks.forEach(t => {
+            aiHtml += `
+              <div class="task-card" style="border-left: 4px solid #38bdf8;">
+                <div class="task-left">
+                  <div class="task-badge-row">
+                    <span class="task-type-badge badge-once" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border-color: rgba(56, 189, 248, 0.3);">🤖 ${escHtml(t.task_type || 'chat')}</span>
+                    <span class="task-id">ID: ${escHtml(t.task_id)}</span>
+                    <span style="font-size: 0.8rem; background: rgba(234, 179, 8, 0.15); color: #facc15; padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(234, 179, 8, 0.3);">⏱️ 已推演 ${t.elapsed_seconds || 0}s</span>
+                    <span style="font-size: 0.8rem; background: rgba(255,255,255,0.06); padding: 2px 8px; border-radius: 4px; color: var(--text-muted);">📍 頻道: ${escHtml(t.channel_id)}</span>
+                    <span style="font-size: 0.8rem; background: rgba(34, 197, 94, 0.15); color: #4ade80; padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(34, 197, 94, 0.3);">🛡️ 快照保護中</span>
+                  </div>
+                  <div class="task-prompt" style="margin-top: 6px; font-family: monospace; overflow-wrap: break-word; word-break: break-word;">${escHtml(t.prompt || '(無文字預覽)')}</div>
+                  <div class="task-meta" style="margin-top: 4px; font-size: 0.78rem; color: var(--text-muted);">
+                    訊息 ID: ${escHtml(t.message_id || '--')}${t.user_id ? ' | 使用者: ' + escHtml(t.user_id) : ''}${t.origin_message_id ? ' | 原始訊息: ' + escHtml(t.origin_message_id) : ''}
+                  </div>
+                </div>
+              </div>
+            `;
+          });
         }
-
-        html += `
-          <div class="task-card">
-            <div class="task-left">
-              <div class="task-badge-row">
-                ${typeBadge}
-                <span class="task-id">ID: ${escHtml(t.task_id)}</span>
-              </div>
-              <div class="task-prompt">${escHtml(t.prompt)}</div>
-              <div class="task-meta">
-                預計觸發: ${timeText} | 頻道 ID: ${t.target_channel_id || '預設'}
-              </div>
-            </div>
-            <button class="btn-delete-task" onclick="deleteTask('${escAttr(t.task_id)}')">✕ 取消任務</button>
-          </div>
-        `;
-      });
-      sContainer.innerHTML = html;
+      }
+      aiContainer.innerHTML = sanitizeHtml(aiHtml);
     } catch (e) {
-      sContainer.innerHTML = '<div class="placeholder-msg">載入排程提醒時發生錯誤。</div>';
-      console.error(e);
+      aiContainer.innerHTML = sanitizeHtml('<div class="placeholder-msg">載入進行中 AI 任務時發生錯誤。</div>');
+    }
+  };
+
+  try {
+    await Promise.allSettled([
+      loadRecoveryStatus(),
+      fetchBrain(),
+      fetchAiTasks(),
+    ]);
+  } finally {
+    state.inFlight.tasks = false;
+    if (state.currentView === 'tasks') {
+      scheduleNextPoll('tasksTimer', loadTasks, 3000, 'tasks');
     }
   }
 }
@@ -2269,10 +2582,18 @@ function getCatIcon(cat) {
 // =========================================================
 // AUTH & 10-MIN INACTIVITY TRACKER
 // =========================================================
+// R1：管理員憑證改由伺服器 HttpOnly Cookie 持有，前端不再接觸 Token；
+// 變更型請求以 CSRF double-submit（sherry_csrf → X-CSRF-Token）防護。
+function getCsrfToken() {
+  const match = document.cookie.split('; ').find(c => c.startsWith('sherry_csrf='));
+  return match ? match.slice('sherry_csrf='.length) : '';
+}
+
 function getAuthHeaders() {
   const headers = { 'Content-Type': 'application/json' };
-  if (state.adminToken) {
-    headers['Authorization'] = `Bearer ${state.adminToken}`;
+  const csrf = getCsrfToken();
+  if (csrf) {
+    headers['X-CSRF-Token'] = csrf;
   }
   return headers;
 }
@@ -2280,18 +2601,12 @@ function getAuthHeaders() {
 async function checkAdminAuth() {
   try {
     const resp = await fetch('/api/auth/check', {
-      headers: getAuthHeaders(),
       credentials: 'same-origin',
     });
     const data = await resp.json();
     if (resp.ok && data.is_admin) {
-      if (!state.adminToken && localStorage.getItem('sherry_admin_token')) {
-        state.adminToken = localStorage.getItem('sherry_admin_token');
-      }
       updateAuthUI(true);
     } else {
-      state.adminToken = null;
-      localStorage.removeItem('sherry_admin_token');
       updateAuthUI(false);
     }
   } catch (e) {
@@ -2311,7 +2626,7 @@ function startInactivityTracker() {
   if (state.inactivityCheckTimer) clearInterval(state.inactivityCheckTimer);
 
   state.inactivityCheckTimer = setInterval(() => {
-    if (!state.adminToken) return;
+    if (!state.isAdmin) return;
 
     const inactiveSec = Math.floor((Date.now() - state.lastActivityTime) / 1000);
     const remainingSec = Math.max(0, 600 - inactiveSec);
@@ -2362,9 +2677,8 @@ async function executeLogin() {
     });
     const data = await resp.json();
 
-    if (resp.ok && data.token) {
-      state.adminToken = data.token;
-      localStorage.setItem('sherry_admin_token', data.token);
+    if (resp.ok && data.status === 'success') {
+      // R1：Session/CSRF 憑證已由伺服器寫入 HttpOnly/Secure Cookie，前端僅更新狀態
       state.lastActivityTime = Date.now();
       closeLoginModal();
       if (passwordInput) passwordInput.value = '';
@@ -2374,8 +2688,10 @@ async function executeLogin() {
       if (state.currentView === 'logs') loadLogs();
       if (state.currentView === 'settings') loadSettings();
       if (state.currentView === 'tasks') loadTasks();
-      if (state.currentView === 'audit') loadAuditLogs();
+      if (state.currentView === 'audit') refreshCurrentAuditTab();
       if (state.currentView === 'roast') loadRoastConfig();
+      if (state.currentView === 'care' && window.CareApp) CareApp.init();
+      if (state.currentView === 'spark' && window.SparkApp) SparkApp.init();
     } else if (resp.status === 429) {
       showToast(`⛔ ${data.message || '登入失敗次數過多，該 IP 已暫時鎖定！'}`, 'error');
     } else {
@@ -2388,19 +2704,15 @@ async function executeLogin() {
 }
 
 async function logoutAdmin(auto = false) {
-  if (state.adminToken || document.cookie.includes('admin_session')) {
-    try {
-      fetch('/api/auth/logout', {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        credentials: 'same-origin',
-        body: JSON.stringify({ token: state.adminToken }),
-      });
-    } catch (e) {}
-  }
+  try {
+    fetch('/api/auth/logout', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'same-origin',
+      body: JSON.stringify({}),
+    });
+  } catch (e) {}
 
-  state.adminToken = null;
-  localStorage.removeItem('sherry_admin_token');
   state.settingsData = {};
   state.dirtyKeys.clear();
   state.dirtyValues = {};
@@ -2417,6 +2729,8 @@ async function logoutAdmin(auto = false) {
   if (state.currentView === 'settings') loadSettings();
   if (state.currentView === 'tasks') loadTasks();
   if (state.currentView === 'roast') loadRoastConfig();
+  if (state.currentView === 'care' && window.CareApp) CareApp.init();
+  if (state.currentView === 'spark' && window.SparkApp) SparkApp.init();
 }
 
 function updateAuthUI(isAdmin) {
@@ -2429,6 +2743,7 @@ function updateAuthUI(isAdmin) {
   const compNotice = document.getElementById('component-metrics-auth-notice');
   const compContainer = document.getElementById('component-metrics-container');
   const compActions = document.getElementById('component-metrics-actions');
+  const careGuestNotice = document.getElementById('care-guest-notice');
 
   if (isAdmin) {
     if (loginBtn) loginBtn.classList.add('hidden');
@@ -2437,6 +2752,7 @@ function updateAuthUI(isAdmin) {
     adminOnlyEls.forEach(el => el.classList.remove('hidden'));
     if (guestNotice) guestNotice.style.display = 'none';
     if (compNotice) compNotice.classList.add('hidden');
+    if (careGuestNotice) careGuestNotice.style.display = 'none';
     if (typeof loadComponentMetrics === 'function') {
       loadComponentMetrics();
     }
@@ -2447,6 +2763,7 @@ function updateAuthUI(isAdmin) {
     adminOnlyEls.forEach(el => el.classList.add('hidden'));
     if (guestNotice) guestNotice.style.display = 'block';
     if (compNotice) compNotice.classList.remove('hidden');
+    if (careGuestNotice) careGuestNotice.style.display = 'flex';
     if (compContainer) compContainer.classList.add('hidden');
     if (compActions) compActions.classList.add('hidden');
   }
@@ -2457,7 +2774,7 @@ function updateAuthUI(isAdmin) {
 // =========================================================
 
 async function sendTestChat() {
-  if (!state.isAdmin && !state.adminToken) {
+  if (!state.isAdmin) {
     showToast('為維持系統穩定與資安，測試與聊天功能僅限管理員使用，請先登入！', 'warning');
     return;
   }
@@ -2614,16 +2931,16 @@ function appendChatMessage(senderName, avatar, text, extraClass = '', elementId 
   msgDiv.className = 'chat-msg ' + extraClass;
   if (elementId) msgDiv.id = elementId;
 
-  const tagHtml = subTag ? `<span class="chat-tag">${subTag}</span>` : '';
+  const tagHtml = subTag ? `<span class="chat-tag">${escHtml(subTag)}</span>` : '';
   const renderedContent = renderChatMessageContent(text);
 
-  msgDiv.innerHTML = `
-    <div class="chat-avatar">${avatar}</div>
+  msgDiv.innerHTML = sanitizeHtml(`
+    <div class="chat-avatar">${escHtml(avatar)}</div>
     <div class="chat-bubble">
-      <div class="chat-sender">${senderName} ${tagHtml}</div>
+      <div class="chat-sender">${escHtml(senderName)} ${tagHtml}</div>
       <div class="chat-text">${renderedContent}</div>
     </div>
-  `;
+  `);
 
   container.appendChild(msgDiv);
   container.scrollTop = container.scrollHeight;
@@ -2649,6 +2966,9 @@ function clearChatHistory() {
 async function loadServiceStatus() {
   const grid = document.getElementById('services-grid');
   if (!grid) return;
+  if (state.currentView !== 'services') return;
+  if (state.inFlight.services) return;
+  state.inFlight.services = true;
 
   try {
     const resp = await fetch('/api/services/status');
@@ -2693,8 +3013,257 @@ async function loadServiceStatus() {
     }).join('');
   } catch (e) {
     grid.innerHTML = '<div class="placeholder-msg">無法連線至服務檢測 API</div>';
+  } finally {
+    state.inFlight.services = false;
+    if (state.currentView === 'services') {
+      scheduleNextPoll('serviceCheckTimer', loadServiceStatus, 5000, 'services');
+    }
   }
 }
+
+// =========================================================
+// VISITOR & USER CONNECTION TRACKER (訪客與連線追蹤)
+// =========================================================
+let currentAuditTab = 'admin';
+
+function getVisitorCookie(name = 'visitor_id') {
+  const match = document.cookie.match(new RegExp('(^|;\\s*)' + name + '=([^;]*)'));
+  return match ? decodeURIComponent(match[2]) : '';
+}
+
+function sendUserHeartbeat() {
+  const vid = getVisitorCookie('visitor_id');
+  fetch('/api/user/heartbeat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ visitor_id: vid, path: window.location.pathname || '/' }),
+    credentials: 'same-origin',
+  }).catch(() => {});
+}
+
+function sendUserDisconnect() {
+  const vid = getVisitorCookie('visitor_id');
+  const payload = JSON.stringify({ visitor_id: vid });
+  if (navigator.sendBeacon) {
+    const blob = new Blob([payload], { type: 'application/json' });
+    navigator.sendBeacon('/api/user/disconnect', blob);
+  } else {
+    fetch('/api/user/disconnect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload,
+      keepalive: true,
+      credentials: 'same-origin',
+    }).catch(() => {});
+  }
+}
+
+function startUserHeartbeatTracker() {
+  // 初次載入即時發送心跳
+  sendUserHeartbeat();
+
+  // 每 30 秒定期心跳
+  setInterval(() => {
+    if (state.isPageVisible) {
+      sendUserHeartbeat();
+    }
+  }, 30000);
+
+  // 視窗離開或關閉觸發離線 Beacon (支援 desktop beforeunload 與 mobile/safari pagehide)
+  window.addEventListener('beforeunload', () => {
+    sendUserDisconnect();
+  });
+  window.addEventListener('pagehide', () => {
+    sendUserDisconnect();
+  });
+}
+
+function switchAuditTab(tab) {
+  currentAuditTab = tab;
+  const btnAdmin = document.getElementById('tab-btn-admin-audit');
+  const btnUser = document.getElementById('tab-btn-user-conn');
+  const panelAdmin = document.getElementById('audit-tab-admin');
+  const panelUser = document.getElementById('audit-tab-user');
+
+  if (tab === 'admin') {
+    if (btnAdmin) btnAdmin.classList.add('active');
+    if (btnUser) btnUser.classList.remove('active');
+    if (panelAdmin) panelAdmin.classList.remove('hidden');
+    if (panelUser) panelUser.classList.add('hidden');
+    loadAuditLogs();
+  } else {
+    if (btnUser) btnUser.classList.add('active');
+    if (btnAdmin) btnAdmin.classList.remove('active');
+    if (panelUser) panelUser.classList.remove('hidden');
+    if (panelAdmin) panelAdmin.classList.add('hidden');
+    loadUserConnections();
+  }
+}
+
+function refreshCurrentAuditTab() {
+  if (currentAuditTab === 'user') {
+    loadUserConnections();
+  } else {
+    loadAuditLogs();
+  }
+}
+
+function formatDurationSeconds(sec) {
+  sec = Math.max(0, parseInt(sec, 10) || 0);
+  if (sec < 60) return `${sec}秒`;
+  const mins = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  if (mins < 60) return `${mins}分 ${remSec}秒`;
+  const hrs = Math.floor(mins / 60);
+  const remMin = mins % 60;
+  return `${hrs}小時 ${remMin}分`;
+}
+
+async function loadUserConnections() {
+  const activeContainer = document.getElementById('user-active-container');
+  const historyContainer = document.getElementById('user-history-container');
+  if (!activeContainer || !historyContainer) return;
+
+  try {
+    const resp = await fetch('/api/audit/user-connections', {
+      headers: getAuthHeaders(),
+      credentials: 'same-origin',
+    });
+    if (!resp.ok) {
+      activeContainer.innerHTML = '<div class="placeholder-msg">🔒 訪客連線狀況僅限登入管理員查看</div>';
+      historyContainer.innerHTML = '<div class="placeholder-msg">🔒 訪客連線狀況僅限登入管理員查看</div>';
+      return;
+    }
+
+    const data = await resp.json();
+    const summary = data.summary || {};
+    const activeVisitors = data.active_visitors || [];
+    const history = data.history || [];
+
+    // 1. KPI Cards
+    const statOnline = document.getElementById('user-stat-online');
+    const statToday = document.getElementById('user-stat-today');
+    const statAvgDur = document.getElementById('user-stat-avg-duration');
+    const statTopLoc = document.getElementById('user-stat-top-location');
+    const activeSummaryText = document.getElementById('user-active-summary-text');
+
+    if (statOnline) statOnline.textContent = summary.online_count || 0;
+    if (statToday) statToday.textContent = summary.today_total || 0;
+    if (statAvgDur) statAvgDur.textContent = formatDurationSeconds(summary.avg_duration_seconds || 0);
+
+    if (statTopLoc) {
+      const topLocs = summary.top_locations || {};
+      const entries = Object.entries(topLocs);
+      if (entries.length > 0) {
+        entries.sort((a, b) => b[1] - a[1]);
+        statTopLoc.textContent = `${entries[0][0]} (${entries[0][1]}次)`;
+      } else {
+        statTopLoc.textContent = '本機端 (Localhost)';
+      }
+    }
+
+    if (activeSummaryText) {
+      activeSummaryText.textContent = `共 ${activeVisitors.length} 位活躍訪客 (在線: ${summary.online_count || 0}, 閒置: ${summary.idle_count || 0})`;
+    }
+
+    // 2. 即時在線連線池
+    if (activeVisitors.length === 0) {
+      activeContainer.innerHTML = '<div class="placeholder-msg">目前尚無即時在線的訪客連線</div>';
+    } else {
+      activeContainer.innerHTML = `
+        <table class="audit-table">
+          <thead>
+            <tr>
+              <th>訪客會話識別碼</th>
+              <th>連線狀態</th>
+              <th>來源 IP</th>
+              <th>網路位置標籤</th>
+              <th>裝置與瀏覽器</th>
+              <th>當前停留路徑</th>
+              <th>已在線時長</th>
+              <th>首次連線時間</th>
+              <th>最後活躍時間</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${activeVisitors.map(v => {
+              const statusBadge = v.status === 'online'
+                ? `<span class="badge-status-online">● 在線</span>`
+                : `<span class="badge-status-idle">○ 閒置</span>`;
+              return `
+                <tr>
+                  <td><span class="visitor-badge">🆔 ${escHtml(v.visitor_id)}</span></td>
+                  <td>${statusBadge}</td>
+                  <td><code class="ip-code">${escHtml(v.ip || '-')}</code></td>
+                  <td><span class="location-tag">${escHtml(v.location || '-')}</span></td>
+                  <td><span class="device-text">${escHtml(v.device || '-')}</span></td>
+                  <td><code class="path-code">${escHtml(v.last_path || '/')}</code></td>
+                  <td><strong style="color: #38bdf8;">${formatDurationSeconds(v.duration_seconds)}</strong></td>
+                  <td><span class="audit-time">${escHtml(formatToUtc8(v.first_seen_at))}</span></td>
+                  <td><span class="audit-time">${escHtml(formatToUtc8(v.last_active_at))}</span></td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    // 3. 歷史訪客紀錄
+    if (history.length === 0) {
+      historyContainer.innerHTML = '<div class="placeholder-msg">尚無訪客連線歷史紀錄</div>';
+    } else {
+      historyContainer.innerHTML = `
+        <table class="audit-table">
+          <thead>
+            <tr>
+              <th>訪客會話識別碼</th>
+              <th>狀態</th>
+              <th>來源 IP</th>
+              <th>網路位置標籤</th>
+              <th>裝置與瀏覽器</th>
+              <th>停留路徑</th>
+              <th>總連線時長</th>
+              <th>請求次數</th>
+              <th>首次連線時間</th>
+              <th>最後活躍時間</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${history.map(h => {
+              const isOnline = h.status === 'online';
+              const isIdle = h.status === 'idle';
+              const statusBadge = isOnline
+                ? `<span class="badge-status-online">● 在線</span>`
+                : (isIdle ? `<span class="badge-status-idle">○ 閒置</span>` : `<span class="badge-status-offline">已離線</span>`);
+              return `
+                <tr>
+                  <td><span class="visitor-badge">🆔 ${escHtml(h.visitor_id)}</span></td>
+                  <td>${statusBadge}</td>
+                  <td><code class="ip-code">${escHtml(h.ip || '-')}</code></td>
+                  <td><span class="location-tag">${escHtml(h.location || '-')}</span></td>
+                  <td><span class="device-text">${escHtml(h.device || '-')}</span></td>
+                  <td><code class="path-code">${escHtml(h.last_path || '/')}</code></td>
+                  <td><strong>${formatDurationSeconds(h.duration_seconds)}</strong></td>
+                  <td><span style="font-weight: 600; color: #a78bfa;">${h.hit_count || 1} 次</span></td>
+                  <td><span class="audit-time">${escHtml(formatToUtc8(h.first_seen_at))}</span></td>
+                  <td><span class="audit-time">${escHtml(formatToUtc8(h.last_active_at))}</span></td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+  } catch (err) {
+    console.error('Failed to load user connections:', err);
+    activeContainer.innerHTML = '<div class="placeholder-msg">無法連線至使用者連線 API</div>';
+    historyContainer.innerHTML = '<div class="placeholder-msg">無法連線至使用者連線 API</div>';
+  }
+}
+
+window.switchAuditTab = switchAuditTab;
+window.refreshCurrentAuditTab = refreshCurrentAuditTab;
 
 // =========================================================
 // ADMIN AUDIT LOGS (管理員審計紀錄)
@@ -2795,6 +3364,10 @@ function closeAuditDetailModal() {
 async function loadBotStatus() {
   const container = document.getElementById('bot-status-container');
   if (!container) return;
+  if (state.currentView !== 'bot-status') return;
+  if (state.inFlight.botStatus) return;
+  state.inFlight.botStatus = true;
+
   try {
     const resp = await fetch('/api/bot/status');
     if (!resp.ok) return;
@@ -2847,6 +3420,10 @@ async function loadBotStatus() {
           ? `<span class="service-badge service-offline" style="background: rgba(255, 170, 0, 0.15); color: #ffaa00; border-color: rgba(255, 170, 0, 0.3);">⏸️ 暫停中</span>`
           : `<span class="service-badge service-offline">⏹️ 空閒中</span>`;
 
+        const recoveryBadge = vc.recovery_ready
+          ? `<span class="service-badge" style="background: rgba(168, 85, 247, 0.15); color: #c084fc; border-color: rgba(168, 85, 247, 0.3); font-size: 0.75rem;">🛡️ 斷點續播就緒</span>`
+          : '';
+
         let membersHtml = '';
         if (vc.members && vc.members.length > 0) {
           membersHtml = vc.members.map(m => `
@@ -2861,14 +3438,32 @@ async function loadBotStatus() {
         let songHtml = '';
         if (vc.current_song) {
           const song = vc.current_song;
+          const elapsedSec = vc.elapsed_seconds || 0;
+          const durSec = song.duration || 0;
+          const fmtTime = (s) => {
+            const m = Math.floor(s / 60);
+            const sec = Math.floor(s % 60);
+            return `${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
+          };
+          const timeStr = durSec > 0 ? `${fmtTime(elapsedSec)} / ${fmtTime(durSec)}` : (elapsedSec > 0 ? `${fmtTime(elapsedSec)} / LIVE` : '--:--');
+          const pct = durSec > 0 ? Math.min(100, Math.max(0, (elapsedSec / durSec) * 100)) : (isPlaying ? 100 : 0);
+
           songHtml = `
             <div style="background: rgba(0, 229, 255, 0.05); border: 1px solid rgba(0, 229, 255, 0.2); border-radius: 8px; padding: 12px; margin-top: 12px;">
-              <div style="font-size: 0.85rem; color: #00e5ff; font-weight: 600;">🎵 當前播放曲目：</div>
-              <div style="font-weight: 700; font-size: 1rem; margin-top: 4px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 0.85rem; color: #00e5ff; font-weight: 600;">🎵 當前播放曲目：</span>
+                <span style="font-size: 0.82rem; font-family: monospace; color: var(--sherry-blue); font-weight: 600;">${timeStr}</span>
+              </div>
+              <div style="font-weight: 700; font-size: 1rem; margin-top: 4px; overflow-wrap: break-word; word-break: break-word;">
                 ${song.url ? `<a href="${escAttr(song.url)}" target="_blank" style="color: var(--text-main); text-decoration: underline;">${escHtml(song.title)}</a>` : escHtml(song.title)}
               </div>
-              <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
-                點歌者: ${escHtml(song.requester)} ${song.duration ? `• 總長: ${Math.floor(song.duration/60)}分${song.duration%60}秒` : ''}
+              <div style="background: rgba(255,255,255,0.08); border-radius: 4px; height: 4px; width: 100%; margin-top: 8px; overflow: hidden;">
+                <div style="background: linear-gradient(90deg, #38bdf8, #a855f7); height: 100%; width: ${pct}%; transition: width 0.3s ease;"></div>
+              </div>
+              <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px; display: flex; gap: 12px; flex-wrap: wrap;">
+                <span>點歌者: ${escHtml(song.requester)}</span>
+                ${song.duration ? `<span>總長: ${Math.floor(song.duration/60)}分${Math.floor(song.duration%60)}秒</span>` : ''}
+                <span>循環: ${escHtml(vc.loop_mode || 'none')}</span>
               </div>
             </div>
           `;
@@ -2896,7 +3491,10 @@ async function loadBotStatus() {
                   <div style="font-size: 0.82rem; color: var(--text-muted);">語音房: <strong style="color: #00e5ff;">#${escHtml(vc.channel_name)}</strong> (${vc.member_count} 人)</div>
                 </div>
               </div>
-              ${statusBadge}
+              <div style="display: flex; gap: 8px; align-items: center;">
+                ${statusBadge}
+                ${recoveryBadge}
+              </div>
             </div>
             <div style="margin-top: 10px;">
               <div style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 6px;">🎙️ 在線通話成員：</div>
@@ -2915,6 +3513,11 @@ async function loadBotStatus() {
   } catch (e) {
     console.error('Failed to load bot status:', e);
     container.innerHTML = '<div class="placeholder-msg">載入語音與音樂動態時發生錯誤。</div>';
+  } finally {
+    state.inFlight.botStatus = false;
+    if (state.currentView === 'bot-status') {
+      scheduleNextPoll('botStatusTimer', loadBotStatus, 3000, 'bot-status');
+    }
   }
 }
 
@@ -2923,6 +3526,9 @@ async function loadDashboard() {
   const gitContainer = document.getElementById('dashboard-git-container');
   const coreGrid = document.getElementById('dashboard-core-grid');
   if (!gitContainer || !coreGrid) return;
+  if (state.currentView !== 'dashboard') return;
+  if (state.inFlight.dashboard) return;
+  state.inFlight.dashboard = true;
 
   try {
     const resp = await fetch('/api/system/dashboard');
@@ -2938,57 +3544,47 @@ async function loadDashboard() {
     const disk = git.disk || {};
     const needsRestart = git.needs_restart || false;
 
-    let syncBadge = needsRestart
-      ? `<span class="service-badge service-offline" style="background: rgba(255, 170, 0, 0.15); color: #ffaa00; border-color: rgba(255, 170, 0, 0.3);">⚠️ 檢測到新版本已 Pull，請重啟套用</span>`
-      : `<span class="service-badge service-online">🟢 執行中版本為最新狀態</span>`;
+    const syncBadge = needsRestart
+      ? `<span class="service-badge service-offline">⚠️ 有新版本待重啟</span>`
+      : `<span class="service-badge service-online">● 執行中版本為最新</span>`;
 
     let gitAlert = '';
     if (needsRestart) {
       gitAlert = `
-        <div style="background: rgba(255, 170, 0, 0.1); border: 1px solid rgba(255, 170, 0, 0.3); border-radius: 8px; padding: 12px 16px; margin-top: 12px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
-          <div style="font-size: 0.88rem; color: #ffaa00;">
-            <strong>⚠️ 版本升級提醒：</strong> 本地磁碟代碼已更新至 <code>${escHtml(disk.commit_hash)}</code> (${escHtml(disk.commit_msg)})，但雪莉目前仍於記憶體執行舊版 <code>${escHtml(running.commit_hash)}</code>。
-          </div>
-          <button class="btn-restart admin-only" onclick="requestRestart()" style="padding: 6px 14px; font-size: 0.85rem;">🚀 立即重啟雪莉</button>
+        <div class="git-alert">
+          <span><strong>版本升級提醒：</strong> 本地磁碟已更新至 <code>${escHtml(disk.commit_hash)}</code>（${escHtml(disk.commit_msg)}），目前執行中的仍是 <code>${escHtml(running.commit_hash)}</code>。</span>
+          <button class="btn-restart admin-only" onclick="requestRestart()">🚀 立即重啟雪莉</button>
         </div>
       `;
     }
 
     gitContainer.innerHTML = `
-      <div class="service-card" style="border-color: rgba(0, 229, 255, 0.25); background: rgba(0, 229, 255, 0.02);">
-        <div class="service-header">
-          <div class="service-title-row">
-            <span style="font-size: 1.4rem;">🌿</span>
+      <div class="git-card">
+        <div class="git-card-head">
+          <div class="git-identity">
+            <div class="git-icon">🌿</div>
             <div>
-              <div style="font-weight: 700; font-size: 1.1rem; color: #00e5ff;">Git 代碼庫與實時運作版本</div>
-              <div style="font-size: 0.82rem; color: var(--text-muted);">分支: <strong style="color:var(--text-main);">${escHtml(disk.branch || 'dev')}</strong> | 標籤: <strong>${escHtml(data.version || 'v1.9.0-dev')}</strong></div>
+              <div class="git-title">Git 代碼庫與實時運作版本</div>
+              <div class="git-sub">分支 <strong>${escHtml(disk.branch || 'dev')}</strong> · 標籤 <strong>${escHtml(data.version || 'v1.9.0-dev')}</strong></div>
             </div>
           </div>
           ${syncBadge}
         </div>
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 14px; font-size: 0.85rem;">
-          <div style="background: rgba(0,0,0,0.25); padding: 10px 14px; border-radius: 6px; border: 1px solid var(--border-color);">
-            <div style="color: var(--text-muted); font-size: 0.78rem;">🤖 實時運作中 Commit (Bot Process):</div>
-            <div style="font-weight: 700; font-family: monospace; font-size: 0.95rem; color: #00ffaa; margin-top: 2px;">
-              ${escHtml(running.commit_hash || 'unknown')}
-            </div>
-            <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escAttr(running.commit_msg)}">
-              ${escHtml(running.commit_msg || '啟動時 Commit 快照')}
-            </div>
+        <div class="git-meta-grid">
+          <div class="git-meta-item">
+            <div class="git-meta-label">🤖 實時運作中 Commit · Bot Process</div>
+            <div class="git-meta-value is-mono is-running">${escHtml(running.commit_hash || 'unknown')}</div>
+            <div class="git-sub" title="${escAttr(running.commit_msg)}">${escHtml(running.commit_msg || '啟動時 Commit 快照')}</div>
           </div>
-          <div style="background: rgba(0,0,0,0.25); padding: 10px 14px; border-radius: 6px; border: 1px solid var(--border-color);">
-            <div style="color: var(--text-muted); font-size: 0.78rem;">📦 本地磁碟 Commit (Latest Code):</div>
-            <div style="font-weight: 700; font-family: monospace; font-size: 0.95rem; color: #00e5ff; margin-top: 2px;">
-              ${escHtml(disk.commit_hash || 'unknown')}
-            </div>
-            <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escAttr(disk.commit_msg)}">
-              ${escHtml(disk.commit_msg || '無提交紀錄')}
-            </div>
+          <div class="git-meta-item">
+            <div class="git-meta-label">📦 本地磁碟 Commit · Latest Code</div>
+            <div class="git-meta-value is-mono is-disk">${escHtml(disk.commit_hash || 'unknown')}</div>
+            <div class="git-sub" title="${escAttr(disk.commit_msg)}">${escHtml(disk.commit_msg || '無提交紀錄')}</div>
           </div>
-          <div style="background: rgba(0,0,0,0.25); padding: 10px 14px; border-radius: 6px; border: 1px solid var(--border-color);">
-            <div style="color: var(--text-muted); font-size: 0.78rem;">👤 最新提交作者與時間:</div>
-            <div style="font-weight: 600; margin-top: 2px;">${escHtml(disk.commit_author || '未知')}</div>
-            <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px;">${escHtml(formatToUtc8(disk.commit_date || '--'))}</div>
+          <div class="git-meta-item">
+            <div class="git-meta-label">👤 最新提交作者與時間</div>
+            <div class="git-meta-value">${escHtml(disk.commit_author || '未知')}</div>
+            <div class="git-sub">${escHtml(formatToUtc8(disk.commit_date || '--'))}</div>
           </div>
         </div>
         ${gitAlert}
@@ -2999,52 +3595,63 @@ async function loadDashboard() {
     const sys = data.system || {};
     const vram = sys.vram || {};
     const queues = data.queues || {};
+    const users = data.users || {};
 
     coreGrid.innerHTML = `
-      <div class="metric-card">
-        <div class="metric-title">🤖 Bot 狀態與連線</div>
-        <div style="font-size: 1.2rem; font-weight: 700; color: ${bot.ready ? '#00ffaa' : '#ff4444'}; margin-top: 4px;">
-          ${bot.ready ? 'ONLINE (已上線)' : 'DISCONNECTED'}
+      <div class="metric-card stat-card" data-tone="${bot.ready ? 'green' : 'rose'}">
+        <div class="stat-head">
+          <span class="stat-icon">🤖</span>
+          <span class="stat-label">Bot 狀態</span>
         </div>
-        <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 6px;">
-          Delay: <strong>${bot.ping_ms} ms</strong> | 伺服器: <strong>${bot.guild_count}</strong> | 語音房: <strong>${bot.voice_count}</strong>
-        </div>
+        <div class="stat-value ${bot.ready ? 'is-green' : 'is-rose'}">${bot.ready ? 'ONLINE' : 'OFFLINE'}</div>
+        <div class="stat-meta">延遲 <strong>${bot.ping_ms} ms</strong> · 伺服器 <strong>${bot.guild_count}</strong> · 語音房 <strong>${bot.voice_count}</strong></div>
       </div>
 
-      <div class="metric-card">
-        <div class="metric-title">💻 伺服器 CPU & RAM</div>
-        <div style="font-size: 1.2rem; font-weight: 700; color: #00e5ff; margin-top: 4px;">
-          CPU ${sys.cpu_percent}% | RAM ${sys.mem_used_gb} GB
+      <div class="metric-card stat-card" data-tone="blue">
+        <div class="stat-head">
+          <span class="stat-icon">👥</span>
+          <span class="stat-label">訪客連線</span>
         </div>
-        <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 6px;">
-          系統總記憶體: ${sys.mem_total_gb} GB (${sys.mem_percent}%)
-        </div>
+        <div class="stat-value is-blue">${(users.online_count !== undefined) ? users.online_count : 0}</div>
+        <div class="stat-meta">目前線上 · 今日累計 <strong>${(users.today_total !== undefined) ? users.today_total : 0}</strong> 次會話</div>
       </div>
 
-      <div class="metric-card">
-        <div class="metric-title">🎮 GPU 溫度 & 顯存</div>
-        <div style="font-size: 1.2rem; font-weight: 700; color: #ff007f; margin-top: 4px;">
-          ${vram.gpu_temp ? vram.gpu_temp + '°C' : 'N/A'} | ${vram.used_gb} / ${vram.total_gb} GB
+      <div class="metric-card stat-card" data-tone="violet">
+        <div class="stat-head">
+          <span class="stat-icon">💻</span>
+          <span class="stat-label">CPU & RAM</span>
         </div>
-        <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 6px;">
-          顯示卡: ${escHtml(vram.gpu_name || 'GPU')} (${vram.percent}%)
-        </div>
+        <div class="stat-value is-violet">CPU ${sys.cpu_percent}% · ${sys.mem_used_gb} GB</div>
+        <div class="stat-meta">總記憶體 <strong>${sys.mem_total_gb} GB</strong> · 使用率 <strong>${sys.mem_percent}%</strong></div>
       </div>
 
-      <div class="metric-card">
-        <div class="metric-title">🧠 大腦與排程佇列</div>
-        <div style="font-size: 1.2rem; font-weight: 700; color: #ffaa00; margin-top: 4px;">
-          ${queues.brain_llm} 個排隊推理
+      <div class="metric-card stat-card" data-tone="rose">
+        <div class="stat-head">
+          <span class="stat-icon">🎮</span>
+          <span class="stat-label">GPU 溫度 & 顯存</span>
         </div>
-        <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 6px;">
-          背景監控排程提醒數: <strong>${queues.schedule}</strong> 個
+        <div class="stat-value is-rose">${vram.gpu_temp ? vram.gpu_temp + '°C' : 'N/A'} · ${vram.used_gb} / ${vram.total_gb} GB</div>
+        <div class="stat-meta">${escHtml(vram.gpu_name || 'GPU')} · 使用率 <strong>${vram.percent}%</strong></div>
+      </div>
+
+      <div class="metric-card stat-card" data-tone="amber">
+        <div class="stat-head">
+          <span class="stat-icon">🧠</span>
+          <span class="stat-label">大腦與排程</span>
         </div>
+        <div class="stat-value is-amber">${queues.brain_llm} 個排隊推理</div>
+        <div class="stat-meta">背景監控排程提醒 <strong>${queues.schedule}</strong> 個</div>
       </div>
     `;
 
   } catch (e) {
     console.error('Failed to load dashboard data:', e);
     if (gitContainer) gitContainer.innerHTML = '<div class="placeholder-msg">載入 Dashboard 時發生錯誤。</div>';
+  } finally {
+    state.inFlight.dashboard = false;
+    if (state.currentView === 'dashboard') {
+      scheduleNextPoll('dashboardTimer', loadDashboard, 5000, 'dashboard');
+    }
   }
 }
 
@@ -3071,7 +3678,7 @@ async function loadModManager() {
     const data = await res.json();
     renderModManager(data.modules || {});
   } catch (e) {
-    grid.innerHTML = `<div class="mod-empty">❌ 載入模組清單失敗: ${e}</div>`;
+    grid.innerHTML = sanitizeHtml(`<div class="mod-empty">❌ 載入模組清單失敗: ${escHtml(e)}</div>`);
   }
 }
 
@@ -3106,7 +3713,7 @@ function renderModManager(modules) {
     const enabled = mod.enabled !== false;
     const card = document.createElement('div');
     card.className = `mod-card ${enabled ? 'mod-card-enabled' : 'mod-card-disabled'}`;
-    card.id = `mod-card-${key}`;
+    card.id = `mod-card-${sanitizeId(key)}`;
 
     const badgeClass = enabled ? 'mod-badge mod-badge-enabled' : 'mod-badge mod-badge-disabled';
     const badgeText = enabled ? '🟢 啟用中' : '🔴 已停用';
@@ -3117,22 +3724,22 @@ function renderModManager(modules) {
     card.innerHTML = `
       <div>
         <div class="mod-card-header">
-          <div class="mod-card-name">${mod.display_name || key}</div>
+          <div class="mod-card-name">${escHtml(mod.display_name || key)}</div>
           <span class="${badgeClass}">${badgeText}</span>
         </div>
-        <div class="mod-card-desc">${mod.description || '未登記的自訂模組。'}</div>
+        <div class="mod-card-desc">${escHtml(mod.description || '未登記的自訂模組。')}</div>
         ${gamesCount ? `<div style="margin-bottom: 0.6rem;">${gamesCount}</div>` : ''}
       </div>
       <div>
         <div class="mod-card-meta">
-          <span class="mod-category-tag">${mod.category || '自訂'}</span>
-          <span class="mod-key-tag"><code>${key}</code></span>
+          <span class="mod-category-tag">${escHtml(mod.category || '自訂')}</span>
+          <span class="mod-key-tag"><code>${escHtml(key)}</code></span>
         </div>
         <div class="mod-card-actions">
           <button
             class="mod-toggle-btn ${enabled ? 'mod-toggle-disable' : 'mod-toggle-enable'}"
-            onclick="toggleModuleStatus('${key}', ${!enabled})"
-            id="toggle-btn-${key}"
+            onclick="toggleModuleStatus('${sanitizeId(key)}', ${!enabled})"
+            id="toggle-btn-${sanitizeId(key)}"
           >
             ${enabled ? '🔴 停用此模組' : '🟢 啟用此模組'}
           </button>
@@ -3156,7 +3763,7 @@ async function toggleModuleStatus(modKey, enable) {
     return;
   }
 
-  const btn = document.getElementById(`toggle-btn-${modKey}`);
+  const btn = document.getElementById(`toggle-btn-${sanitizeId(modKey)}`);
   if (btn) {
     btn.disabled = true;
     btn.textContent = '處理中...';
@@ -3240,13 +3847,8 @@ async function executeStop() {
 // =========================================================
 
 function escapeHtml(str) {
-  if (str === null || str === undefined) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+  // R4：統一轉義工具——歷史命名相容層，委派 escHtml（唯一實作）
+  return escHtml(str);
 }
 
 state.roastConfig = null;

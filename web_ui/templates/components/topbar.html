@@ -1,111 +1,118 @@
 <!-- ===== TOP BAR ===== -->
 <header class="topbar">
     <div class="topbar-left">
-        <h1 id="view-title">📊 總覽主控台</h1>
-    </div>
-    <div class="topbar-right" id="dashboard-toolbar">
-        <button class="icon-btn" title="立即刷新總覽數據" onclick="loadDashboard()">↻</button>
-        <span class="topbar-hint">5 秒自動更新</span>
-    </div>
-    <div class="topbar-right hidden" id="logs-toolbar">
-        <select id="log-file-select" class="select-input" onchange="onLogFileChange()">
-            <option value="">— 選擇日誌檔案 —</option>
-        </select>
-        <select id="log-size-select" class="select-input" onchange="reloadLogs()">
-            <option value="50">50 筆/頁</option>
-            <option value="100">100 筆/頁</option>
-            <option value="200">200 筆/頁</option>
-        </select>
-        <div class="filter-row">
-            <button class="filter-btn active" data-event="all" onclick="setEventFilter('all')">全部</button>
-            <button class="filter-btn" data-event="chat_reply" onclick="setEventFilter('chat_reply')">CHAT</button>
-            <button class="filter-btn" data-event="command_exec" onclick="setEventFilter('command_exec')">指令</button>
-            <button class="filter-btn" data-event="tool_exec" onclick="setEventFilter('tool_exec')">工具</button>
-            <button class="filter-btn" data-event="interject" onclick="setEventFilter('interject')">插話</button>
-            <button class="filter-btn" data-event="error" onclick="setEventFilter('error')">ERROR</button>
+        <div class="topbar-heading">
+            <span class="topbar-eyebrow">Sherry Console</span>
+            <h1 id="view-title">總覽主控台</h1>
         </div>
-        <button class="icon-btn" title="重新整理" onclick="reloadLogs()">↻</button>
-        <label class="auto-refresh-toggle" title="自動刷新">
-            <input type="checkbox" id="auto-refresh-chk" checked onchange="toggleAutoRefresh()">
-            <span class="toggle-label">自動刷新</span>
-        </label>
-    </div>
-    <div class="topbar-right hidden" id="metrics-toolbar">
-        <button class="icon-btn" title="立即刷新資源" onclick="loadMetrics()">↻</button>
-        <span class="topbar-hint">2 秒自動更新</span>
-    </div>
-    <div class="topbar-right hidden" id="tasks-toolbar">
-        <button class="icon-btn" title="重新整理任務" onclick="loadTasks()">↻</button>
-    </div>
-    <div class="topbar-right hidden" id="services-toolbar">
-        <button class="icon-btn" title="立即檢測" onclick="loadServiceStatus()">↻</button>
-        <span class="topbar-hint">5 秒自動刷新</span>
-    </div>
-    <div class="topbar-right hidden" id="bot-status-toolbar">
-        <button class="icon-btn" title="刷新語音與音樂動態" onclick="loadBotStatus()">↻</button>
-        <span class="topbar-hint">3 秒自動刷新</span>
-    </div>
-    <div class="topbar-right hidden" id="stock-trader-toolbar">
-        <button class="btn-update admin-only" onclick="refreshStockTraderPrices()" title="連線 yfinance 刷新美股最新行情與持倉損益">
-            <span>🔄</span> 刷新行情損益
-        </button>
-        <button class="btn-update admin-only" onclick="triggerStockTraderEval()" title="手動觸發雪莉美股看盤與量化下單評估">
-            <span>🤖</span> 手動評估看盤
-        </button>
-        <button class="icon-btn" title="重新整理炒股數據" onclick="loadStockTraderData()">↻</button>
-    </div>
-    <div class="topbar-right hidden" id="deep-search-toolbar">
-        <button class="btn-primary" onclick="openDeepSearchModal()" title="發起新的深度研究主題推演">
-            <span>🔬</span> 發起新研究
-        </button>
-        <button class="icon-btn" title="重新整理研究清單" onclick="loadDeepSearchData()">↻</button>
-    </div>
-    <div class="topbar-right hidden" id="audit-toolbar">
-        <button class="icon-btn" title="重新整理審計紀錄" onclick="loadAuditLogs()">↻</button>
-    </div>
-    <div class="topbar-right hidden" id="mod-manager-toolbar">
-        <button class="btn-restart admin-only" id="mod-restart-btn" onclick="requestRestart()">
-            <span>🔄</span> 重啟雪莉
-        </button>
-        <button class="btn-stop admin-only" id="mod-stop-btn" onclick="requestStop()">
-            <span>🛑</span> 關閉雪莉
-        </button>
-        <button class="icon-btn" title="重新整理模組清單" onclick="loadModManager()">↻</button>
-    </div>
-    <div class="topbar-right hidden" id="roast-toolbar">
-        <button class="btn-primary admin-only" onclick="openRoastModal()">
-            <span>＋</span> 新增吐槽規則
-        </button>
-        <button class="icon-btn" title="重新整理吐槽清單" onclick="loadRoastConfig()">↻</button>
-    </div>
-    <div class="topbar-right hidden" id="settings-toolbar">
-        <button class="btn-save admin-only" id="save-btn" onclick="saveSettings()">
-            <span>💾</span> 儲存設定
-        </button>
-        <button class="btn-update admin-only" id="update-btn" onclick="requestUpdate()" title="從 dev 分支 Git Pull 最新程式碼並重啟">
-            <span>📥</span> 更新並重啟
-        </button>
-        <button class="btn-restart admin-only" id="restart-btn" onclick="requestRestart()">
-            <span>🔄</span> 重啟雪莉
-        </button>
-        <button class="btn-stop admin-only" id="stop-btn" onclick="requestStop()">
-            <span>🛑</span> 關閉雪莉
-        </button>
-        <span class="changed-hint hidden" id="changed-hint">● 有未儲存的變更</span>
     </div>
 
-    <!-- Global Auth Control -->
-    <div class="topbar-auth">
-        <button class="btn-login" id="login-nav-btn" onclick="openLoginModal()">
-            <span>🔐</span> 管理員登入
-        </button>
-        <div class="admin-pill hidden" id="admin-pill">
-            <span class="admin-dot"></span>
-            <span>管理員</span>
-            <span class="admin-timer" id="admin-timer">(10m)</span>
+    <div class="topbar-right-group">
+        <div class="topbar-right" id="dashboard-toolbar">
+            <button class="icon-btn" title="立即刷新總覽數據" onclick="loadDashboard()">↻</button>
+            <span class="topbar-hint">5 秒自動更新</span>
         </div>
-        <button class="btn-logout hidden" id="logout-nav-btn" onclick="logoutAdmin()" title="登出管理員模式">
-            <span>🚪</span> 登出
-        </button>
+        <div class="topbar-right hidden" id="logs-toolbar">
+            <select id="log-file-select" class="select-input" onchange="onLogFileChange()">
+                <option value="">— 選擇日誌檔案 —</option>
+            </select>
+            <select id="log-size-select" class="select-input" onchange="reloadLogs()">
+                <option value="50">50 筆/頁</option>
+                <option value="100">100 筆/頁</option>
+                <option value="200">200 筆/頁</option>
+            </select>
+            <div class="filter-row">
+                <button class="filter-btn active" data-event="all" onclick="setEventFilter('all')">全部</button>
+                <button class="filter-btn" data-event="chat_reply" onclick="setEventFilter('chat_reply')">CHAT</button>
+                <button class="filter-btn" data-event="command_exec" onclick="setEventFilter('command_exec')">指令</button>
+                <button class="filter-btn" data-event="tool_exec" onclick="setEventFilter('tool_exec')">工具</button>
+                <button class="filter-btn" data-event="interject" onclick="setEventFilter('interject')">插話</button>
+                <button class="filter-btn" data-event="error" onclick="setEventFilter('error')">ERROR</button>
+            </div>
+            <button class="icon-btn" title="重新整理" onclick="reloadLogs()">↻</button>
+            <label class="auto-refresh-toggle" title="自動刷新">
+                <input type="checkbox" id="auto-refresh-chk" checked onchange="toggleAutoRefresh()">
+                <span class="toggle-label">自動刷新</span>
+            </label>
+        </div>
+        <div class="topbar-right hidden" id="metrics-toolbar">
+            <button class="icon-btn" title="立即刷新資源" onclick="loadMetrics()">↻</button>
+            <span class="topbar-hint">2 秒自動更新</span>
+        </div>
+        <div class="topbar-right hidden" id="tasks-toolbar">
+            <button class="icon-btn" title="重新整理工作與自癒中樞" onclick="loadTasks()">↻</button>
+            <span class="topbar-hint">3 秒自動刷新</span>
+        </div>
+        <div class="topbar-right hidden" id="services-toolbar">
+            <button class="icon-btn" title="立即檢測" onclick="loadServiceStatus()">↻</button>
+            <span class="topbar-hint">5 秒自動刷新</span>
+        </div>
+        <div class="topbar-right hidden" id="bot-status-toolbar">
+            <button class="icon-btn" title="刷新語音與音樂動態" onclick="loadBotStatus()">↻</button>
+            <span class="topbar-hint">3 秒自動刷新</span>
+        </div>
+        <div class="topbar-right hidden" id="stock-trader-toolbar">
+            <button class="btn-update admin-only" onclick="refreshStockTraderPrices()" title="連線 yfinance 刷新美股最新行情與持倉損益">
+                <span>🔄</span> 刷新行情損益
+            </button>
+            <button class="btn-update admin-only" onclick="triggerStockTraderEval()" title="手動觸發雪莉美股看盤與量化下單評估">
+                <span>🤖</span> 手動評估看盤
+            </button>
+            <button class="icon-btn" title="重新整理炒股數據" onclick="loadStockTraderData()">↻</button>
+        </div>
+        <div class="topbar-right hidden" id="deep-search-toolbar">
+            <button class="btn-primary" onclick="openDeepSearchModal()" title="發起新的深度研究主題推演">
+                <span>🔬</span> 發起新研究
+            </button>
+            <button class="icon-btn" title="重新整理研究清單" onclick="loadDeepSearchData()">↻</button>
+        </div>
+        <div class="topbar-right hidden" id="audit-toolbar">
+            <button class="icon-btn" title="重新整理審計紀錄" onclick="loadAuditLogs()">↻</button>
+        </div>
+        <div class="topbar-right hidden" id="mod-manager-toolbar">
+            <button class="btn-restart admin-only" id="mod-restart-btn" onclick="requestRestart()">
+                <span>🔄</span> 重啟雪莉
+            </button>
+            <button class="btn-stop admin-only" id="mod-stop-btn" onclick="requestStop()">
+                <span>🛑</span> 關閉雪莉
+            </button>
+            <button class="icon-btn" title="重新整理模組清單" onclick="loadModManager()">↻</button>
+        </div>
+        <div class="topbar-right hidden" id="roast-toolbar">
+            <button class="btn-primary admin-only" onclick="openRoastModal()">
+                <span>＋</span> 新增吐槽規則
+            </button>
+            <button class="icon-btn" title="重新整理吐槽清單" onclick="loadRoastConfig()">↻</button>
+        </div>
+        <div class="topbar-right hidden" id="settings-toolbar">
+            <button class="btn-save admin-only" id="save-btn" onclick="saveSettings()">
+                <span>💾</span> 儲存設定
+            </button>
+            <button class="btn-update admin-only" id="update-btn" onclick="requestUpdate()" title="從 dev 分支 Git Pull 最新程式碼並重啟">
+                <span>📥</span> 更新並重啟
+            </button>
+            <button class="btn-restart admin-only" id="restart-btn" onclick="requestRestart()">
+                <span>🔄</span> 重啟雪莉
+            </button>
+            <button class="btn-stop admin-only" id="stop-btn" onclick="requestStop()">
+                <span>🛑</span> 關閉雪莉
+            </button>
+            <span class="changed-hint hidden" id="changed-hint">● 有未儲存的變更</span>
+        </div>
+
+        <!-- Global Auth Control -->
+        <div class="topbar-auth">
+            <button class="btn-login" id="login-nav-btn" onclick="openLoginModal()">
+                <span>🔐</span> 管理員登入
+            </button>
+            <div class="admin-pill hidden" id="admin-pill">
+                <span class="admin-dot"></span>
+                <span>管理員</span>
+                <span class="admin-timer" id="admin-timer">(10m)</span>
+            </div>
+            <button class="btn-logout hidden" id="logout-nav-btn" onclick="logoutAdmin()" title="登出管理員模式">
+                <span>🚪</span> 登出
+            </button>
+        </div>
     </div>
 </header>

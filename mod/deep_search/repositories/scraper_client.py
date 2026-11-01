@@ -13,6 +13,7 @@ import logging
 import re
 import urllib.request
 
+from core.guard import is_safe_public_url
 from mod.deep_search import config
 from mod.deep_search.domain.interfaces import IScraperClient
 from mod.deep_search.domain.models import SourceDoc
@@ -41,7 +42,7 @@ class TrafilaturaScraperClient(IScraperClient):
         Returns:
             SourceDoc | None: 擷取成果。
         """
-        if not url or not url.startswith("http"):
+        if not url or not is_safe_public_url(url):
             return None
 
         # 略過二進位檔案或影片串流等格式

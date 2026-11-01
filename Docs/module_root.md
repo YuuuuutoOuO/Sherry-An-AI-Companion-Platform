@@ -235,9 +235,9 @@ async def main() -> None
 | `_raw_vision_model` | `str` | `os.getenv('VISION_MODEL', '').strip()` | L185 |
 | `VISION_MODEL` | `str` | `'' if _raw_vision_model.endswith(':') or _raw_vision_model in ('freetoken', 'oll...` | L186 |
 | `GEMINI_MIN_OUTPUT_TOKENS` | `int` | `int(os.getenv('GEMINI_MIN_OUTPUT_TOKENS', '4096'))` | L189 |
-| `GEMINI_FALLBACK_MODELS` | `list[str]` | `['gemini:gemini-2.5-flash', 'gemini:gemini-2.0-flash', 'gemini:gemini-1.5-flash'...` | L192 |
+| `GEMINI_FALLBACK_MODELS` | `list[str]` | `['gemini:gemini-3.5-flash-lite', 'gemini:gemini-3.8-flash', 'gemini:gemini-3.6-flash'...` | L192 |
 | `CLOUD_SEARCH_MODEL` | `str` | `os.getenv('CLOUD_SEARCH_MODEL', 'deepseek:deepseek-v4-flash')` | L199 |
-| `SELF_MONITORING_MODEL` | `str` | `os.getenv('SELF_MONITORING_MODEL', 'gemini:gemini-3.6-flash')` | L204 |
+| `SELF_MONITORING_MODEL` | `str` | `os.getenv('SELF_MONITORING_MODEL', 'gemini:gemini-3.5-flash-lite')` | L204 |
 | `CONTEXT_MENU_EPHEMERAL` | `bool` | `os.getenv('CONTEXT_MENU_EPHEMERAL', 'False').lower() in ('true', '1', 'yes')` | L207 |
 | `LLM_TIMEOUT` | `int` | `int(os.getenv('LLM_TIMEOUT', '180'))` | L210 |
 | `LLM_STREAM_CHUNK_TIMEOUT` | `float` | `float(os.getenv('LLM_STREAM_CHUNK_TIMEOUT', '120.0'))` | L213 |

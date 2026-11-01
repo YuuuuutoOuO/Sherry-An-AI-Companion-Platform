@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime
@@ -23,28 +24,45 @@ AUDIT_DB_PATH: Path = settings.DATA_DIR / "chat_history.db"
 _AUDIT_DB_INITIALIZED: bool = False
 
 
-def _init_audit_db() -> None:
-    """初始化 chat_history.db 中的 audit_logs 資料表 (僅首次執行)。"""
-    global _AUDIT_DB_INITIALIZED
-    if _AUDIT_DB_INITIALIZED:
-        return
+def mask_session_id(session_id: str) -> str:
+    """將敏感的 Session Token 進行單向雜湊遮罩，防止審計日誌外洩有效憑證。"""
+    if not session_id:
+        return ""
+    digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:12]
+    return f"sess_{digest}"
+
+
+def _init_audit_db(db_path: Path = AUDIT_DB_PATH) -> None:
+    """初始化 chat_history.db 中的 audit_logs 資料表並確保欄位向後相容。"""
     try:
-        with db_transaction(AUDIT_DB_PATH) as cur:
+        with db_transaction(db_path) as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS audit_logs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp TEXT NOT NULL,
                     session_id TEXT,
                     username TEXT,
-                    action TEXT NOT NULL,
+                    action TEXT NOT NULL DEFAULT '',
                     ip TEXT,
                     device TEXT,
-                    data_json TEXT NOT NULL
+                    data_json TEXT NOT NULL DEFAULT '{}'
                 )
             """)
+            # 確保舊資料表也有新欄位
+            cur.execute("PRAGMA table_info(audit_logs);")
+            columns = {row[1] for row in cur.fetchall()}
+            for col, col_type in [
+                ("session_id", "TEXT"),
+                ("username", "TEXT"),
+                ("action", "TEXT DEFAULT ''"),
+                ("ip", "TEXT"),
+                ("device", "TEXT"),
+                ("data_json", "TEXT DEFAULT '{}'"),
+            ]:
+                if col not in columns:
+                    cur.execute(f"ALTER TABLE audit_logs ADD COLUMN {col} {col_type};")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_logs(timestamp DESC);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_logs(session_id);")
-        _AUDIT_DB_INITIALIZED = True
     except Exception as exc:
         logger.debug("audit_manager: 初始化 SQLite 審計表失敗: %s", exc)
 
@@ -95,12 +113,22 @@ def parse_ip_location(ip: str) -> str:
     Returns:
         str: 簡短的來源位置標籤。
     """
-    if not ip or ip == "127.0.0.1" or ip == "::1" or ip == "localhost":
+    if not ip or ip in ("127.0.0.1", "::1", "localhost", "testclient"):
         return "本機端 (Localhost)"
-    if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172.16."):
-        return "區域網路 (LAN)"
     if ip.startswith("26."):
         return "虛擬區域網路 (Radmin VPN)"
+    try:
+        import ipaddress
+
+        addr = ipaddress.ip_address(ip)
+        if addr.is_loopback:
+            return "本機端 (Localhost)"
+        if addr.is_private:
+            return "區域網路 (LAN)"
+    except ValueError:
+        pass
+    if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172.16."):
+        return "區域網路 (LAN)"
     return "外部網際網路 (Public IP)"
 
 
@@ -111,11 +139,9 @@ class AdminAuditManager:
         self.log_path = log_path
         self.db_path = db_path
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        _init_audit_db()
+        _init_audit_db(self.db_path)
 
-    def record_login(
-        self, session_id: str, username: str, ip: str, user_agent: str
-    ) -> dict[str, Any]:
+    def record_login(self, session_id: str, username: str, ip: str, user_agent: str) -> dict[str, Any]:
         """紀錄一次新的管理員登入事件。
 
         Args:
@@ -131,8 +157,9 @@ class AdminAuditManager:
         device = parse_user_agent(user_agent)
         location = parse_ip_location(ip)
 
+        masked_id = mask_session_id(session_id)
         record: dict[str, Any] = {
-            "session_id": session_id,
+            "session_id": masked_id,
             "username": username or "admin",
             "login_time": now_str,
             "logout_time": "",
@@ -147,7 +174,7 @@ class AdminAuditManager:
         # 1. 寫入 SQLite
         self._write_db_record(
             timestamp=now_str,
-            session_id=session_id,
+            session_id=masked_id,
             username=username or "admin",
             action="LOGIN",
             ip=ip,
@@ -158,10 +185,11 @@ class AdminAuditManager:
         # 2. 寫入 JSONL 備援
         self._append_record(record)
         logger.info(
-            "[AUDIT] 管理員登入成功: 帳號=%s, IP=%s, 裝置=%s",
+            "[AUDIT] 管理員登入成功: 帳號=%s, IP=%s, 裝置=%s, Session=%s",
             username,
             ip,
             device,
+            masked_id,
         )
         return record
 
@@ -176,6 +204,7 @@ class AdminAuditManager:
         if not session_id:
             return
 
+        masked_id = mask_session_id(session_id)
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         action_item = {
             "timestamp": now_str,
@@ -183,29 +212,49 @@ class AdminAuditManager:
             "detail": detail,
         }
 
-        # 1. 寫入 SQLite
+        # 1. 寫入 SQLite 動作記錄並同步主 Session
         self._write_db_record(
             timestamp=now_str,
-            session_id=session_id,
+            session_id=masked_id,
             username="admin",
             action=action_type,
             ip="",
             device="",
             data=action_item,
         )
+        try:
+            with db_transaction(self.db_path) as cur:
+                cur.execute(
+                    """
+                    SELECT id, data_json FROM audit_logs
+                    WHERE session_id = ? AND action = 'LOGIN'
+                    ORDER BY id DESC LIMIT 1
+                """,
+                    (masked_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    rec_dict = json.loads(row[1]) if isinstance(row[1], str) else {}
+                    rec_dict.setdefault("actions", []).append(action_item)
+                    cur.execute(
+                        "UPDATE audit_logs SET data_json = ? WHERE id = ?",
+                        (json.dumps(rec_dict, ensure_ascii=False), row[0]),
+                    )
+        except Exception as exc:
+            logger.debug("audit_manager: 更新 SQLite 操作記錄失敗: %s", exc)
 
         # 2. 更新 JSONL 備援
         records = self._read_all_records()
         updated = False
         for rec in records:
-            if rec.get("session_id") == session_id:
+            if rec.get("session_id") in (masked_id, session_id):
                 rec.setdefault("actions", []).append(action_item)
                 updated = True
                 break
 
         if updated:
             self._write_all_records(records)
-            logger.info("[AUDIT] 紀錄操作: Session=%s, 動作=%s", session_id[:8], action_type)
+            logger.info("[AUDIT] 紀錄操作: Session=%s, 動作=%s", masked_id, action_type)
 
     def record_logout(self, session_id: str) -> None:
         """標註指定的 Session 為已登出狀態。
@@ -216,36 +265,56 @@ class AdminAuditManager:
         if not session_id:
             return
 
+        masked_id = mask_session_id(session_id)
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # 1. 寫入 SQLite
+        # 1. 寫入 SQLite 登出記錄並更新主 Session 狀態
         self._write_db_record(
             timestamp=now_str,
-            session_id=session_id,
+            session_id=masked_id,
             username="admin",
             action="LOGOUT",
             ip="",
             device="",
-            data={"session_id": session_id, "logout_time": now_str, "status": "logged_out"},
+            data={"status": "logged_out", "logout_time": now_str},
         )
+        try:
+            with db_transaction(self.db_path) as cur:
+                cur.execute(
+                    """
+                    SELECT id, data_json FROM audit_logs
+                    WHERE session_id = ? AND action = 'LOGIN'
+                    ORDER BY id DESC LIMIT 1
+                """,
+                    (masked_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    rec_dict = json.loads(row[1]) if isinstance(row[1], str) else {}
+                    rec_dict["status"] = "logged_out"
+                    rec_dict["logout_time"] = now_str
+                    cur.execute(
+                        "UPDATE audit_logs SET data_json = ? WHERE id = ?",
+                        (json.dumps(rec_dict, ensure_ascii=False), row[0]),
+                    )
+        except Exception as exc:
+            logger.debug("audit_manager: 更新 SQLite 登出狀態失敗: %s", exc)
 
         # 2. 更新 JSONL 備援
         records = self._read_all_records()
         updated = False
         for rec in records:
-            if rec.get("session_id") == session_id:
-                rec["logout_time"] = now_str
+            if rec.get("session_id") in (masked_id, session_id):
                 rec["status"] = "logged_out"
+                rec["logout_time"] = now_str
                 updated = True
                 break
 
         if updated:
             self._write_all_records(records)
-            logger.info("[AUDIT] 管理員登出: Session=%s", session_id[:8])
+            logger.info("[AUDIT] 管理員登出: Session=%s", masked_id)
 
-    def record_security_event(
-        self, action: str, ip: str, username: str = "admin", details: str = ""
-    ) -> None:
+    def record_security_event(self, action: str, ip: str, username: str = "admin", details: str = "") -> None:
         """紀錄安全審計事件（登入失敗、IP 封鎖、未授權存取等）。
 
         Args:
@@ -290,16 +359,19 @@ class AdminAuditManager:
         """
         # 1. 優先嘗試由 SQLite 讀取
         try:
-            _init_audit_db()
+            _init_audit_db(self.db_path)
             conn = get_db_connection(self.db_path)
             cur = conn.cursor()
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT timestamp, session_id, username, action, ip, device, data_json
                 FROM audit_logs
                 WHERE action IN ('LOGIN', 'LOGIN_FAILED', 'IP_LOCKED', 'IP_BLOCKED_ATTEMPT')
                 ORDER BY id DESC
                 LIMIT ?
-            """, (limit,))
+            """,
+                (limit,),
+            )
             rows = cur.fetchall()
             conn.close()
 
@@ -333,13 +405,16 @@ class AdminAuditManager:
     ) -> None:
         """寫入單筆審計紀錄至 SQLite audit_logs 資料表。"""
         try:
-            _init_audit_db()
+            _init_audit_db(self.db_path)
             data_json = json.dumps(data, ensure_ascii=False)
             with db_transaction(self.db_path) as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO audit_logs (timestamp, session_id, username, action, ip, device, data_json)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (timestamp, session_id, username, action, ip, device, data_json))
+                """,
+                    (timestamp, session_id, username, action, ip, device, data_json),
+                )
         except Exception as exc:
             logger.debug("audit_manager: 寫入 SQLite audit_logs 失敗: %s", exc)
 

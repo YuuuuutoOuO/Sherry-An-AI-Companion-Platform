@@ -56,6 +56,7 @@ class WeatherClient:
         api_key: str = OPENWEATHERMAP_API_KEY,
         api_url: str = OPENWEATHERMAP_API_URL,
         timeout_sec: int = DEFAULT_TIMEOUT_SEC,
+        session: aiohttp.ClientSession | None = None,
     ) -> None:
         """初始化天氣客戶端。
 
@@ -63,10 +64,25 @@ class WeatherClient:
             api_key: OpenWeatherMap API Key。
             api_url: OpenWeatherMap 查詢端點。
             timeout_sec: 網路請求超時秒數。
+            session: 可選的外部共用 aiohttp.ClientSession。
         """
         self._api_key = api_key
         self._api_url = api_url
         self._timeout = aiohttp.ClientTimeout(total=timeout_sec)
+        self._session = session
+        self._own_session = session is None
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """取得或建立 persistent ClientSession。"""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(timeout=self._timeout)
+            self._own_session = True
+        return self._session
+
+    async def close(self) -> None:
+        """關閉底層自行維護之 ClientSession。"""
+        if self._own_session and self._session and not self._session.closed:
+            await self._session.close()
 
     async def get_weather(self, city: str) -> dict[str, Any] | None:
         """取得特定城市的天氣資訊。
@@ -97,26 +113,26 @@ class WeatherClient:
             "lang": "zh_tw",
         }
         try:
-            async with aiohttp.ClientSession(timeout=self._timeout) as session:
-                async with session.get(self._api_url, params=params) as resp:
-                    if resp.status != 200:
-                        return None
-                    data: dict[str, Any] = await resp.json()
-                    main = data.get("main", {})
-                    weather_list = data.get("weather", [])
-                    weather_desc = weather_list[0].get("description", "") if weather_list else ""
-                    rain_data = data.get("rain", {})
-                    rain_1h = rain_data.get("1h", 0.0)
+            session = await self._get_session()
+            async with session.get(self._api_url, params=params) as resp:
+                if resp.status != 200:
+                    return None
+                data: dict[str, Any] = await resp.json()
+                main = data.get("main", {})
+                weather_list = data.get("weather", [])
+                weather_desc = weather_list[0].get("description", "") if weather_list else ""
+                rain_data = data.get("rain", {})
+                rain_1h = rain_data.get("1h", 0.0)
 
-                    return {
-                        "city": city,
-                        "temp_c": float(main.get("temp", 0.0)),
-                        "feels_like_c": float(main.get("feels_like", 0.0)),
-                        "humidity": int(main.get("humidity", 0)),
-                        "description": weather_desc,
-                        "rain_1h": float(rain_1h),
-                        "rain_prob": 100 if rain_1h > 0 or "雨" in weather_desc else 0,
-                    }
+                return {
+                    "city": city,
+                    "temp_c": float(main.get("temp", 0.0)),
+                    "feels_like_c": float(main.get("feels_like", 0.0)),
+                    "humidity": int(main.get("humidity", 0)),
+                    "description": weather_desc,
+                    "rain_1h": float(rain_1h),
+                    "rain_prob": 100 if rain_1h > 0 or "雨" in weather_desc else 0,
+                }
         except Exception as exc:
             logger.debug("[WeatherClient] OpenWeatherMap 失敗 (%s): %s", city, exc)
             return None
@@ -126,8 +142,8 @@ class WeatherClient:
         url = f"https://wttr.in/{city}?format=j1"
         headers = {"User-Agent": "curl/7.68.0"}
         try:
-            async with aiohttp.ClientSession(timeout=self._timeout) as session:
-                async with session.get(url, headers=headers) as resp:
+            session = await self._get_session()
+            async with session.get(url, headers=headers) as resp:
                     if resp.status != 200:
                         return None
                     data: dict[str, Any] = await resp.json()

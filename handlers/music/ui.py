@@ -28,6 +28,13 @@ class SongInputModal(ui.Modal, title="🎵 點播音樂 / 貼上 YouTube 網址"
         max_length=300,
         required=True,
     )
+    start_time_input: Any = ui.TextInput(
+        label="起始播放時間 (選填，例如 20:00 或 1:05:30)",
+        placeholder="留空則從頭播放，支援 20:00、1:20:30 等",
+        min_length=0,
+        max_length=20,
+        required=False,
+    )
     play_mode_input: Any = ui.TextInput(
         label="播放模式 (add: 加入佇列 / insert: 優先插播)",
         placeholder="add (預設加入隊尾) 或 insert (優先插播到最前)",
@@ -41,13 +48,81 @@ class SongInputModal(ui.Modal, title="🎵 點播音樂 / 貼上 YouTube 網址"
         """處理點歌提交事件。"""
         query = str(self.query_input.value).strip()
         mode_val = str(self.play_mode_input.value).strip().lower()
+        start_time_val = str(self.start_time_input.value).strip() if getattr(self, "start_time_input", None) else ""
         play_type = "insert" if "ins" in mode_val else ("add" if query.startswith(("http://", "https://", "www.")) else "search")
 
         cog: Any = getattr(interaction.client, "get_cog", lambda _: None)("MusicHandler")
-        if cog and hasattr(cog, "play_command"):
+        if not cog:
+            await interaction.response.send_message("❌ 音樂模組尚未載入！", ephemeral=True)
+            return
+
+        if start_time_val and hasattr(cog, "parse_time_to_seconds"):
+            parsed_sec = cog.parse_time_to_seconds(start_time_val)
+            if parsed_sec is not None and parsed_sec >= 0:
+                user_vc = (
+                    interaction.user.voice.channel
+                    if interaction.user and hasattr(interaction.user, "voice") and interaction.user.voice
+                    else None
+                )
+                if not user_vc:
+                    await interaction.response.send_message("❌ 你必須先加入一個語音頻道！", ephemeral=True)
+                    return
+                await interaction.response.defer()
+                is_insert = (play_type == "insert")
+                await cog.headless_play(interaction.channel, user_vc, query, insert_at_top=is_insert, start_offset=parsed_sec)
+                start_dur = cog.format_duration(parsed_sec)
+                await interaction.followup.send(f"🎵 已收到！正在從 **{start_dur}** 處起播：`{query}`！")
+                return
+
+        if hasattr(cog, "play_command"):
             await cog.play_command.callback(cog, interaction, play_type=play_type, context=query)
         else:
             await interaction.response.send_message("❌ 音樂模組尚未載入！", ephemeral=True)
+
+
+# ===========================================================================
+# 2. 時間軸指定跳轉 Modal
+# ===========================================================================
+
+class SeekTimeModal(ui.Modal, title="⏱️ 跳轉音樂時間軸"):
+    """彈出式跳轉時間軸輸入表單。"""
+
+    target_time_input: Any = ui.TextInput(
+        label="目標時間 (支援 20:00, 1:20:00, +30s, -1m)",
+        placeholder="例如：20:00、01:15:30、+30s 或 -15s",
+        min_length=1,
+        max_length=20,
+        required=True,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        """處理時間軸跳轉提交事件。"""
+        val = str(self.target_time_input.value).strip()
+        cog: Any = getattr(interaction.client, "get_cog", lambda _: None)("MusicHandler")
+        if not cog or not interaction.guild_id:
+            await interaction.response.send_message("❌ 音樂模組尚未載入！", ephemeral=True)
+            return
+
+        current = cog.current_song.get(interaction.guild_id)
+        if not current:
+            await interaction.response.send_message("❌ 目前沒有正在播放的音樂，無法跳轉！", ephemeral=True)
+            return
+
+        cur_elapsed = cog.get_elapsed_time(interaction.guild_id)
+        target_sec = cog.parse_time_to_seconds(val, cur_elapsed)
+        if target_sec is None:
+            await interaction.response.send_message(
+                f"❌ 無法識別時間格式 `{val}`，請輸入如 `20:00`、`1:05:30` 或 `+30s`！", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+        success = await cog.seek_to(interaction.guild, interaction.channel, target_sec)
+        if success:
+            dur_str = cog.format_duration(target_sec)
+            await interaction.followup.send(f"⏱️ {interaction.user.mention} 已將時間軸跳轉至 **{dur_str}**！🎵")
+        else:
+            await interaction.followup.send("❌ 跳轉時間軸失敗，可能是音訊串流已過期或無法重新建立。", ephemeral=True)
 
 
 # ===========================================================================
@@ -185,6 +260,78 @@ class MusicControlView(discord.ui.View):
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         else:
             await interaction.response.send_message("❌ 音樂模組未載入。", ephemeral=True)
+
+    @discord.ui.button(label="⏪ -30s", style=discord.ButtonStyle.secondary, custom_id="seek_rewind_btn", row=2)
+    async def seek_rewind_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """倒退 30 秒。"""
+        cog: Any = getattr(interaction.client, "get_cog", lambda _: None)("MusicHandler")
+        if not cog or not interaction.guild_id:
+            await interaction.response.send_message("❌ 音樂模組未載入。", ephemeral=True)
+            return
+        current = cog.current_song.get(interaction.guild_id)
+        if not current:
+            await interaction.response.send_message("❌ 目前沒有音樂正在播放。", ephemeral=True)
+            return
+        cur_elapsed = cog.get_elapsed_time(interaction.guild_id)
+        target_sec = max(0, cur_elapsed - 30)
+        await interaction.response.defer()
+        if await cog.seek_to(interaction.guild, interaction.channel, target_sec):
+            await interaction.followup.send(
+                f"⏪ {interaction.user.mention} 倒退了 30 秒 (至 {cog.format_duration(target_sec)})！",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send("❌ 跳轉失敗。", ephemeral=True)
+
+    @discord.ui.button(label="⏱️ 指定時間", style=discord.ButtonStyle.primary, custom_id="seek_modal_btn", row=2)
+    async def seek_modal_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """開啟指定時間跳轉對話框。"""
+        await interaction.response.send_modal(SeekTimeModal())
+
+    @discord.ui.button(label="⏩ +30s", style=discord.ButtonStyle.secondary, custom_id="seek_forward_btn", row=2)
+    async def seek_forward_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """快轉 30 秒。"""
+        cog: Any = getattr(interaction.client, "get_cog", lambda _: None)("MusicHandler")
+        if not cog or not interaction.guild_id:
+            await interaction.response.send_message("❌ 音樂模組未載入。", ephemeral=True)
+            return
+        current = cog.current_song.get(interaction.guild_id)
+        if not current:
+            await interaction.response.send_message("❌ 目前沒有音樂正在播放。", ephemeral=True)
+            return
+        cur_elapsed = cog.get_elapsed_time(interaction.guild_id)
+        target_sec = cur_elapsed + 30
+        await interaction.response.defer()
+        if await cog.seek_to(interaction.guild, interaction.channel, target_sec):
+            await interaction.followup.send(
+                f"⏩ {interaction.user.mention} 快轉了 30 秒 (至 {cog.format_duration(target_sec)})！",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send("❌ 跳轉失敗。", ephemeral=True)
+
+    @discord.ui.button(label="🔄 斷點續播", style=discord.ButtonStyle.success, custom_id="resume_checkpoint_btn", row=2)
+    async def resume_checkpoint_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """從斷點恢復播放。"""
+        cog: Any = getattr(interaction.client, "get_cog", lambda _: None)("MusicHandler")
+        if not cog or not interaction.guild_id:
+            await interaction.response.send_message("❌ 音樂模組未載入。", ephemeral=True)
+            return
+        user_vc = (
+            interaction.user.voice.channel
+            if interaction.user and hasattr(interaction.user, "voice") and interaction.user.voice
+            else None
+        )
+        await interaction.response.defer()
+        cp = await cog.resume_from_checkpoint(interaction.guild, interaction.channel, user_vc)
+        if cp:
+            song = cp.get("song", {})
+            sec = cp.get("offset_seconds", 0)
+            await interaction.followup.send(
+                f"🔄 {interaction.user.mention} 接續播放了上次中斷的歌曲：**{song.get('title', '未知')}** (從 **{cog.format_duration(sec)}** 處開始)！🎵"
+            )
+        else:
+            await interaction.followup.send("❌ 查無此伺服器可接續的音樂斷點紀錄（或語音頻道無人在線）。", ephemeral=True)
 
 
 # ===========================================================================

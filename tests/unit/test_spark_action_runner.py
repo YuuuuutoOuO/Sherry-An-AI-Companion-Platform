@@ -206,3 +206,120 @@ async def test_action_runner_legacy_trigger_fallback_inference(mock_bot: MagicMo
     _, kwargs = mock_pixiv_tool.execute.call_args
     assert "大奶" in kwargs.get("user_query", "")
 
+
+@pytest.mark.anyio
+async def test_action_runner_tags_user_and_view_on_notify(mock_bot: MagicMock, mock_channel: MagicMock) -> None:
+    """測試 NOTIFY 動作一定標註使用者 (<@user_id>) 並掛載 SparkFollowUpView。"""
+    from handlers.spark.action_runner import SparkFollowUpView
+
+    mock_bot.get_channel.return_value = mock_channel
+    mock_service = MagicMock()
+    runner = SparkActionRunner(mock_bot, service=mock_service)
+
+    trigger = Trigger(
+        trigger_id="trig-tag-notify-1",
+        user_id=425311733503229972,
+        channel_id=999,
+        trigger_type="schedule",
+        condition={"mode": "once", "target_time": "2026-10-18T08:30:00+08:00"},
+        message="提醒我吃維他命",
+        action={"action_type": ActionType.NOTIFY.value},
+    )
+
+    success = await runner.run_action(trigger, "單次提醒觸發")
+    assert success is True
+    mock_channel.send.assert_awaited_once()
+    send_kwargs = mock_channel.send.call_args.kwargs
+    assert send_kwargs.get("content") == "<@425311733503229972>"
+    assert isinstance(send_kwargs.get("view"), SparkFollowUpView)
+
+
+@pytest.mark.anyio
+async def test_spark_channel_context_prepends_mention_and_view(mock_channel: MagicMock) -> None:
+    """測試 SparkChannelContext.send 自動加上 @Tag 與 follow_up_view。"""
+    from handlers.spark.action_runner import SparkChannelContext
+
+    mock_view = MagicMock()
+    ctx = SparkChannelContext(channel=mock_channel, user_id=12345, bot=MagicMock(), follow_up_view=mock_view)
+
+    # 1. 帶有 content 參數
+    await ctx.send("早安！今天天氣真好。")
+    mock_channel.send.assert_awaited_once()
+    pos_args, kwargs = mock_channel.send.call_args
+    sent_text = pos_args[0] if pos_args else kwargs.get("content", "")
+    assert "<@12345>" in sent_text
+    assert kwargs.get("view") == mock_view
+
+    mock_channel.send.reset_mock()
+    # 2. 第二次發送不應重複標記
+    await ctx.send("第二則訊息")
+    pos_args2, kwargs2 = mock_channel.send.call_args
+    sent_text2 = pos_args2[0] if pos_args2 else kwargs2.get("content", "")
+    assert "<@12345>" not in sent_text2
+
+
+@pytest.mark.anyio
+async def test_action_runner_agent_prompt_and_memory_update(mock_bot: MagicMock, mock_channel: MagicMock) -> None:
+    """測試 AGENT_PROMPT 動作調度 DispatchAgentTool 並寫回跨輪記憶。"""
+    mock_bot.get_channel.return_value = mock_channel
+    mock_service = MagicMock()
+    runner = SparkActionRunner(mock_bot, service=mock_service)
+
+    trigger = Trigger(
+        trigger_id="trig-agent-prompt-1",
+        user_id=101,
+        channel_id=999,
+        trigger_type="schedule",
+        condition={"mode": "daily_time", "time": "08:00"},
+        message="查最新CPI與台股並問候",
+        action={
+            "action_type": ActionType.AGENT_PROMPT.value,
+            "payload": {"prompt": "查最新CPI與台股並跟我說早安"},
+        },
+        extra_data={"last_output_summary": "昨日CPI持平"},
+    )
+
+    with patch("handlers.social.dispatch_agent.DispatchAgentTool.execute", new_callable=AsyncMock) as mock_agent_exec:
+        mock_agent_exec.return_value = "名偵探今日分析：最新CPI降溫，台股開高，早安！"
+        success = await runner.run_action(trigger, "每日定時觸發")
+
+    assert success is True
+    mock_agent_exec.assert_awaited_once()
+    exec_kwargs = mock_agent_exec.call_args.kwargs
+    assert exec_kwargs.get("spark_previous_memory") == "昨日CPI持平"
+    mock_service.update_trigger_memory.assert_called_once_with(
+        "trig-agent-prompt-1",
+        "名偵探今日分析：最新CPI降溫，台股開高，早安！",
+    )
+
+
+@pytest.mark.anyio
+async def test_spark_follow_up_view_permission() -> None:
+    """測試 SparkFollowUpView 只允許排程擁有者點擊。"""
+    from handlers.spark.action_runner import SparkFollowUpView
+
+    trigger = Trigger(
+        trigger_id="trig-perm-test",
+        user_id=99999,
+        channel_id=1,
+        trigger_type="schedule",
+        condition={"mode": "interval", "interval_minutes": 10},
+        message="測試按鈕",
+        action={"action_type": "notify"},
+    )
+    view = SparkFollowUpView(MagicMock(), trigger)
+
+    # 模擬非擁有者
+    other_interaction = MagicMock()
+    other_interaction.user.id = 11111
+    other_interaction.response.send_message = AsyncMock()
+    can_proceed = await view.interaction_check(other_interaction)
+    assert can_proceed is False
+    other_interaction.response.send_message.assert_awaited_once()
+
+    # 模擬擁有者
+    owner_interaction = MagicMock()
+    owner_interaction.user.id = 99999
+    assert await view.interaction_check(owner_interaction) is True
+
+

@@ -32,22 +32,26 @@ _SPARK_ACTION_EXTRACTION_PROMPT = """你是一個任務動作意圖定義引擎�
    - target="PIXIV"：搜圖、找圖、色圖、美圖、大奶、巨乳、動漫角色圖、找照片、桌布。payload: {"query": "精簡搜尋標籤/關鍵字"}
    - target="DRAW"：AI 繪圖、生成新圖片、畫畫、Stable Diffusion 算圖。payload: {"query": "繪圖提示詞"}
    - target="STOCK"：股票/加密貨幣/指數 K 線行情繪圖與走勢。payload: {"query": "標的代號，如 0050, NVDA, 2330"}
-   - target="WEATHER"：特定城市即時天氣、降雨預警、氣溫。payload: {"query": "城市名稱，如 台北"}
+
    - target="MUSIC"：放音樂、播歌、點歌、播放 YouTube。payload: {"query": "歌名或關鍵字"}
    - target="CHAT"：日常性格對話、講笑話、早安晚安問候、聊天、陪伴、說辛苦了、吐槽。payload: {"query": "對話指令，如 告訴我一個好笑的笑話 或 跟我說早安"}
-   - target="SEARCH"：即時聯網搜尋知識。payload: {"query": "搜尋關鍵字"}
+   - target="SEARCH"：即時聯網搜尋知識、新聞、最新消息、即時天氣/氣候預報、情報、時事、動態、懶人包、CPI、非農、財報。payload: {"query": "搜尋關鍵字，如 台北 天氣預報", "force_search": true}
 
-2. mod_deep_search: 特權模組，多輪自主深度研究調查。
+2. agent_prompt: 當使用者的排程包含複合多步驟需求（例如「查最新 CPI 消息順便看 NVDA 股價跟台北天氣，再跟我說早安」）或需要雪莉主動多工具調度與自主規劃時。
+   payload: {"prompt": "原始任務指令"}
+
+3. mod_deep_search: 特權模組，多輪自主深度研究調查。
    payload: {"topic": "研究主題", "rounds": 3}
 
-3. notify: 純文字個人備忘或鬧鐘提醒（使用者只是提醒自己/大家做某事，不需雪莉主動執行工具或講話）。
+4. notify: 純文字個人備忘或鬧鐘提醒（使用者只是提醒自己/大家做某事，不需雪莉主動執行工具或講話）。
    例如：提醒我開會、提醒吃藥、提醒喝水、提醒打卡、叫我起床、泡麵好了。
    payload: {}
 
 【輸出規則】：
 - 僅輸出單一合法 JSON 物件，嚴禁包含任何 Markdown 格式或額外字元。
+- 範例：{"action_type": "core_tool", "target": "SEARCH", "payload": {"query": "最新CPI消息", "force_search": true}, "message": "跟我說最新CPI的消息"}
+- 範例：{"action_type": "agent_prompt", "payload": {"prompt": "查最新CPI順便看NVDA股價"}, "message": "查最新CPI順便看NVDA股價"}
 - 範例：{"action_type": "core_tool", "target": "PIXIV", "payload": {"query": "大奶"}, "message": "傳一張大奶圖片"}
-- 範例：{"action_type": "core_tool", "target": "CHAT", "payload": {"query": "告訴我一個好笑的笑話"}, "message": "講個笑話"}
 - 範例：{"action_type": "notify", "message": "提醒我喝水"}
 """
 
@@ -187,14 +191,27 @@ def is_pure_reminder_memo(msg: str) -> bool:
     clean = msg.strip()
     if not clean:
         return True
-    return bool(re.search(
-        r"^(?:定時)?(?:提醒|叫|喊)?(?:我|大家)?(?:\s*(?:要|記得))?\s*(?:開會|吃藥|喝水|尿尿|動一動|打卡|起床|睡覺|泡麵|帶傘|出門|洗衣服|看|去)",
+    if clean in ("提醒", "提醒我", "定時提醒", "鬧鐘", "備忘", "通知"):
+        return True
+    if re.search(
+        r"^(?:定時)?(?:提醒|叫|喊)?(?:我|大家)?(?:\s*(?:要|記得))?\s*(?:開會|吃藥|吃維他命|維他命|喝水|尿尿|動一動|打卡|起床|睡覺|泡麵|帶傘|出門|洗衣服|倒垃圾|買菜|買牛奶|繳費|運動|打電話|看|去)",
         clean,
-    )) or clean in ("提醒", "提醒我", "定時提醒", "鬧鐘")
+    ):
+        return True
+    # 若語句明確包含提醒/叫我前綴，且不含任何工具或對話意圖
+    if re.match(r"^(?:定時)?(?:提醒|叫|喊)?(?:我|大家)?(?:\s*(?:要|記得))?", clean):
+        tool_in_msg = any(k in clean for k in (
+            "畫", "圖", "照片", "k線", "K線", "股價", "走勢", "天氣", "氣溫",
+            "放歌", "播歌", "點歌", "音樂", "最新", "消息", "新聞", "情報", "搜尋",
+            "查一下", "查詢", "CPI", "非農", "早安", "晚安", "笑話", "冷笑話", "深度研究"
+        ))
+        if not tool_in_msg and re.match(r"^(?:提醒|叫我|喊我|記得|通知我)", clean):
+            return True
+    return False
 
 
 def detect_action_from_message_fallback(msg: str) -> dict[str, Any]:
-    """當 LLM 未就緒時，提供精確的規則快路徑動作推斷（涵蓋 Core Tools、Chat 與 Deep Search）。
+    """當 LLM 未就緒時，提供精確的規則快路徑動作推斷（涵蓋 Core Tools、Chat、Deep Search 與 Agent Prompt）。
 
     Args:
         msg: 欲分析的動作意圖文字。
@@ -207,47 +224,69 @@ def detect_action_from_message_fallback(msg: str) -> dict[str, Any]:
 
     clean = msg.strip()
 
-    # 1. 深度研究 (Deep Search)
-    if any(k in clean for k in ("深度研究", "深度探究", "自主研究", "多輪研究", "論文級", "深度調查")):
-        topic = re.sub(r"^(?:請|麻煩|幫我|進行|做)?(?:對|針對)?", "", clean).strip()
-        return {"action_type": "mod_deep_search", "payload": {"topic": topic or clean, "rounds": 3}}
-
-    # 2. AI 繪圖 (DRAW)
-    if re.search(r"(?:幫我畫|畫一張|生成圖片|畫圖|繪製|ai繪圖|sd繪圖|\bdraw\b)", clean, re.IGNORECASE):
-        prompt = re.sub(r"^(?:請|麻煩|幫我|我要)?(?:畫|生成|繪製)?[一幾1-9]?張?", "", clean).strip()
-        return {"action_type": "core_tool", "target": "DRAW", "payload": {"query": prompt or clean}}
-
-    # 3. 二次元圖搜 (PIXIV)
+    # 0. 複合多任務檢測 (Agent Prompt: Integrated Strategy 多工具自主調度)
+    # 若同時命中 2 種以上工具特徵（如查新聞順便看股價查天氣，並跟我說早安），或帶有順便/一併等複合連接詞，派發為 Agent Prompt
     image_regex = (
         r"(大奶|巨乳|大胸|貧乳|平胸|色圖|美圖|搜圖|找圖|來點圖|來張圖|傳張圖|傳點圖|"
         r"圖片|照片|找照片|看圖|妹子|二次元|桌布|壁紙|插畫|本子|"
         r"pixiv|danbooru|safebooru|"
         r"(?:傳|發|來|求|找|看|搜|發送|分享)[一幾1-9]?張?[^，。\n]{0,10}(?:圖|圖片|照片))"
     )
-    if re.search(image_regex, clean, re.IGNORECASE):
+    has_deep_search = any(k in clean for k in ("深度研究", "深度探究", "自主研究", "多輪研究", "論文級", "深度調查"))
+    has_draw = bool(re.search(r"(?:幫我畫|畫一張|生成圖片|畫圖|繪製|ai繪圖|sd繪圖|\bdraw\b)", clean, re.IGNORECASE))
+    has_pixiv = bool(re.search(image_regex, clean, re.IGNORECASE))
+    has_stock = any(k in clean for k in ("走勢", "k線", "K線", "股價", "行情", "大盤", "技術分析")) or bool(re.search(r"\b(0050|NVDA|TSLA|2330|BTC|ETH|AAPL|MSFT)\b", clean, re.IGNORECASE))
+    has_weather = any(k in clean for k in ("天氣", "氣溫", "下雨", "氣候", "即時天氣", "天氣預報"))
+    has_music = bool(re.search(r"(?:放歌|播歌|點歌|聽歌|放音樂|播放音樂|來首|來點音樂|我想聽|\bmusic\b|(?:播|放|來|點)[一幾1-9]?首|(?:播|放|點|聽|推薦).*(?:歌|音樂|純音樂|bgm))", clean, re.IGNORECASE))
+    has_search = bool(re.search(r"(?:最新|消息|新聞|情報|時事|動態|搜尋|查一下|查詢|懶人包|總結|報告|CPI|非農|FOMC|利率|財報|法說)", clean, re.IGNORECASE))
+    has_chat_greeting = bool(re.search(r"(?:早安|晚安|笑話|冷笑話|跟我說早|跟我說晚|辛苦了)", clean, re.IGNORECASE))
+
+    # 計算獨立工具命中數（排除純通知備忘詞）
+    tool_hits = sum([has_draw, has_pixiv, has_stock, has_weather, has_music, has_search, has_chat_greeting])
+    has_compound_keyword = any(k in clean for k in ("順便", "一併", "順道", "而且還要", "以及看"))
+    if tool_hits >= 2 or (tool_hits >= 1 and has_compound_keyword):
+        return {"action_type": "agent_prompt", "payload": {"prompt": clean}}
+
+    # 1. 深度研究 (Deep Search)
+    if has_deep_search:
+        topic = re.sub(r"^(?:請|麻煩|幫我|進行|做)?(?:對|針對)?", "", clean).strip()
+        return {"action_type": "mod_deep_search", "payload": {"topic": topic or clean, "rounds": 3}}
+
+    # 2. AI 繪圖 (DRAW)
+    if has_draw:
+        prompt = re.sub(r"^(?:請|麻煩|幫我|我要)?(?:畫|生成|繪製)?[一幾1-9]?張?", "", clean).strip()
+        return {"action_type": "core_tool", "target": "DRAW", "payload": {"query": prompt or clean}}
+
+    # 3. 二次元圖搜 (PIXIV)
+    if has_pixiv:
         query = clean
         query = re.sub(r"^(?:請|麻煩|幫我|我要)?(?:傳|發送|發|分享|給我|看|找|來|搜)?[一幾1-9]?張?", "", query).strip()
         query = re.sub(r"(?:給我|謝謝|喔|啊|啦|吧)+$", "", query).strip()
         return {"action_type": "core_tool", "target": "PIXIV", "payload": {"query": query or clean}}
 
-    # 4. 股票/K線行情 (STOCK)
-    if any(k in clean for k in ("走勢", "k線", "K線", "股價", "行情", "大盤", "技術分析")):
+    # 4. 即時聯網搜尋情報 (SEARCH)
+    if has_search:
+        q_search = re.sub(r"^(?:請|麻煩|幫我|我要)?(?:查一下|查詢|搜尋|看一下|看|跟我說|告訴我|報告)?", "", clean).strip()
+        return {"action_type": "core_tool", "target": "SEARCH", "payload": {"query": q_search or clean, "force_search": True}}
+
+    # 5. 股票/K線行情 (STOCK)
+    if has_stock:
         return {"action_type": "core_tool", "target": "STOCK", "payload": {"query": clean}}
 
-    # 5. 即時天氣 (WEATHER)
-    if any(k in clean for k in ("天氣", "氣溫", "下雨", "氣候", "即時天氣", "天氣預報")):
-        return {"action_type": "core_tool", "target": "WEATHER", "payload": {"query": clean}}
+    # 6. 即時天氣 (收斂至 SEARCH 聯網檢索)
+    if has_weather:
+        return {"action_type": "core_tool", "target": "SEARCH", "payload": {"query": clean, "force_search": True}}
 
-    # 6. 音樂播放 (MUSIC)
-    if re.search(r"(?:放歌|播歌|點歌|聽歌|放音樂|播放音樂|來首|來點音樂|我想聽|\bmusic\b|(?:播|放|來|點)[一幾1-9]?首|(?:播|放|點|聽|推薦).*(?:歌|音樂|純音樂|bgm))", clean, re.IGNORECASE):
+    # 7. 音樂播放 (MUSIC)
+    if has_music:
         q = re.sub(r"^(?:請|麻煩|幫我|我要)?(?:放歌|播歌|點歌|放音樂|播放音樂|來首|我想聽|播放|播|放|來點)?", "", clean).strip()
         return {"action_type": "core_tool", "target": "MUSIC", "payload": {"query": q or clean}}
 
-    # 7. 純文字備忘 (NOTIFY)
+    # 8. 純文字備忘 (NOTIFY)
     if is_pure_reminder_memo(clean):
         return {"action_type": "notify"}
 
-    # 8. 對話/講笑話/早安問候 (CHAT)
+    # 9. 對話/講笑話/早安問候 (CHAT)
     return {"action_type": "core_tool", "target": "CHAT", "payload": {"query": clean}}
 
 
@@ -307,19 +346,31 @@ def sanitize_schedule_condition(
                 new_cond["interval_minutes"] = 10
 
         new_cond.setdefault("tz_offset", 8)
-        return new_cond
-
-    # 2. 檢測是否有明確的「單次相對時間」特徵詞（如「10分鐘後」、「1小時後」）
-    once_rel_match = re.search(
-        r"([0-9]+|[一二兩三四五六七八九十半]+)\s*(?:個)?(分鐘|分|mins?|min|小時|hr|hours?|h|秒|secs?|s)後",
-        text,
-        re.IGNORECASE,
-    )
-    if once_rel_match and mode != "once":
+    elif re.search(r"([0-9]+|[一二兩三四五六七八九十半]+)\s*(?:個)?(分鐘|分|mins?|min|小時|hr|hours?|h|秒|secs?|s)後", text, re.IGNORECASE) and mode != "once":
+        # 2. 檢測是否有明確的「單次相對時間」特徵詞（如「10分鐘後」、「1小時後」）
         logger.info("[Spark NLP Guard] 糾正排程模式: %s -> once (context=%s)", mode, text)
         new_cond["mode"] = "once"
         new_cond.pop("interval_minutes", None)
         new_cond.setdefault("tz_offset", 8)
+
+    # 3. 補齊 max_runs 與 days_of_week
+    if "max_runs" not in new_cond:
+        max_runs_m = re.search(r"(?:總共|共|限制)?\s*([0-9]+|[一二兩三四五六七八九十]+)\s*次(?:就好)?", text)
+        if max_runs_m:
+            parsed_runs = parse_cn_or_arabic_int(max_runs_m.group(1))
+            if parsed_runs and parsed_runs > 0:
+                new_cond["max_runs"] = parsed_runs
+
+    if "days_of_week" not in new_cond:
+        if re.search(r"(?:每個)?(?:工作日|平日|週一到週五|周一到周五|禮拜一到禮拜五)", text):
+            new_cond["days_of_week"] = [0, 1, 2, 3, 4]
+        elif re.search(r"(?:每個)?(?:週末|周末|假日)", text):
+            new_cond["days_of_week"] = [5, 6]
+        else:
+            w_m = re.search(r"(?:每(?:個)?(?:週|周|禮拜|星期)([一二三四五六日天1-7]))", text)
+            if w_m:
+                w_map = {"一": 0, "1": 0, "二": 1, "2": 1, "三": 2, "3": 2, "四": 3, "4": 3, "五": 4, "5": 4, "六": 5, "6": 5, "日": 6, "天": 6, "7": 6}
+                new_cond["days_of_week"] = [w_map.get(w_m.group(1), 0)]
 
     return new_cond
 
@@ -353,6 +404,70 @@ def parse_spark_context_by_regex(
         return None
 
     raw_text = context.strip()
+    raw_text = re.sub(r"^(?:<@!?\d+>|@?雪莉)\s*", "", raw_text).strip()
+
+    # 抽取執行次數上限 (max_runs)，例如「總共3次」、「提醒5次就好」
+    max_runs: int | None = None
+    max_runs_m = re.search(r"(?:，|,|\s)*(?:總共|共|限制|提醒)?\s*([0-9]+|[一二兩三四五六七八九十]+)\s*次(?:就好)?", raw_text)
+    if max_runs_m:
+        raw_m_str = max_runs_m.group(0)
+        parsed_r = parse_cn_or_arabic_int(max_runs_m.group(1))
+        if parsed_r and parsed_r > 0:
+            if any(k in raw_m_str for k in ("總共", "共", "限制", "就好")) or parsed_r > 1 or (not re.search(r"(?:每|每隔).*(?:分|秒|小時|min|hr|h)\s*一次", raw_text)):
+                max_runs = parsed_r
+
+    # -----------------------------------------------------------------------
+    # 0. 智慧語意巡檢守門員 (Web Monitor)
+    # -----------------------------------------------------------------------
+    # 匹配例如：「每小時幫我看看有沒有CPI或降息的重大新聞，有的話通知我」、「如果有最新CPI消息才通知我」
+    web_monitor_match = re.search(
+        r"(?:每隔|每)?\s*([0-9]+|[一二兩三四五六七八九十半]+)?\s*(?:個)?(小時|分鐘|分|hr|h)?\s*"
+        r"(?:幫我)?(?:巡檢|監控|監測|追蹤|看看有沒有|看看)\s*(.+?)(?:的)?(?:重大|最新)?(?:新聞|消息|情報|進展|動態)"
+        r"(?:.*?(?:有的話|有新進展|有重大新聞)?(?:才|時|再)?(?:通知|叫|提醒)(?:我)?)?",
+        raw_text,
+    )
+    if not web_monitor_match:
+        web_monitor_match = re.search(
+            r"(?:如果|若)?(?:有)(?:關於)?(.+?)(?:的)?(?:重大|最新)?(?:新聞|消息|情報|進展|動態)(?:才|時|再)?(?:通知|叫|提醒)(?:我)?",
+            raw_text,
+        )
+    if web_monitor_match:
+        if len(web_monitor_match.groups()) >= 3 and web_monitor_match.group(3):
+            raw_interval = web_monitor_match.group(1)
+            raw_unit = (web_monitor_match.group(2) or "").lower()
+            query = web_monitor_match.group(3).strip()
+            interval_mins = 60
+            if raw_interval:
+                n = parse_cn_or_arabic_int(raw_interval) or 1
+                if "分" in raw_unit:
+                    interval_mins = n
+                else:
+                    interval_mins = n * 60
+        else:
+            query = web_monitor_match.group(1).strip()
+            interval_mins = 30
+
+        ai_cond = "有最新或重大相關消息"
+        if "重大" in raw_text:
+            ai_cond = "重大新聞與實質進展"
+
+        cond_web: dict[str, Any] = {
+            "query": query,
+            "ai_condition": ai_cond,
+            "interval_minutes": interval_mins,
+        }
+        if max_runs is not None:
+            cond_web["max_runs"] = max_runs
+
+        return {
+            "trigger_type": "web_monitor",
+            "user_id": user_id,
+            "channel_id": channel_id,
+            "condition": cond_web,
+            "message": raw_text,
+            "action": {"action_type": "core_tool", "target": "SEARCH", "payload": {"query": query, "force_search": True}},
+            "cooldown_seconds": interval_mins * 60,
+        }
 
     # -----------------------------------------------------------------------
     # A. 內容訂閱 (RSS / YouTube Feed) 優先比對網址
@@ -380,22 +495,41 @@ def parse_spark_context_by_regex(
         }
 
     # -----------------------------------------------------------------------
-    # B. 定時與間隔排程 (Schedule / Interval / Daily)
+    # B. 定時與間隔排程 (Schedule / Interval / Daily / Once)
     # -----------------------------------------------------------------------
+    # 星期篩選提取 (days_of_week)
+    extracted_days_of_week: list[int] | None = None
+    if re.search(r"(?:每個)?(?:工作日|平日|週一到週五|周一到周五|禮拜一到禮拜五)", raw_text):
+        extracted_days_of_week = [0, 1, 2, 3, 4]
+    elif re.search(r"(?:每個)?(?:週末|周末|假日)", raw_text):
+        extracted_days_of_week = [5, 6]
+    else:
+        week_match = re.search(r"(?:每(?:個)?(?:週|周|禮拜|星期)([一二三四五六日天1-7]))", raw_text)
+        if week_match:
+            w_map = {"一": 0, "1": 0, "二": 1, "2": 1, "三": 2, "3": 2, "四": 3, "4": 3, "五": 4, "5": 4, "六": 5, "6": 5, "日": 6, "天": 6, "7": 6}
+            extracted_days_of_week = [w_map.get(week_match.group(1), 0)]
+
     # 1. 循環間隔模式：例如「每 30 分鐘 提醒喝水」、「每半小時總結聊天」、「每隔 60 mins 提醒動一動」
     half_match = re.search(r"(?:每隔|每)\s*(?:個)?半小時\s*(?:提醒|發送)?\s*(.+)?", raw_text, re.IGNORECASE)
     if half_match:
         msg = (half_match.group(1) or "").strip()
+        if max_runs_m:
+            msg = re.sub(r"(?:，|,|\s)*(?:總共|共|限制)?\s*[0-9一二兩三四五六七八九十]+\s*次(?:就好)?", "", msg).strip()
         action = {"action_type": "notify"} if is_pure_reminder_memo(msg) else detect_action_from_message_fallback(msg)
+        cond_half: dict[str, Any] = {
+            "mode": "interval",
+            "interval_minutes": 30,
+            "tz_offset": 8,
+        }
+        if extracted_days_of_week:
+            cond_half["days_of_week"] = extracted_days_of_week
+        if max_runs is not None:
+            cond_half["max_runs"] = max_runs
         return {
             "trigger_type": "schedule",
             "user_id": user_id,
             "channel_id": channel_id,
-            "condition": {
-                "mode": "interval",
-                "interval_minutes": 30,
-                "tz_offset": 8,
-            },
+            "condition": cond_half,
             "message": msg or "每 30 分鐘定時提醒",
             "action": action,
             "cooldown_seconds": 60,
@@ -420,7 +554,6 @@ def parse_spark_context_by_regex(
             raw_val = interval_match.group(1)
             unit = interval_match.group(2).lower()
             msg = (interval_match.group(3) or "").strip()
-            # 若 interval_match 不是從開頭匹配，且其後的 msg 為空或只有「一次」，則前段文字為使用者的動作/訊息
             if interval_match.start() > 0:
                 clean_msg_candidate = re.sub(r"^(?:一次|傳一次|發一次)[，,\s]*", "", msg).strip()
                 if not clean_msg_candidate:
@@ -442,48 +575,81 @@ def parse_spark_context_by_regex(
         # 去除 msg 開頭或結尾的「一次」或「傳一次」等干擾字眼
         msg = re.sub(r"^(?:一次|傳一次|發一次)[，,\s]*", "", msg).strip()
         msg = re.sub(r"[，,\s]*(?:一次|傳一次|發一次)$", "", msg).strip()
+        if max_runs_m:
+            msg = re.sub(r"(?:，|,|\s)*(?:總共|共|限制)?\s*[0-9一二兩三四五六七八九十]+\s*次(?:就好)?", "", msg).strip()
 
         action = {"action_type": "notify"} if is_pure_reminder_memo(msg) else detect_action_from_message_fallback(msg)
+        cond_inter: dict[str, Any] = {
+            "mode": "interval",
+            "interval_minutes": interval_mins,
+            "tz_offset": 8,
+        }
+        if extracted_days_of_week:
+            cond_inter["days_of_week"] = extracted_days_of_week
+        if max_runs is not None:
+            cond_inter["max_runs"] = max_runs
+
         return {
             "trigger_type": "schedule",
             "user_id": user_id,
             "channel_id": channel_id,
-            "condition": {
-                "mode": "interval",
-                "interval_minutes": interval_mins,
-                "tz_offset": 8,
-            },
+            "condition": cond_inter,
             "message": msg or f"每 {interval_mins} 分鐘定時提醒",
             "action": action,
             "cooldown_seconds": 60,
         }
 
-    # 2. 每日固定時間模式：例如「每天 08:30 提醒吃藥」、「每日 18:00 發送下班打卡」、「每天早上8點告訴我一個笑話」
+    # 2. 每日固定時間模式（含工作日/週末/特定星期）
+    # 例如「每天 08:30 提醒吃藥」、「每個工作日早上9點提醒我開會」、「每週三晚上8點跟我說最新AI新聞」
     daily_match = re.search(
-        r"(?:每天|每日|每晚|每早|每天早上|每天下午|每天晚上)\s*(\d{1,2}(?::|\.|點)\d{0,2})\s*(?:分)?\s*(?:提醒|發送)?\s*(.+)?",
+        r"(?:每天|每日|每晚|每早|每天早上|每天下午|每天晚上|每個工作日|平日|週一到週五|每週末|每個週末|每[週周禮拜星期][一二三四五六日天1-7])\s*"
+        r"(?:(?P<period>早上|早晨|上午|中午|下午|傍晚|晚上|夜間)\s*)?"
+        r"(?P<hour>\d{1,2}|[一二兩三四五六七八九十]{1,2})(?:(?::|\.)(?P<min_colon>\d{0,2})|點(?P<min_dot>\d{0,2}|[一二兩三四五六七八九十]{1,3}|半)?)(?:\s*分)?\s*"
+        r"(?:提醒|發送|跟我說|告訴我|通知|叫我|執行|傳)?\s*(?P<msg>.+)?",
         raw_text,
         re.IGNORECASE,
     )
     if daily_match:
-        time_raw = daily_match.group(1).strip().replace("點", ":").replace(".", ":")
-        if ":" not in time_raw:
-            time_raw = f"{time_raw}:00"
-        elif time_raw.endswith(":"):
-            time_raw = f"{time_raw}00"
-        parts = time_raw.split(":")
-        time_str = f"{parts[0].zfill(2)}:{parts[1].ljust(2, '0')[:2]}"
-        msg = (daily_match.group(2) or "").strip()
+        hour_raw = daily_match.group("hour")
+        hour = int(hour_raw) if hour_raw.isdigit() else (parse_cn_or_arabic_int(hour_raw) or 8)
+        period = daily_match.group("period")
+        min_colon = daily_match.group("min_colon")
+        min_dot = daily_match.group("min_dot")
+        if min_colon:
+            minute = int(min_colon) if min_colon.isdigit() else (parse_cn_or_arabic_int(min_colon) or 0)
+        elif min_dot == "半":
+            minute = 30
+        elif min_dot:
+            minute = int(min_dot) if min_dot.isdigit() else (parse_cn_or_arabic_int(min_dot) or 0)
+        else:
+            minute = 0
+
+        match_str = daily_match.group(0)
+        if period in ("下午", "晚上", "傍晚", "夜間") or "晚" in match_str:
+            if hour < 12:
+                hour += 12
+
+        time_str = f"{hour:02d}:{minute:02d}"
+        msg = (daily_match.group("msg") or "").strip()
+        if max_runs_m:
+            msg = re.sub(r"(?:，|,|\s)*(?:總共|共|限制)?\s*[0-9一二兩三四五六七八九十]+\s*次(?:就好)?", "", msg).strip()
 
         action = {"action_type": "notify"} if is_pure_reminder_memo(msg) else detect_action_from_message_fallback(msg)
+        cond_daily: dict[str, Any] = {
+            "mode": "daily_time",
+            "time": time_str,
+            "tz_offset": 8,
+        }
+        if extracted_days_of_week:
+            cond_daily["days_of_week"] = extracted_days_of_week
+        if max_runs is not None:
+            cond_daily["max_runs"] = max_runs
+
         return {
             "trigger_type": "schedule",
             "user_id": user_id,
             "channel_id": channel_id,
-            "condition": {
-                "mode": "daily_time",
-                "time": time_str,
-                "tz_offset": 8,
-            },
+            "condition": cond_daily,
             "message": msg or f"每日 {time_str} 定時提醒",
             "action": action,
             "cooldown_seconds": 60,
@@ -500,6 +666,9 @@ def parse_spark_context_by_regex(
         val = parse_cn_or_arabic_int(raw_val) or 1
         unit = once_rel_match.group(2).lower()
         msg = (once_rel_match.group(3) or "").strip()
+        if max_runs_m:
+            msg = re.sub(r"(?:，|,|\s)*(?:總共|共|限制)?\s*[0-9一二兩三四五六七八九十]+\s*次(?:就好)?", "", msg).strip()
+
         if "小時" in unit or "h" in unit or "hr" in unit:
             delta_seconds = val * 3600
         elif "秒" in unit or "s" in unit or "sec" in unit:
@@ -512,16 +681,97 @@ def parse_spark_context_by_regex(
         target_dt = (datetime.now(timezone.utc) + timedelta(seconds=delta_seconds)).astimezone(TAIPEI_TZ)
         action = {"action_type": "notify"} if is_pure_reminder_memo(msg) else detect_action_from_message_fallback(msg)
 
+        cond_rel: dict[str, Any] = {
+            "mode": "once",
+            "target_time": target_dt.isoformat(),
+            "tz_offset": 8,
+        }
+        if max_runs is not None:
+            cond_rel["max_runs"] = max_runs
+
         return {
             "trigger_type": "schedule",
             "user_id": user_id,
             "channel_id": channel_id,
-            "condition": {
-                "mode": "once",
-                "target_time": target_dt.isoformat(),
-                "tz_offset": 8,
-            },
+            "condition": cond_rel,
             "message": msg or f"{val} {unit}後單次提醒",
+            "action": action,
+            "cooldown_seconds": 60,
+        }
+
+    # 4. 單次指定時刻模式（無「每」前綴）：例如「8.30分跟我說最新CPI的消息」、「明天早上8:30告訴我...」、「今天晚上9點提醒我開會」
+    abs_time_match = re.search(
+        r"(?<!每)(?<!每隔)(?<!每天)(?<!每日)(?<!每早)(?<!每晚)"
+        r"(?:(?P<day_rel>今天|今晚|今早|明天|明早|明晚|後天)\s*)?"
+        r"(?:(?P<period>早上|早晨|上午|中午|下午|傍晚|晚上|半夜|夜間)\s*)?"
+        r"(?P<hour>\d{1,2})(?:(?::|\.)(?P<minute_colon>\d{0,2})|點(?P<minute_dot>\d{0,2}|半)?)(?:\s*分)?"
+        r"\s*(?:跟我說|告訴我|提醒我|提醒|通知我|通知|叫我|執行|發送|傳送|傳|回報)?\s*(?P<msg>.+)",
+        raw_text,
+        re.IGNORECASE,
+    )
+    if abs_time_match:
+        day_rel = abs_time_match.group("day_rel")
+        period = abs_time_match.group("period")
+        hour = int(abs_time_match.group("hour"))
+        min_colon = abs_time_match.group("minute_colon")
+        min_dot = abs_time_match.group("minute_dot")
+        if min_colon:
+            minute = int(min_colon)
+        elif min_dot == "半":
+            minute = 30
+        elif min_dot:
+            minute = int(min_dot)
+        else:
+            minute = 0
+
+        is_pm = False
+        if period in ("下午", "晚上", "傍晚", "夜間", "半夜") or day_rel in ("今晚", "明晚"):
+            is_pm = True
+            if hour < 12:
+                hour += 12
+        elif period == "中午":
+            if hour < 12 and hour != 12:
+                hour += 12
+
+        now_tw = datetime.now(timezone.utc).astimezone(TAIPEI_TZ)
+        target_day = now_tw.date()
+        if day_rel in ("明天", "明早", "明晚"):
+            target_day = now_tw.date() + timedelta(days=1)
+        elif day_rel == "後天":
+            target_day = now_tw.date() + timedelta(days=2)
+
+        try:
+            target_dt = datetime(target_day.year, target_day.month, target_day.day, hour, minute, 0, tzinfo=TAIPEI_TZ)
+        except ValueError:
+            target_dt = now_tw + timedelta(minutes=10)
+
+        # 若未指定「明天/後天」，且計算出來的時刻早於當前台灣時間：
+        if not day_rel or day_rel in ("今天", "今晚", "今早"):
+            if target_dt <= now_tw:
+                if not period and not is_pm and hour < 12 and (target_dt + timedelta(hours=12)) > now_tw:
+                    target_dt = target_dt + timedelta(hours=12)
+                else:
+                    target_dt = target_dt + timedelta(days=1)
+
+        msg = (abs_time_match.group("msg") or "").strip()
+        if max_runs_m:
+            msg = re.sub(r"(?:，|,|\s)*(?:總共|共|限制)?\s*[0-9一二兩三四五六七八九十]+\s*次(?:就好)?", "", msg).strip()
+
+        action = detect_action_from_message_fallback(msg)
+        cond_dict: dict[str, Any] = {
+            "mode": "once",
+            "target_time": target_dt.isoformat(),
+            "tz_offset": 8,
+        }
+        if max_runs is not None:
+            cond_dict["max_runs"] = max_runs
+
+        return {
+            "trigger_type": "schedule",
+            "user_id": user_id,
+            "channel_id": channel_id,
+            "condition": cond_dict,
+            "message": msg or f"{target_dt.strftime('%H:%M')} 單次提醒",
             "action": action,
             "cooldown_seconds": 60,
         }
@@ -636,10 +886,16 @@ _SPARK_LLM_SYSTEM_PROMPT = """你是一個精準的條件推播與主動任務�
    - condition: {"city": "城市名稱", "alert_type": "rain"|"temp_above"|"temp_below"|"summary", "threshold": 數值(選填)}
 4. rss (內容與訂閱):
    - condition: {"feed_url": "完整網址", "keyword": "過濾關鍵字(選填)"}
+5. web_monitor (智慧網頁巡檢守門員):
+   - condition: {"query": "搜尋關鍵字", "ai_condition": "語意觸發條件(例如：有重大消息或數據公布時)", "interval_minutes": 30}
 
 【觸發動作 action 規格】
+- 若涉及「最新消息/新聞/情報/CPI/非農/FOMC/財報/法說/搜尋/查一下/懶人包」：
+  "action": {"action_type": "core_tool", "target": "SEARCH", "payload": {"query": "搜尋關鍵字", "force_search": true}}
 - 若涉及「研究/深度研究/深度探究/論文/分析走勢/深入調查」：
   "action": {"action_type": "mod_deep_search", "payload": {"topic": "研究主題"}}
+- 若涉及複合多步驟需求（例如同時要查新聞、看股價、查天氣或問候）：
+  "action": {"action_type": "agent_prompt", "payload": {"prompt": "原始指令內容"}}
 - 若涉及「二次元搜圖/美圖/色圖/大奶/找照片/桌布」：
   "action": {"action_type": "core_tool", "target": "PIXIV", "payload": {"query": "搜尋關鍵字"}}
 - 若涉及「AI繪圖/畫畫/生成圖片/算圖」：
@@ -647,7 +903,7 @@ _SPARK_LLM_SYSTEM_PROMPT = """你是一個精準的條件推播與主動任務�
 - 若涉及「股票/K線/行情/走勢」：
   "action": {"action_type": "core_tool", "target": "STOCK", "payload": {"query": "標的代號"}}
 - 若涉及「即時天氣/氣溫/降雨」：
-  "action": {"action_type": "core_tool", "target": "WEATHER", "payload": {"query": "城市名稱"}}
+  "action": {"action_type": "core_tool", "target": "SEARCH", "payload": {"query": "城市名稱 天氣", "force_search": true}}
 - 若涉及「播放音樂/放歌/點歌」：
   "action": {"action_type": "core_tool", "target": "MUSIC", "payload": {"query": "歌名或關鍵字"}}
 - 若涉及「日常對話/講笑話/早安晚安問候/聊天陪伴/說辛苦了」：
@@ -709,7 +965,7 @@ async def define_spark_action_by_llm(
             system_prompt=_SPARK_ACTION_EXTRACTION_PROMPT,
             user_prompt=user_prompt,
             callback=_on_action_result,
-            model=getattr(settings, "QUICK_MODEL", "gemini-1.5-flash"),
+            model=settings.LIGHT_MODEL,
             task_id=f"spark-action-{id(intent_text)}",
         )
         await brain.enqueue_task(task)
@@ -768,7 +1024,12 @@ async def parse_spark_context_by_llm(
         if not result_future.done():
             result_future.set_result(raw)
 
-    user_prompt = f"使用者說：「{context}」\n請直接輸出抽取的 JSON："
+    now_tw = datetime.now(timezone.utc).astimezone(TAIPEI_TZ)
+    weekday_names = ["一", "二", "三", "四", "五", "六", "日"]
+    weekday_str = weekday_names[now_tw.weekday()]
+    current_time_str = f"當前台灣時間 (UTC+8)：{now_tw.strftime('%Y-%m-%d %H:%M:%S')} (星期{weekday_str})"
+
+    user_prompt = f"{current_time_str}\n使用者說：「{context}」\n請直接輸出抽取的 JSON："
 
     try:
         from handlers.bot_brain import InferenceTask
@@ -779,7 +1040,7 @@ async def parse_spark_context_by_llm(
             system_prompt=_SPARK_LLM_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             callback=_on_llm_result,
-            model=getattr(settings, "QUICK_MODEL", "gemini-1.5-flash"),
+            model=settings.LIGHT_MODEL,
             task_id=f"spark-nlp-{user_id}",
         )
         await brain.enqueue_task(task)
@@ -803,7 +1064,7 @@ async def parse_spark_context_by_llm(
         message = str(data.get("message") or "").strip()
         action = dict(data.get("action") or {})
 
-        if trigger_type not in ("price", "schedule", "rss", "weather"):
+        if trigger_type not in ("price", "schedule", "rss", "weather", "web_monitor"):
             return None
 
         if trigger_type == "price" and "ticker" in condition:
@@ -827,6 +1088,8 @@ async def parse_spark_context_by_llm(
             cooldown = 60
         elif trigger_type == "rss":
             cooldown = 300
+        elif trigger_type == "web_monitor":
+            cooldown = int(condition.get("interval_minutes", 30)) * 60
 
         return {
             "trigger_type": trigger_type,

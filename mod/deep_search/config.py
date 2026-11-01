@@ -82,7 +82,7 @@ def get_default_model() -> str:
         pass
     return os.getenv(
         "PRIMARY_MODEL",
-        f"freetoken:{os.getenv('LLM_MODEL_NAME', 'mistralai/Mixtral-8x7B-Instruct-v0.1')}",
+        "freetoken:mistralai/Mixtral-8x7B-Instruct-v0.1",
     )
 
 

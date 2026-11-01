@@ -26,7 +26,9 @@ MOD_INFO = {
     "order": 35,
     "template_file": "games.html",
     "script_file": "games.js",
-    "public_routes": ["/api/games/"],
+    # R3（報告 §5.3.2）：公開路由改為結構化白名單 {path, methods, auth} 並由伺服器強制；
+    # 遊戲端點（含 LLM 對弈成本面）全數收斂為需管理員 Session。
+    "public_routes": [],
     "games": ["rps", "blackjack", "minesweeper", "turtle_soup", "akinator", "escape_room", "ttt"],
 }
 

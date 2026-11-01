@@ -18,6 +18,7 @@ import discord
 from discord.ext import commands, tasks
 
 from mod.market_plugin.data_fetcher import DataFetcher
+from core.concurrency import heavy_io_pool
 from mod.stock_trader import config as cfg
 from mod.stock_trader.engine.algo_trader import AlgoTrader
 from mod.stock_trader.engine.strategist import TradeStrategist
@@ -220,7 +221,7 @@ class StockTraderCog(commands.Cog, name="Sherry Stock Trader"):
             tickers = self.get_watch_tickers()
             loop = asyncio.get_running_loop()
             indicators = await loop.run_in_executor(
-                None, self.fetcher.get_stock_info_raw, tickers
+                heavy_io_pool, self.fetcher.get_stock_info_raw, tickers
             )
             if indicators:
                 self._last_indicators_hash = "|".join(
@@ -258,7 +259,7 @@ class StockTraderCog(commands.Cog, name="Sherry Stock Trader"):
         # 1. 抓取行情與技術指標 (在 executor 中執行避免阻塞)
         loop = asyncio.get_running_loop()
         indicators = await loop.run_in_executor(
-            None, self.fetcher.get_stock_info_raw, tickers
+            heavy_io_pool, self.fetcher.get_stock_info_raw, tickers
         )
         if not indicators:
             logger.warning("[stock_trader] 抓取指標數據為空，中止本次評估")

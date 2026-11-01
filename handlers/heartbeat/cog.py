@@ -63,7 +63,16 @@ class HeartbeatCog(commands.Cog):
         now_tw = datetime.now(TAIWAN_TZ)
         today_str = now_tw.strftime("%Y-%m-%d")
 
-        for task in tasks_list:
+        max_tasks = max(1, int(getattr(settings, "HEARTBEAT_MAX_TASKS_PER_ROUND", 10)))
+        if len(tasks_list) > max_tasks:
+            logger.info(
+                "[HEARTBEAT] 本輪解析到 %d 個任務，超過每輪上限 %d，僅處理前 %d 項。",
+                len(tasks_list),
+                max_tasks,
+                max_tasks,
+            )
+
+        for task in tasks_list[:max_tasks]:
             try:
                 if task.task_type == "time":
                     await self._evaluate_time_task(task, now_tw, today_str)

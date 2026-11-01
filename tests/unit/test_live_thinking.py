@@ -470,3 +470,60 @@ def test_live_thinking_finish_retries_on_rate_limit_429() -> None:
                 assert placeholder_mock.edit.call_args.kwargs["content"] == "這是 429 重試後成功輸出的回覆！"
 
     asyncio.run(_run())
+
+
+def test_live_thinking_session_fine_grained_steps_and_speed() -> None:
+    """測試細緻化前置步驟 (intent/memory/vision) 與串流生成速率 (字/秒) 指標。"""
+    placeholder_mock = MagicMock(spec=discord.Message)
+    placeholder_mock.id = 556677
+    placeholder_mock.edit = AsyncMock()
+
+    target_msg = MagicMock(spec=discord.Message)
+    target_msg.reply = AsyncMock(return_value=placeholder_mock)
+    target_msg.channel = MagicMock(spec=discord.TextChannel)
+
+    async def _run() -> None:
+        with patch.object(settings, "LIVE_THINKING_EDIT", True):
+            with patch.object(settings, "DEBUG_DETAIL", True):
+                session = LiveThinkingSession(target_msg)
+                await session.start("💭 正在思考中")
+
+                # 1. 批量推送細緻前置步驟 (方案 A)
+                session.push_steps([
+                    ("intent", "感知話題氛圍與脈絡 (長度: 15 字)"),
+                    ("memory", "檢索群友 [Yuuto] 專屬互動記憶 (3 筆相關事實與親密度)"),
+                    ("vision", "載入多模態圖像線索與名偵探特徵感知"),
+                ])
+                assert len(session.steps) == 3
+
+                # 2. 模擬首字生成到達
+                session._pass_prefill_ms = 450
+
+                # 3. 模擬生成中並計算速率 (方案 B)
+                session._generation_start_time = time.monotonic() - 2.0
+                session._generated_chars = 72
+
+                rendered = session._render_in_progress_block()
+                assert "1️⃣ 📋 **對話語境與意圖 [Context & Intent]**：感知話題氛圍與脈絡" in rendered
+                assert "2️⃣ 🧠 **長期記憶檢索 [Memory]**：檢索群友 [Yuuto] 專屬互動記憶" in rendered
+                assert "3️⃣ 👁️ **多模態視覺感知 [Vision]**：載入多模態圖像線索與名偵探特徵感知" in rendered
+                assert "4️⃣ ⚡ **PREFILL [首字生成]**：`450 ms`" in rendered
+                assert "正在生成回覆中 (已輸出 72 字 • " in rendered
+                assert "字/秒" in rendered
+
+                # 4. 呼叫 finish，驗證最終區塊包含生成字數與速率
+                final_text = "這是一段總共二十幾個字的測試回覆內容！"
+                sent = await session.finish(
+                    final_text,
+                    intent_name="INTEGRATED_CHAT",
+                    model="Qwen2.5-7B",
+                    latency_ms=2500,
+                )
+                assert len(sent) == 1
+                final_content = placeholder_mock.edit.call_args.kwargs["content"]
+                assert "✨ **生成回覆 [Generation]**：" in final_content
+                assert "字 • " in final_content
+                assert "字/秒" in final_content
+                assert final_text in final_content
+
+    asyncio.run(_run())

@@ -124,6 +124,11 @@ def notify_failure_sync(
     否則需超過 120 秒失敗門檻。
     """
     err_lower = (error_msg or "").lower()
+
+    # 內容安全過濾是確定性結果：主動放棄是預期行為，不是連線或推論故障，
+    # 不應升級為嚴重異常通知（否則每次過濾都會產生噪音告警）。
+    is_content_filtered = "content_filter" in err_lower or "content_filtered" in err_lower
+
     has_fatal_keyword = any(
         kw in err_lower
         for kw in (
@@ -132,7 +137,9 @@ def notify_failure_sync(
             "clientconnectorerror", "inferencegiveup", "fatal"
         )
     )
-    is_critical_failure = is_fatal or has_fatal_keyword
+    is_critical_failure = (is_fatal or has_fatal_keyword) and not is_content_filtered
+    if is_content_filtered:
+        return
     if not is_critical_failure and latency_ms < int(DEFAULT_TIMEOUT_THRESHOLD_SEC * 1000):
         return
 

@@ -5,7 +5,9 @@ tests/unit/test_core_tools_matrix.py
 """
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
+import discord
 import pytest
 
 from handlers.social.contracts import ToolCategory, ToolExecutionStatus, ToolResult
@@ -46,10 +48,31 @@ async def test_music_tool_fast_path_contracts():
     assert tool.response_mode == ToolCategory.DIRECT_UI
 
     brain_mock = MagicMock()
-    brain_mock.enqueue_task = AsyncMock()
+    async def fake_music_enqueue(task):
+        prompt = task.user_prompt
+        if "1:50" in prompt:
+            res = json.dumps({"action": "PLAY", "keyword": "https://www.youtube.com/watch?v=l5dkIhUuBYY", "time": "1:50"})
+        elif "切歌" in prompt or "下一首" in prompt:
+            res = json.dumps({"action": "SKIP"})
+        elif "20:00" in prompt:
+            res = json.dumps({"action": "SEEK", "time": "20:00"})
+        elif "2 分鐘" in prompt or "2分鐘" in prompt:
+            res = json.dumps({"action": "SEEK", "time": "+2分鐘"})
+        elif "斷點" in prompt or "繼續" in prompt:
+            res = json.dumps({"action": "RESUME"})
+        elif "清單" in prompt:
+            res = json.dumps({"action": "LIST"})
+        else:
+            res = json.dumps({"action": "PLAY", "keyword": prompt, "time": ""})
+        await task.callback(res)
+
+    brain_mock.enqueue_task = AsyncMock(side_effect=fake_music_enqueue)
     handler_mock = MagicMock()
     handler_mock.headless_play = AsyncMock()
     handler_mock.send_queue_embed = AsyncMock()
+    from handlers.music.cog import MusicHandler
+    handler_mock.parse_time_to_seconds = MusicHandler.parse_time_to_seconds
+    handler_mock.format_duration = lambda s: f"{int(s)//60:02d}:{int(s)%60:02d}"
     handler_mock.queues = {12345: [{"title": "Song 1"}]}
     handler_mock.current_song = {12345: {"title": "Song 1"}}
 
@@ -73,11 +96,79 @@ async def test_music_tool_fast_path_contracts():
         assert res.status == ToolExecutionStatus.SUCCESS
         assert "神秘的電波" in res.summary_text or "載入" in res.summary_text
 
+        # 1b. YouTube 網址 + 文字時間軸指定（如 1:50 的部分）
+        handler_mock.headless_play.reset_mock()
+        res_url_time = await tool.execute(
+            bot,
+            msg,
+            "幫我播https://www.youtube.com/watch?v=l5dkIhUuBYY 1:50的部分",
+            "",
+            "",
+            silent=True,
+        )
+        assert isinstance(res_url_time, ToolResult)
+        assert res_url_time.status == ToolExecutionStatus.SUCCESS
+        assert "01:50" in res_url_time.summary_text
+        handler_mock.headless_play.assert_called_with(
+            msg.channel,
+            msg.author.voice.channel,
+            "https://www.youtube.com/watch?v=l5dkIhUuBYY",
+            start_offset=110,
+        )
+
+        # 2. 切歌與下一首歌快路徑
+        mock_vc = MagicMock(spec=discord.VoiceClient)
+        mock_vc.is_playing.return_value = True
+        mock_vc.is_paused.return_value = False
+        msg.guild.voice_client = mock_vc
+
+        res_skip1 = await tool.execute(bot, msg, "切歌", "", "", silent=True)
+        assert isinstance(res_skip1, ToolResult)
+        assert res_skip1.status == ToolExecutionStatus.SUCCESS
+        assert "喀擦" in res_skip1.summary_text or "下一首" in res_skip1.summary_text
+        mock_vc.stop.assert_called_once()
+
+        mock_vc.stop.reset_mock()
+        res_skip2 = await tool.execute(bot, msg, "下一首歌", "", "", silent=True)
+        assert isinstance(res_skip2, ToolResult)
+        assert res_skip2.status == ToolExecutionStatus.SUCCESS
+        assert "喀擦" in res_skip2.summary_text or "下一首" in res_skip2.summary_text
+        mock_vc.stop.assert_called_once()
+
         # 2. 查看播放清單快路徑
         res_list = await tool.execute(bot, msg, "列出目前的播放清單", "", "", silent=True)
         assert isinstance(res_list, ToolResult)
         assert res_list.is_direct_rendered is True
         assert "播放清單 Embed" in res_list.summary_text
+
+        # 3. 快轉 / 時間軸跳轉快路徑
+        from handlers.music.cog import MusicHandler
+        handler_mock.seek_to = AsyncMock(return_value=True)
+        handler_mock.get_elapsed_time = MagicMock(return_value=100)
+        handler_mock.parse_time_to_seconds = MusicHandler.parse_time_to_seconds
+        handler_mock.format_duration = lambda s: f"{int(s)//60:02d}:{int(s)%60:02d}"
+        res_seek = await tool.execute(bot, msg, "跳到 20:00", "", "", silent=True)
+        assert isinstance(res_seek, ToolResult)
+        assert res_seek.status == ToolExecutionStatus.SUCCESS
+        assert "20:00" in res_seek.summary_text
+        handler_mock.seek_to.assert_called_with(msg.guild, msg.channel, 1200)
+
+        # 3b. 支援帶空格之中文時間單位快轉（例如：快轉 2 分鐘）
+        handler_mock.seek_to.reset_mock()
+        res_seek_chinese = await tool.execute(bot, msg, "快轉 2 分鐘", "", "", silent=True)
+        assert isinstance(res_seek_chinese, ToolResult)
+        assert res_seek_chinese.status == ToolExecutionStatus.SUCCESS
+        handler_mock.seek_to.assert_called_with(msg.guild, msg.channel, 220)
+
+        # 4. 斷點續播快路徑
+        handler_mock.resume_from_checkpoint = AsyncMock(return_value={
+            "song": {"title": "Resumed Track"},
+            "offset_seconds": 1200,
+        })
+        res_resume = await tool.execute(bot, msg, "斷點續播", "", "", silent=True)
+        assert isinstance(res_resume, ToolResult)
+        assert res_resume.status == ToolExecutionStatus.SUCCESS
+        assert "Resumed Track" in res_resume.summary_text
 
 
 @pytest.mark.anyio
@@ -171,6 +262,15 @@ def test_stock_stopwords_filter_macro_terms():
     assert _quick_extract_tickers("為什麼升息 股票 不下跌 原因 升息對 ETF 與 FED 政策 的 影響") == []
     # 驗證真實美股與台股正常提取
     assert set(_quick_extract_tickers("請幫我分析 VOO 和 2330 還有 QQQ")) == {"VOO", "2330.TW", "QQQ"}
+
+
+def test_stock_dates_not_extracted_as_taiwan_ticker():
+    """Verify timestamps and dates (e.g. 2026-10-21, 22:52) are not misidentified as 2026.TW."""
+    from handlers.social.tools.stock_tool import _quick_extract_tickers
+
+    assert _quick_extract_tickers("2026-10-21 22:52:00 \u4eca\u5929\u53f0\u80a1\u5927\u76e4\u600e\u9ebc\u6a23\uff1f") == []
+    assert _quick_extract_tickers("2026\u5e74 2330 \u8d70\u52e2\u5982\u4f55") == ["2330.TW"]
+    assert _quick_extract_tickers("\u67e5\u4e00\u4e0b VIX \u9084\u6709 2330") == ["VIX", "2330.TW"]
 
 
 def test_stock_technical_indicators_math():
@@ -286,7 +386,25 @@ async def test_url_summary_tool_and_youtube_redirect():
     tool = URLSummaryTool()
 
     brain_mock = MagicMock()
-    brain_mock.enqueue_task = AsyncMock()
+    async def fake_music_enqueue(task):
+        prompt = task.user_prompt
+        if "1:50" in prompt:
+            res = json.dumps({"action": "PLAY", "keyword": "https://www.youtube.com/watch?v=l5dkIhUuBYY", "time": "1:50"})
+        elif "切歌" in prompt or "下一首" in prompt:
+            res = json.dumps({"action": "SKIP"})
+        elif "20:00" in prompt:
+            res = json.dumps({"action": "SEEK", "time": "20:00"})
+        elif "2 分鐘" in prompt or "2分鐘" in prompt:
+            res = json.dumps({"action": "SEEK", "time": "+2分鐘"})
+        elif "斷點" in prompt or "繼續" in prompt:
+            res = json.dumps({"action": "RESUME"})
+        elif "清單" in prompt:
+            res = json.dumps({"action": "LIST"})
+        else:
+            res = json.dumps({"action": "PLAY", "keyword": prompt, "time": ""})
+        await task.callback(res)
+
+    brain_mock.enqueue_task = AsyncMock(side_effect=fake_music_enqueue)
     handler_mock = MagicMock()
     handler_mock.headless_play = AsyncMock()
     bot = MagicMock()

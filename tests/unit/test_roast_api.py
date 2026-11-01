@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -42,6 +43,28 @@ def test_web_ui_index_template_rendering() -> None:
             assert 'class="topbar"' in html
             assert 'id="roast-modal-backdrop"' in html
             assert 'id="login-modal-backdrop"' in html
+
+    asyncio.run(_run())
+
+
+def test_web_ui_live2d_resource_loading_toggle() -> None:
+    """Test the main Web UI omits every Live 2D resource when disabled."""
+    async def _run() -> None:
+        async with app.test_client() as test_client:
+            with patch("web_ui.server.settings.WEB_UI_LIVE2D_ENABLED", True):
+                enabled_response = await test_client.get("/")
+                assert enabled_response.status_code == 200
+                enabled_html = await enabled_response.get_data(as_text=True)
+                assert "/static/sherry_live2d.css" in enabled_html
+                assert 'id="sherry-live2d-container"' in enabled_html
+                assert "/static/sherry_live2d.js" in enabled_html
+
+            with patch("web_ui.server.settings.WEB_UI_LIVE2D_ENABLED", False):
+                disabled_response = await test_client.get("/")
+                assert disabled_response.status_code == 200
+                disabled_html = await disabled_response.get_data(as_text=True)
+                assert "sherry_live2d" not in disabled_html
+                assert 'id="sherry-live2d-container"' not in disabled_html
 
     asyncio.run(_run())
 

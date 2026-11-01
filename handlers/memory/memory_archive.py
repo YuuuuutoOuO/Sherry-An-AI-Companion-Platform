@@ -261,11 +261,6 @@ def archive_finished_week(date_str: str) -> Path | None:
     return archive_week(target)
 
 
-def list_monthly_archives() -> list[Path]:
-    """列出所有月歸檔（供日後注入/瀏覽使用）。"""
-    return sorted(monthly_dir().glob("*.md"))
-
-
 def main() -> None:
     """手動觸發歸檔用：python -m handlers.memory.memory_archive 2026-08-30"""
     import sys

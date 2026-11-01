@@ -501,12 +501,11 @@ class TradeStrategist:
                 except Exception as e:
                     logger.warning("[stock_trader] BotBrain 佇列呼叫失敗，切換直連備援模式: %s", e)
 
-        # 2. 直連推論：依次嘗試 cfg.get_default_model() -> PRIMARY_MODEL -> QUICK_MODEL -> NOMORAL_MODEL
+        # 2. 直連推論：依次嘗試 cfg.get_default_model() -> PRIMARY_MODEL -> LIGHT_MODEL
         models_to_try = [
             cfg.get_default_model(),
             getattr(settings, "PRIMARY_MODEL", None),
-            getattr(settings, "QUICK_MODEL", None),
-            getattr(settings, "NOMORAL_MODEL", None),
+            getattr(settings, "LIGHT_MODEL", None),
         ]
         candidate_models = [str(m).strip() for m in dict.fromkeys(models_to_try) if m and str(m).strip()]
 

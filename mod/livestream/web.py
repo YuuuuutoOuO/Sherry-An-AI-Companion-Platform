@@ -8,6 +8,7 @@ and HTTP Byte-Range streaming support for local video files.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import os
@@ -15,16 +16,19 @@ from pathlib import Path
 import secrets
 import time
 from typing import Any, AsyncGenerator, Optional
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 import webbrowser
 
-from quart import Blueprint, Quart, Response, jsonify, render_template, request, send_file
+from quart import Blueprint, Quart, Response, g, jsonify, render_template, request, send_file, send_from_directory
 import uvicorn
 
+from core.error_report import safe_error_payload
 from mod.livestream import config
 from mod.livestream.clients.broadcaster import LivestreamBroadcaster
 from mod.livestream.domain import (
+    ChatMessage,
     PlayAction,
+    PlayMode,
     StreamEvent,
     StreamPlaybackState,
 )
@@ -32,13 +36,15 @@ from mod.livestream.service import LivestreamService
 
 logger = logging.getLogger(__name__)
 
-# Template folder resolution
+# Template & Static folder resolution
 _TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
+_STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "web_ui" / "static"
 
 # Dedicated Standalone Quart App on PORT 8764
 livestream_app: Quart = Quart(
     "livestream_display",
     template_folder=str(_TEMPLATE_DIR),
+    static_folder=str(_STATIC_DIR),
 )
 _configured_livestream_key: str = os.getenv("LIVESTREAM_SECRET_KEY", "").strip()
 if _configured_livestream_key:
@@ -49,11 +55,81 @@ else:
 
 livestream_app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
+# ---------------------------------------------------------------------------
+# R2（報告 §5.3.9 / §5.4.2）：8764 專用服務簡易存取權杖防護
+# ---------------------------------------------------------------------------
+_ACCESS_COOKIE_NAME = "livestream_access"
+_ACCESS_COOKIE_MAX_AGE = 86400  # 24 小時
+
+
+def _sign_access_cookie(timestamp: str) -> str:
+    """以 App secret_key 對時間戳簽章，避免 cookie 被偽造。"""
+    secret = livestream_app.secret_key
+    key = secret if isinstance(secret, bytes) else str(secret).encode("utf-8")
+    return hmac.new(key, timestamp.encode("utf-8"), "sha256").hexdigest()
+
+
+def _is_valid_access_cookie(value: str) -> bool:
+    """驗證 `ts.sig` 格式 cookie 的簽章與時效（24 小時）。"""
+    ts, _, sig = (value or "").partition(".")
+    if not ts or not sig or not ts.isdigit():
+        return False
+    if time.time() - int(ts) > _ACCESS_COOKIE_MAX_AGE:
+        return False
+    return hmac.compare_digest(sig, _sign_access_cookie(ts))
+
+
+@livestream_app.before_request
+async def _guard_livestream_access() -> Any:
+    """未設定 ACCESS_TOKEN 時開放（依賴 loopback 邊界）；設定後強制驗證權杖或已簽章 cookie。"""
+    g.livestream_issue_access_cookie = False
+    expected = (config.ACCESS_TOKEN or "").strip()
+    if not expected:
+        return None
+    path = request.path or ""
+    if path.startswith("/static/"):
+        return None  # 靜態資源（Live2D 素材等）豁免，不含敏感資料
+
+    expected_bytes = expected.encode("utf-8", "ignore")
+    supplied_header = str(request.headers.get("X-Livestream-Token", ""))
+    supplied_query = str(request.args.get("token", ""))
+    if supplied_header and hmac.compare_digest(supplied_header.encode("utf-8", "ignore"), expected_bytes):
+        return None
+    if supplied_query and hmac.compare_digest(supplied_query.encode("utf-8", "ignore"), expected_bytes):
+        # 由查詢參數（頁面載入路徑）登入成功 → 核發 cookie，後續 SSE/API 請求免帶 token
+        g.livestream_issue_access_cookie = True
+        return None
+    if _is_valid_access_cookie(str(request.cookies.get(_ACCESS_COOKIE_NAME, ""))):
+        return None
+    return jsonify({
+        "status": "error",
+        "code": "LIVESTREAM_UNAUTHORIZED",
+        "message": "需要有效的 Livestream 存取權杖（X-Livestream-Token 標頭或 ?token= 查詢參數）。",
+    }), 401
+
+
+@livestream_app.after_request
+async def _issue_livestream_access_cookie(response: Response) -> Response:
+    """查詢參數驗證成功時核發 HttpOnly 簽章 cookie（SSE／後續 API 免重帶 token）。"""
+    if getattr(g, "livestream_issue_access_cookie", False):
+        ts = str(int(time.time()))
+        response.set_cookie(
+            _ACCESS_COOKIE_NAME,
+            f"{ts}.{_sign_access_cookie(ts)}",
+            max_age=_ACCESS_COOKIE_MAX_AGE,
+            httponly=True,
+            secure=bool(config.HTTPS),
+            samesite="Strict",
+            path="/",
+        )
+    return response
+
 # Blueprint (for optional backward compatibility with main web_ui)
 livestream_bp: Blueprint = Blueprint(
     "livestream",
     __name__,
     template_folder=str(_TEMPLATE_DIR),
+    static_folder=str(_STATIC_DIR),
 )
 
 _service: Optional[LivestreamService] = None
@@ -75,12 +151,30 @@ def get_service() -> LivestreamService:
 # ---------------------------------------------------------------------------
 
 
+def _serialize_chat_message(msg: Optional[ChatMessage]) -> Optional[dict[str, object]]:
+    """Serializes ChatMessage domain object to JSON-compatible dict."""
+    if not msg:
+        return None
+    return {
+        "id": msg.id,
+        "author_name": msg.author_name,
+        "author_avatar": msg.author_avatar,
+        "content": msg.content,
+        "timestamp": msg.timestamp,
+        "is_owner": msg.is_owner,
+        "badge": msg.badge,
+        "channel_id": msg.channel_id,
+    }
+
+
 def _serialize_media(media: Optional[object]) -> Optional[dict[str, object]]:
     """Serializes MediaItem domain object to JSON-compatible dict."""
     if not media:
         return None
     action_val: Any = getattr(media, "action", "")
     action_str = action_val.value if hasattr(action_val, "value") else str(action_val)
+    mode_val: Any = getattr(media, "play_mode", PlayMode.AUTOPLAY)
+    mode_str = mode_val.value if hasattr(mode_val, "value") else str(mode_val)
     return {
         "action": action_str,
         "video_id": getattr(media, "video_id", ""),
@@ -94,6 +188,9 @@ def _serialize_media(media: Optional[object]) -> Optional[dict[str, object]]:
         "episode_index": getattr(media, "episode_index", 0),
         "total_episodes": getattr(media, "total_episodes", 0),
         "stream_url": getattr(media, "stream_url", ""),
+        "play_mode": mode_str,
+        "playlist_id": getattr(media, "playlist_id", ""),
+        "page_index": getattr(media, "page_index", 1),
     }
 
 
@@ -111,12 +208,16 @@ def _serialize_state(state: StreamPlaybackState) -> dict[str, object]:
 
 def _serialize_event(event: StreamEvent) -> dict[str, object]:
     """Serializes StreamEvent for SSE dispatch."""
-    return {
+    data: dict[str, object] = {
         "event_type": event.event_type,
         "state": _serialize_state(event.state),
         "timestamp": event.timestamp,
         "message": event.message,
     }
+    if event.chat_message:
+        data["chat_message"] = _serialize_chat_message(event.chat_message)
+    return data
+
 
 
 async def _handle_livestream_screen() -> str:
@@ -215,9 +316,17 @@ async def _handle_control() -> tuple[Response, int]:
         elif action_type == "play":
             target = data.get("context") or data.get("video_name") or ""
             act = PlayAction(data.get("source", "youtube"))
+            raw_mode = data.get("play_mode") or data.get("mode") or "autoplay"
+            try:
+                play_mode = PlayMode(raw_mode)
+            except ValueError:
+                play_mode = PlayMode.AUTOPLAY
+            episode = int(data.get("episode", 1))
             new_state = await service.play_video(
                 action=act,
                 context=target,
+                play_mode=play_mode,
+                episode=episode,
                 requester_name=data.get("requester_name", "WebUser"),
             )
         else:
@@ -227,7 +336,49 @@ async def _handle_control() -> tuple[Response, int]:
 
     except Exception as exc:
         logger.warning("Livestream control action '%s' failed: %s", action_type, exc)
-        return jsonify({"status": "error", "message": str(exc)}), 400
+        return jsonify(safe_error_payload(
+            "mod.livestream.web.control",
+            exc,
+            message="控制指令執行失敗，請稍後再試。",
+            level=logging.WARNING,
+        )), 400
+
+
+async def _handle_get_chat() -> tuple[Response, int]:
+    """Returns the recent chat history as JSON."""
+    service = get_service()
+    messages = service.get_chat_history()
+    return jsonify({
+        "status": "success",
+        "data": [_serialize_chat_message(m) for m in messages],
+        "channel_id": str(config.DISCORD_CHAT_CHANNEL_ID),
+    }), 200
+
+
+async def _handle_post_chat() -> tuple[Response, int]:
+    """Receives and broadcasts a new chat message to all connected clients."""
+    data = await request.get_json() or {}
+    author_name = str(data.get("author_name", "網頁觀眾")).strip() or "網頁觀眾"
+    content = str(data.get("content", "")).strip()
+
+    if not content:
+        return jsonify({"status": "error", "message": "留言內容不可為空"}), 400
+
+    service = get_service()
+    chat_msg = await service.post_chat_message(
+        author_name=author_name,
+        author_avatar=str(data.get("author_avatar", "")),
+        content=content,
+        is_owner=bool(data.get("is_owner", False)),
+        badge=str(data.get("badge", "💬 觀眾")),
+        channel_id=str(data.get("channel_id", config.DISCORD_CHAT_CHANNEL_ID)),
+    )
+    return jsonify({"status": "success", "data": _serialize_chat_message(chat_msg)}), 200
+
+
+async def _handle_serve_static(filename: str) -> Response:
+    """Serves static assets (Live2D JS, textures, CSS) on the dedicated Livestream Port 8764."""
+    return await send_from_directory(str(_STATIC_DIR), filename)
 
 
 # Register routes to Standalone Quart App
@@ -242,6 +393,11 @@ livestream_app.add_url_rule("/api/video/stream", view_func=_handle_stream_video,
 livestream_app.add_url_rule("/api/livestream/next", view_func=_handle_next_episode, methods=["POST"])
 livestream_app.add_url_rule("/api/control", view_func=_handle_control, methods=["POST"])
 livestream_app.add_url_rule("/api/livestream/control", view_func=_handle_control, methods=["POST"])
+livestream_app.add_url_rule("/api/chat", view_func=_handle_get_chat, methods=["GET"])
+livestream_app.add_url_rule("/api/chat", view_func=_handle_post_chat, methods=["POST"])
+livestream_app.add_url_rule("/api/livestream/chat", view_func=_handle_get_chat, methods=["GET"])
+livestream_app.add_url_rule("/api/livestream/chat", view_func=_handle_post_chat, methods=["POST"])
+livestream_app.add_url_rule("/static/<path:filename>", view_func=_handle_serve_static, methods=["GET"])
 
 # Register routes to Blueprint
 livestream_bp.add_url_rule("/livestream", view_func=_handle_livestream_screen, methods=["GET"])
@@ -251,6 +407,9 @@ livestream_bp.add_url_rule("/api/livestream/events", view_func=_handle_events_st
 livestream_bp.add_url_rule("/api/video/stream", view_func=_handle_stream_video, methods=["GET"])
 livestream_bp.add_url_rule("/api/livestream/next", view_func=_handle_next_episode, methods=["POST"])
 livestream_bp.add_url_rule("/api/livestream/control", view_func=_handle_control, methods=["POST"])
+livestream_bp.add_url_rule("/api/livestream/chat", view_func=_handle_get_chat, methods=["GET"])
+livestream_bp.add_url_rule("/api/livestream/chat", view_func=_handle_post_chat, methods=["POST"])
+
 
 
 # ---------------------------------------------------------------------------
@@ -462,6 +621,9 @@ async def start_livestream_server_async() -> None:
                 await asyncio.sleep(1.5)
                 display_host = "127.0.0.1" if host == "0.0.0.0" else host
                 url = f"{proto}://{display_host}:{port}/"
+                access_token = (config.ACCESS_TOKEN or "").strip()
+                if access_token:
+                    url += f"?token={quote(access_token, safe='')}"
                 logger.info("Auto-opening dedicated Livestream Screen browser: %s", url)
                 try:
                     _launch_streaming_browser(url)

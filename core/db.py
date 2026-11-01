@@ -9,16 +9,13 @@ core/db.py
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 from pathlib import Path
 import sqlite3
-from typing import Any, Callable, Generator, TypeVar
+from typing import Generator
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
 
 
 _CONFIGURED_DBS: set[str] = set()
@@ -101,20 +98,6 @@ def db_transaction(
         conn.close()
 
 
-async def async_db_run(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
-    """在背景執行緒中執行同步 SQLite 函式，避免阻塞非同步事件迴圈。
-
-    Args:
-        func: 欲執行的同步函式。
-        *args: 位置參數。
-        **kwargs: 關鍵字參數。
-
-    Returns:
-        函式執行回傳結果。
-    """
-    return await asyncio.to_thread(func, *args, **kwargs)
-
-
 def checkpoint_all_dbs() -> None:
     """對全數已註冊之 WAL SQLite 資料庫執行 TRUNCATE checkpoint。
 
@@ -128,4 +111,120 @@ def checkpoint_all_dbs() -> None:
             logger.info("[CoreDB] 資料庫 WAL checkpoint 完成: %s", canonical_path)
         except Exception as exc:
             logger.warning("[CoreDB] 資料庫 WAL checkpoint 失敗 (%s): %s", canonical_path, exc)
+
+
+def backup_database(src_db_path: Path | str, backup_db_path: Path | str) -> bool:
+    """使用 SQLite Online Backup API 安全備份資料庫（支援 WAL 模式高並發讀寫）。
+
+    Args:
+        src_db_path: 來源 SQLite 資料庫檔案路徑。
+        backup_db_path: 目的備份檔案路徑。
+
+    Returns:
+        bool: 備份是否成功。
+    """
+    src_p = Path(src_db_path)
+    dst_p = Path(backup_db_path)
+    if not src_p.exists():
+        logger.error("[CoreDB] 來源資料庫不存在: %s", src_p)
+        return False
+    dst_p.parent.mkdir(parents=True, exist_ok=True)
+    src_conn = None
+    dst_conn = None
+    try:
+        src_conn = sqlite3.connect(str(src_p.resolve()), timeout=10.0)
+        dst_conn = sqlite3.connect(str(dst_p.resolve()), timeout=10.0)
+        src_conn.backup(dst_conn)
+        logger.info("[CoreDB] 資料庫備份完成: %s -> %s", src_p, dst_p)
+        return True
+    except Exception as exc:
+        logger.error("[CoreDB] 資料庫備份失敗 (%s -> %s): %s", src_p, dst_p, exc)
+        return False
+    finally:
+        if dst_conn is not None:
+            dst_conn.close()
+        if src_conn is not None:
+            src_conn.close()
+
+
+def verify_database_integrity(db_path: Path | str) -> tuple[bool, str]:
+    """檢驗 SQLite 資料庫檔案完整性 (PRAGMA integrity_check)。
+
+    Args:
+        db_path: 欲檢查的 SQLite 資料庫檔案路徑。
+
+    Returns:
+        tuple[bool, str]: (是否完整無損, 檢查結果文字)。
+    """
+    p = Path(db_path)
+    if not p.exists():
+        return False, f"檔案不存在: {p}"
+    conn = None
+    try:
+        conn = sqlite3.connect(str(p.resolve()), timeout=5.0)
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA integrity_check;")
+        rows = cursor.fetchall()
+        if rows and rows[0][0] == "ok":
+            return True, "ok"
+        errs = "; ".join(str(r[0]) for r in rows)
+        return False, f"資料庫損毀: {errs}"
+    except Exception as exc:
+        return False, f"完整性檢查異常: {exc}"
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def restore_database(backup_db_path: Path | str, dest_db_path: Path | str) -> bool:
+    """從備份檔案安全還原 SQLite 資料庫，並在還原前後執行完整性查驗。
+
+    Args:
+        backup_db_path: 來源備份檔案路徑。
+        dest_db_path: 目標資料庫檔案路徑。
+
+    Returns:
+        bool: 還原是否成功且完整性無損。
+    """
+    import shutil
+
+    src_p = Path(backup_db_path)
+    dst_p = Path(dest_db_path)
+    if not src_p.exists():
+        logger.error("[CoreDB] 備份檔案不存在: %s", src_p)
+        return False
+    ok, msg = verify_database_integrity(src_p)
+    if not ok:
+        logger.error("[CoreDB] 備份檔案完整性異常，無法還原: %s", msg)
+        return False
+
+    dst_p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        # 清除目標可能殘留的已損毀 WAL/SHM 臨時檔案
+        wal_file = dst_p.with_name(dst_p.name + "-wal")
+        shm_file = dst_p.with_name(dst_p.name + "-shm")
+        if wal_file.exists():
+            try:
+                wal_file.unlink()
+            except Exception:
+                pass
+        if shm_file.exists():
+            try:
+                shm_file.unlink()
+            except Exception:
+                pass
+
+        shutil.copyfile(src_p, dst_p)
+
+        valid, check_msg = verify_database_integrity(dst_p)
+        if not valid:
+            logger.error("[CoreDB] 還原後資料庫完整性異常: %s", check_msg)
+            return False
+
+        logger.info("[CoreDB] 資料庫還原成功並通過完整性校驗: %s -> %s", src_p, dst_p)
+        return True
+    except Exception as exc:
+        logger.error("[CoreDB] 資料庫還原失敗: %s", exc)
+        return False
+
 

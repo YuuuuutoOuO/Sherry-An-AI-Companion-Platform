@@ -115,16 +115,12 @@ class RoastManager:
                                 en = 1 if r.get("enabled", True) else 0
 
                                 if kw and rg:
+                                    # R7：回灌僅補缺失、不覆寫刪除標記（報告 §5.2.3）
+                                    # —— 已軟刪的規則不得因 JSON 回灌而復活或被改寫。
                                     cur.execute("""
                                         INSERT INTO roast_rules (id, keyword, reply_guide, probability, match_mode, enabled, is_deleted, created_at, updated_at)
                                         VALUES (?, ?, ?, ?, ?, ?, 0, datetime('now', 'localtime'), datetime('now', 'localtime'))
-                                        ON CONFLICT(id) DO UPDATE SET
-                                            keyword = excluded.keyword,
-                                            reply_guide = excluded.reply_guide,
-                                            probability = excluded.probability,
-                                            match_mode = excluded.match_mode,
-                                            enabled = excluded.enabled,
-                                            is_deleted = 0;
+                                        ON CONFLICT(id) DO NOTHING;
                                     """, (r_id, kw, rg, prob, mode, en))
 
                             cur.execute("""

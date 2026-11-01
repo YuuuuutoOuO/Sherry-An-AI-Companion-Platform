@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Awaitable
 
 import discord
 from discord.ext import commands
@@ -35,12 +35,89 @@ class SocialChat(commands.Cog):
         self._message_counters: dict[int, int] = {}
         self._interject_states: dict[int, InterjectState] = {}
         self._last_vibe_time: dict[int, float] = {}
+        # 背景任務強引用：避免 create_task 回傳的 Task 被 GC 回收導致插話評估中斷。
+        self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._recovery_provider: Any = None
+
+    async def cog_load(self) -> None:
+        """載入 Cog 時註冊 AI 任務狀態恢復提供者與統一互動入口。"""
+        try:
+            from handlers.social.recovery_provider import AITaskRecoveryProvider
+            from core.recovery.manager import get_recovery_manager
+
+            self._recovery_provider = AITaskRecoveryProvider(self.bot)
+            get_recovery_manager().register_provider(self._recovery_provider)
+            logger.info("SocialChat: 已註冊 AITaskRecoveryProvider")
+        except Exception as exc:
+            logger.warning("註冊 AITaskRecoveryProvider 失敗: %s", exc)
+
+        try:
+            from handlers.care.repository import get_care_repository
+            from handlers.interaction import TurnGateway, set_turn_gateway
+
+            set_turn_gateway(TurnGateway(self.bot, repository=get_care_repository()))
+            logger.info("SocialChat: TurnGateway 已初始化")
+        except Exception as exc:
+            logger.warning("TurnGateway 初始化失敗: %s", exc)
+
+    @staticmethod
+    def _log_background_result(task: asyncio.Task[Any]) -> None:
+        """背景任務失敗時留痕，避免 exception 永遠無人取用。"""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("SocialChat: 背景任務 '%s' 失敗: %s", task.get_name(), exc, exc_info=exc)
+
+    def _spawn_background(self, coro: Awaitable[Any], *, name: str) -> asyncio.Task[Any]:
+        """建立背景任務並保留強引用，完成後自動移除。"""
+        task = asyncio.create_task(coro, name=name)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        task.add_done_callback(self._log_background_result)
+        return task
+
+    async def cog_unload(self) -> None:
+        """卸載模組時取消仍在執行的背景任務並註銷狀態恢復提供者。"""
+        try:
+            from core.recovery.manager import get_recovery_manager
+
+            if self._recovery_provider:
+                get_recovery_manager().unregister_provider(self._recovery_provider.recovery_identifier)
+        except Exception as exc:
+            logger.warning("註銷 AITaskRecoveryProvider 失敗: %s", exc)
+
+        try:
+            from handlers.interaction import set_turn_gateway
+
+            set_turn_gateway(None)
+        except Exception:
+            pass
+
+        tasks = list(self._background_tasks)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def _get_interject_state(self, channel_id: int) -> InterjectState:
-        """取得或建立指定頻道的插話評估狀態。"""
-        if channel_id not in self._interject_states:
-            self._interject_states[channel_id] = InterjectState()
-        return self._interject_states[channel_id]
+        """取得或建立指定頻道的插話評估狀態，並每 60 秒同步一次 care 冷卻設定。"""
+        state = self._interject_states.get(channel_id)
+        if state is None:
+            state = InterjectState()
+            self._interject_states[channel_id] = state
+        now = time.monotonic()
+        if now - state.config_synced_at >= 60.0:
+            try:
+                from handlers.care.repository import get_care_repository
+
+                config = get_care_repository().get_surfer_config()
+                state.sync_config(config.interject_cooldown_seconds)
+            except Exception as exc:  # 設定讀取失敗不影響插話流程
+                logger.debug("SocialChat: 同步插話冷卻設定失敗: %s", exc)
+                state.sync_config(None)
+        return state
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -78,17 +155,38 @@ class SocialChat(commands.Cog):
                 except Exception as e:
                     logger.error("建立熱烈討論串失敗: %s", e)
 
+        # --- 單一入口：Mention / sandbox ambient 由 TurnGateway 接管 ---
+        try:
+            from handlers.interaction import get_turn_gateway
+
+            gateway = get_turn_gateway()
+            if gateway is not None and await gateway.handle_message(message):
+                return
+        except Exception as exc:
+            logger.debug("TurnGateway 略過訊息: %s", exc)
+
         # --- 主動插話評估 ---
         state = self._get_interject_state(channel_id)
         state.eval_counter += 1
         if state.eval_counter >= settings.INTERJECT_EVAL_THRESHOLD:
             state.eval_counter = 0
             if not state.is_evaluating:
-                state.is_evaluating = True
-                asyncio.create_task(
-                    maybe_interject(self.bot, message.channel, state),
-                    name=f"interject-eval-{channel_id}",
-                )
+                # 若當前頻道為 CareSurfer 綁定的單一測試沙盒頻道，由 CareCog 統一接管，避免雙重插話
+                is_sandbox = False
+                try:
+                    from handlers.care.repository import get_care_repository
+                    cfg = get_care_repository().get_surfer_config()
+                    if cfg.sandbox_channel_id and str(channel_id) == str(cfg.sandbox_channel_id):
+                        is_sandbox = True
+                except Exception:
+                    pass
+
+                if not is_sandbox:
+                    state.is_evaluating = True
+                    self._spawn_background(
+                        maybe_interject(self.bot, message.channel, state),
+                        name=f"interject-eval-{channel_id}",
+                    )
 
         # --- Tag 意圖路由 (Intent Router via SherryCore) ---
         if self.bot.user in message.mentions:
@@ -111,6 +209,16 @@ class SocialChat(commands.Cog):
                 await core.handle_request(req)
             else:
                 await route_and_execute_tag(self.bot, message)
+        elif getattr(settings, "VISION_REACTION_ENABLED", True) and getattr(message, "attachments", None):
+            from handlers.social.vision_reaction import (
+                execute_vision_reaction,
+                should_trigger_vision_reaction,
+            )
+            if should_trigger_vision_reaction(message, bot_user=self.bot.user):
+                self._spawn_background(
+                    execute_vision_reaction(self.bot, message),
+                    name=f"vision-reaction-{channel_id}",
+                )
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:

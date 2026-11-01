@@ -11,7 +11,13 @@ import asyncio
 from pathlib import Path
 from typing import Optional, Tuple
 
-from mod.livestream.domain import PlayAction, StreamEvent, StreamPlaybackState
+from mod.livestream.domain import (
+    ChatMessage,
+    PlayAction,
+    PlayMode,
+    StreamEvent,
+    StreamPlaybackState,
+)
 
 
 class ILivestreamBroadcaster(abc.ABC):
@@ -66,14 +72,18 @@ class ILivestreamService(abc.ABC):
         self,
         action: PlayAction,
         context: str,
+        play_mode: PlayMode = PlayMode.AUTOPLAY,
+        episode: int = 1,
         requester_name: str = "Unknown",
         requester_avatar: str = "",
     ) -> StreamPlaybackState:
         """Validates the input, prepares the media item, and updates the livestream state to PLAYING.
 
         Args:
-            action: The playback source type (e.g. YOUTUBE or LOCAL).
-            context: The video URL or identifier.
+            action: The playback source type (e.g. YOUTUBE, BILIBILI, or LOCAL).
+            context: The video URL, BV id, or identifier.
+            play_mode: Playback mode (AUTOPLAY, LOOP, SINGLE).
+            episode: 1-based start episode or part index.
             requester_name: Name of the Discord requester.
             requester_avatar: Avatar URL of the Discord requester.
 
@@ -89,6 +99,7 @@ class ILivestreamService(abc.ABC):
         self,
         series_name: str,
         episode: int = 1,
+        play_mode: PlayMode = PlayMode.AUTOPLAY,
         requester_name: str = "Unknown",
         requester_avatar: str = "",
     ) -> StreamPlaybackState:
@@ -97,6 +108,7 @@ class ILivestreamService(abc.ABC):
         Args:
             series_name: The discovered series name (e.g. '海綿寶寶' or '南方公園-第一季').
             episode: 1-based episode index.
+            play_mode: Playback mode (AUTOPLAY, LOOP, SINGLE).
             requester_name: Name of the Discord requester.
             requester_avatar: Avatar URL of the Discord requester.
 
@@ -176,15 +188,62 @@ class ILivestreamService(abc.ABC):
         """
 
     @abc.abstractmethod
-    def extract_youtube_info(self, url: str) -> Tuple[str, int]:
-        """Extracts the YouTube video ID and optional start offset seconds from a URL.
+    def extract_youtube_info(self, url: str) -> Tuple[str, int, str]:
+        """Extracts the YouTube video ID, optional start offset seconds, and playlist ID from a URL.
 
         Args:
             url: YouTube URL or video ID string.
 
         Returns:
-            A tuple of (video_id, start_seconds).
+            A tuple of (video_id, start_seconds, playlist_id).
 
         Raises:
-            ValueError: If no valid YouTube video ID could be extracted.
+            ValueError: If no valid YouTube video ID or playlist ID could be extracted.
         """
+
+    @abc.abstractmethod
+    def extract_bilibili_info(self, url: str) -> Tuple[str, int, str]:
+        """Extracts the Bilibili video ID (BV/av), page index, and playlist/medialist ID from a URL.
+
+        Args:
+            url: Bilibili URL, BV id, or av id string.
+
+        Returns:
+            A tuple of (video_id, page_index, list_id).
+
+        Raises:
+            ValueError: If no valid Bilibili video ID or list ID could be extracted.
+        """
+
+    @abc.abstractmethod
+    def get_chat_history(self) -> list[ChatMessage]:
+        """Returns the recent in-memory chat message history.
+
+        Returns:
+            List of ChatMessage objects.
+        """
+
+    @abc.abstractmethod
+    async def post_chat_message(
+        self,
+        author_name: str,
+        author_avatar: str = "",
+        content: str = "",
+        is_owner: bool = False,
+        badge: str = "💬 觀眾",
+        channel_id: str = "",
+    ) -> ChatMessage:
+        """Posts a new chat message and broadcasts it to all connected livestream clients.
+
+        Args:
+            author_name: Display name of the commenter.
+            author_avatar: Avatar URL.
+            content: Comment text.
+            is_owner: Whether author is owner/admin.
+            badge: Role or badge label.
+            channel_id: Channel ID or source.
+
+        Returns:
+            The created ChatMessage object.
+        """
+

@@ -209,24 +209,26 @@ class DeepSearchCog(commands.Cog, name="DeepSearch"):
                 except Exception as exc:
                     logger.debug("[deep_search] 更新 Discord 進度 Embed 失敗: %s", exc)
 
-        session = await self.engine.run_research(
-            topic=topic,
-            model=model,
-            max_rounds=rounds,
-            session_id=session_id,
-            progress_callback=_on_progress,
-        )
+        try:
+            session = await self.engine.run_research(
+                topic=topic,
+                model=model,
+                max_rounds=rounds,
+                session_id=session_id,
+                progress_callback=_on_progress,
+            )
 
-        # 任務完成後發送報告成果
-        await self._send_final_report(
-            session=session,
-            channel_id=channel_id,
-            interaction=interaction,
-            discord_message=discord_message,
-        )
-
-        self._active_tasks.pop(session_id, None)
-        return session
+            # 任務完成後發送報告成果
+            await self._send_final_report(
+                session=session,
+                channel_id=channel_id,
+                interaction=interaction,
+                discord_message=discord_message,
+            )
+            return session
+        finally:
+            # 複審 2：成功、例外、取消都要移除追蹤；避免 Task 強引用永久滯留。
+            self._active_tasks.pop(session_id, None)
 
     async def _send_final_report(
         self,

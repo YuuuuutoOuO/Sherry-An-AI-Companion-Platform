@@ -1,0 +1,17 @@
+{
+  "default": "remix_chibi",
+  "models": [
+    {
+      "id": "remix_chibi",
+      "name": "橘雪莉桌寵版 (Chibi Remix)",
+      "type": "remix",
+      "config": "/static/sherry_live2d/models/remix_chibi/model.json"
+    },
+    {
+      "id": "detective_v7",
+      "name": "名偵探雪莉 V7 (Classic)",
+      "type": "classic",
+      "config": "/static/sherry_live2d/models/detective_v7/model.json"
+    }
+  ]
+}

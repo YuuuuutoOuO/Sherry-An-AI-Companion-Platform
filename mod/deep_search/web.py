@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from quart import Blueprint, Response, jsonify, request
+from core.error_report import safe_error_payload
 
 from mod.deep_search import config
 
@@ -32,6 +33,16 @@ deep_search_bp = Blueprint(
 )
 
 _bot_instance: Any = None
+# 複審 2：Cog 不可用時的獨立研究 Task 也必須可取消，不能 fire-and-forget。
+_standalone_tasks: dict[str, asyncio.Task[Any]] = {}
+
+
+def _discard_standalone_task(
+    task: asyncio.Task[Any], session_id: str
+) -> None:
+    """僅移除仍指向同一 Task 的追蹤項，避免誤刪同 id 的新任務。"""
+    if _standalone_tasks.get(session_id) is task:
+        _standalone_tasks.pop(session_id, None)
 
 
 def set_bot_instance(bot: Any) -> None:
@@ -64,8 +75,9 @@ async def get_deep_search_sessions() -> Response | tuple[Response, int] | Any:
             "sessions": [s.to_dict() for s in sessions],
         })
     except Exception as exc:
-        logger.exception("[deep_search] 獲取深度研究清單失敗: %s", exc)
-        return jsonify({"status": "error", "message": str(exc), "sessions": []}), 500
+        payload = safe_error_payload("mod.deep_search.web", exc)
+        payload.update({"sessions": []})
+        return jsonify(payload), 500
 
 
 @deep_search_bp.route("/api/deep_search/session/<session_id>", methods=["GET"])
@@ -84,8 +96,7 @@ async def get_deep_search_session_detail(session_id: str) -> tuple[Response, int
             "session": session.to_dict(),
         })
     except Exception as exc:
-        logger.exception("[deep_search] 獲取深度研究詳情失敗: %s", exc)
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        return jsonify(safe_error_payload("mod.deep_search.web", exc)), 500
 
 
 @deep_search_bp.route("/api/deep_search/trigger", methods=["POST"])
@@ -128,7 +139,7 @@ async def trigger_deep_search_task() -> tuple[Response, int] | Response:
                 llm_client=OllamaResearchClient(),
                 session_repository=FileSessionRepository(),
             )
-            asyncio.create_task(
+            task = asyncio.create_task(
                 engine.run_research(
                     topic=topic,
                     model=model,
@@ -137,6 +148,10 @@ async def trigger_deep_search_task() -> tuple[Response, int] | Response:
                 ),
                 name=f"deep-search-web-standalone-{session_id}",
             )
+            _standalone_tasks[session_id] = task
+            task.add_done_callback(
+                lambda done, sid=session_id: _discard_standalone_task(done, sid)
+            )
 
         return jsonify({
             "status": "success",
@@ -144,8 +159,7 @@ async def trigger_deep_search_task() -> tuple[Response, int] | Response:
             "session_id": session_id,
         })
     except Exception as exc:
-        logger.exception("[deep_search] 手動發起深度研究失敗: %s", exc)
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        return jsonify(safe_error_payload("mod.deep_search.web", exc)), 500
 
 
 @deep_search_bp.route("/api/deep_search/cancel/<session_id>", methods=["POST"])
@@ -157,6 +171,10 @@ async def cancel_deep_search_task(session_id: str) -> Response | tuple[Response,
         cog = getattr(_bot_instance, "_deep_search_cog", None) if _bot_instance else None
         if cog and hasattr(cog, "_active_tasks") and session_id in cog._active_tasks:
             task = cog._active_tasks.pop(session_id)
+            if not task.done():
+                task.cancel()
+        elif session_id in _standalone_tasks:
+            task = _standalone_tasks.pop(session_id)
             if not task.done():
                 task.cancel()
 
@@ -174,8 +192,7 @@ async def cancel_deep_search_task(session_id: str) -> Response | tuple[Response,
 
         return jsonify({"status": "success", "message": f"已取消研究任務 {session_id}"})
     except Exception as exc:
-        logger.exception("[deep_search] 取消深度研究任務失敗: %s", exc)
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        return jsonify(safe_error_payload("mod.deep_search.web", exc)), 500
 
 
 @deep_search_bp.route("/api/deep_search/session/<session_id>", methods=["DELETE"])
@@ -189,5 +206,4 @@ async def delete_deep_search_session(session_id: str) -> Response | tuple[Respon
         success = repo.delete_session(session_id)
         return jsonify({"status": "success" if success else "not_found"})
     except Exception as exc:
-        logger.exception("[deep_search] 刪除研究專案失敗: %s", exc)
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        return jsonify(safe_error_payload("mod.deep_search.web", exc)), 500

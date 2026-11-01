@@ -12,6 +12,7 @@ from google import genai
 from google.genai import types
 
 import settings
+from core.concurrency import heavy_io_pool
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ class GeminiImageClient:
         loop = asyncio.get_running_loop()
         try:
             img_bytes = await asyncio.wait_for(
-                loop.run_in_executor(None, self._call_generate_content, prompt),
+                loop.run_in_executor(heavy_io_pool, self._call_generate_content, prompt),
                 timeout=float(effective_timeout),
             )
             if img_bytes:
@@ -108,7 +109,7 @@ class GeminiImageClient:
                     len(img_bytes),
                 )
             return img_bytes
-        except TimeoutError:
+        except (asyncio.TimeoutError, TimeoutError):
             logger.warning("GeminiImageClient: 請求超時 (%ds)", effective_timeout)
             return None
         except Exception as e:  # noqa: BLE001

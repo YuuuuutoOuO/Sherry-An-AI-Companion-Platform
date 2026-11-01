@@ -19,6 +19,7 @@ from discord.ext import commands
 
 import settings
 from handlers.bot_brain import BotBrain, InferenceTask
+from handlers.social.action_recorder import record_tool_action
 from handlers.social.contracts import ToolCategory, ToolResult
 from handlers.social.dispatch.base import BaseDispatchStrategy
 from handlers.social.dispatch.integrated import IntegratedStrategy
@@ -51,6 +52,7 @@ from handlers.social.observability import log_tool_exec, make_timer
 from handlers.social.persona import build_dynamic_persona
 from handlers.social.streaming_thinking import LiveThinkingSession
 from handlers.social.tool_base import BaseTool, ToolResponseMode
+from handlers.social.tool_specs import TOOL_SPECS
 
 logger = logging.getLogger(__name__)
 
@@ -136,13 +138,18 @@ class DispatchAgentTool(BaseTool):
     # ------------------------------------------------------------------
 
     def _build_tool_descriptions(self, *, include_chat: bool = False) -> str:
-        """組裝工具描述清單。"""
+        """組裝工具描述清單（順序固定跟隨 ``TOOL_SPECS``）。"""
         excluded = {"PARALLEL_AGENT", "REACT_AGENT", "DISPATCH_AGENT", "INTEGRATED_AGENT", "CHAT"}
-        lines: list[str] = [
-            _TOOL_DESC_TEMPLATE.format(name=name, description=tool.llm_description)
-            for name, tool in self._tools.items()
-            if name not in excluded
-        ]
+        lines: list[str] = []
+        for spec in TOOL_SPECS:
+            if spec.name in excluded:
+                continue
+            tool = self._tools.get(spec.name)
+            if tool is None:
+                continue
+            lines.append(
+                _TOOL_DESC_TEMPLATE.format(name=spec.name, description=tool.llm_description)
+            )
         if include_chat:
             lines.append("- **CHAT**：一般聊天回覆或問候，不需要呼叫外部工具時使用")
         return "\n".join(lines)
@@ -158,6 +165,7 @@ class DispatchAgentTool(BaseTool):
         timeout: float | None = None,
         images: list[str] | None = None,
         stream_callback: Any | None = None,
+        user_id: int | str | None = None,
     ) -> str:
         """向 BotBrain 發送推理任務並等待結果。可供測試 mock。"""
         loop = asyncio.get_running_loop()
@@ -177,6 +185,7 @@ class DispatchAgentTool(BaseTool):
             task_id=task_id,
             temperature=temperature,
             images=images,
+            user_id=user_id,
         )
         await brain.enqueue_task(task)
 
@@ -190,9 +199,11 @@ class DispatchAgentTool(BaseTool):
         try:
             return await asyncio.wait_for(future, timeout=_timeout)
         except asyncio.TimeoutError:
-            setattr(task, "is_cancelled", True)
+            # 真實取消傳播：取消底層串流 Task，立即關閉上游 HTTP 連線，
+            # 而不是只設旗標等模型停止吐 chunk。
+            task.cancel()
             logger.warning(
-                "DispatchAgent[%s]: LLM 推理超時 (model=%s, %.1fs)，已標記取消",
+                "DispatchAgent[%s]: LLM 推理超時 (model=%s, %.1fs)，已取消底層請求",
                 self._mode,
                 model,
                 _timeout,
@@ -251,6 +262,8 @@ class DispatchAgentTool(BaseTool):
                 channel_id=message.channel.id,
                 message_id=message.id,
             )
+            # 行為記憶：讓雪莉記得自己剛剛做過什麼（播放、搜尋、繪圖…）
+            record_tool_action(message, canonical_name, task.input, obs, status="success")
             max_obs = getattr(settings, "REACT_MAX_OBSERVATION_LENGTH", 1200)
             return canonical_name, category, obs[:max_obs]
         except Exception as exc:
@@ -268,6 +281,9 @@ class DispatchAgentTool(BaseTool):
                 user=message.author.display_name,
                 channel_id=message.channel.id,
                 message_id=message.id,
+            )
+            record_tool_action(
+                message, canonical_name, task.input, f"執行失敗：{exc}", status="error"
             )
             return canonical_name, ToolCategory.DATA_PROVIDER, f"工具 {canonical_name} 執行失敗: {exc}"
 
@@ -342,6 +358,7 @@ class DispatchAgentTool(BaseTool):
                 channel_id=message.channel.id,
                 message_id=message.id,
             )
+            record_tool_action(message, canonical_name, action_input, obs, status="success")
             return obs[:settings.REACT_MAX_OBSERVATION_LENGTH]
         except Exception as exc:
             latency = timer()
@@ -356,6 +373,9 @@ class DispatchAgentTool(BaseTool):
                 user=message.author.display_name,
                 channel_id=message.channel.id,
                 message_id=message.id,
+            )
+            record_tool_action(
+                message, canonical_name, action_input, f"執行失敗：{exc}", status="error"
             )
             return f"工具 {canonical_name} 執行時發生錯誤：{exc}"
 
@@ -381,9 +401,40 @@ class DispatchAgentTool(BaseTool):
 
         recent_text = (full_context[-1500:] + "\n" + clean_query) if full_context else clean_query
         head_persona, tail_lore = build_dynamic_persona(
-            recent_text, "CHAT", channel_id=channel_id, server_id=server_id
+            recent_text,
+            "CHAT",
+            channel_id=channel_id,
+            server_id=server_id,
+            user_query=clean_query,
+            bot=bot,
+            guild_id=server_id or None,
+            include_memory=not bool(getattr(settings, "MEMORY_CONTEXT_OWNS_PERSONA_MEMORY", True)),
         )
-        memory_block = build_user_memory_block(bot, user_id, display_name, query_text=clean_query)
+        memory_block = ""
+        if bool(getattr(settings, "MEMORY_CONTEXT_SERVICE_ENABLED", True)):
+            try:
+                from handlers.memory.context_service import MemoryContextService
+
+                bundle = MemoryContextService.build(
+                    bot=bot,
+                    user_id=user_id,
+                    user_name=display_name,
+                    query=clean_query,
+                    channel_id=channel_id or "",
+                    guild_id=server_id,
+                    mode="mention",
+                )
+                memory_block = bundle.render()
+            except Exception as exc:
+                logger.debug("DispatchAgent: MemoryContextService 失敗，改用舊記憶注入: %s", exc)
+        if not memory_block:
+            memory_block = build_user_memory_block(bot, user_id, display_name, query_text=clean_query)
+
+        if session and session.is_enabled and not any(s[0] == "memory" for s in session.steps):
+            if memory_block and memory_block.strip():
+                mem_lines = [line.strip() for line in memory_block.splitlines() if line.strip().startswith("-")]
+                mem_count = len(mem_lines) if mem_lines else 1
+                session.push_step("memory", f"檢索群友 [{display_name}] 互動記憶 ({mem_count} 筆相關事實與親密度)")
 
         vibe_block = (
             "【頻道近期話題氛圍】(這只是讓妳用來讀空氣的背景氣氛！)\n"
@@ -408,9 +459,9 @@ class DispatchAgentTool(BaseTool):
             )
 
         length_rule = (
-            "2. 【自然生動的對話】：請徹底貫徹妳當前的角色人設特質與語氣風格進行對話。"
-            "日常打招呼、簡短問候或隨意閒聊請自然流暢回覆（約 1～2 句話即可，不刻意冗長展開）；"
-            "遇到深入討論、特定問題或心情分享時再充分表達想法與情緒。"
+            "2. 【自然生動且精準的篇幅】：徹底貫徹角色個性與說話口吻。\n"
+            "   - 【日常互動與閒聊】：篇幅請保持精簡自然（約 30~80 字，1~3 句話為佳），有溫度且口語化，如同身邊好友面對面隨口交流。可帶至多 1 個簡短神態或動作點綴，嚴禁輸出大段小說式心理戲、繁冗動作描寫或說教式長文！\n"
+            "   - 【分析、搜尋與深度解答】：僅在處理工具回傳數據（如情報搜尋、股票分析、長文總結）或對方明確要求「詳細說明/深度分析」時，才展開條理分明、豐富詳實的完整回答。"
         )
 
         cot_instruction = ""
@@ -499,6 +550,7 @@ class DispatchAgentTool(BaseTool):
             timeout=float(settings.OLLAMA_TIMEOUT),
             images=images,
             stream_callback=stream_cb,
+            user_id=user_id,
         )
 
         persona_thought = _extract_xml_tag(raw_response, "thought") or ""

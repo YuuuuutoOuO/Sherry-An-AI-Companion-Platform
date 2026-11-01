@@ -97,3 +97,20 @@ async def test_web_crud_endpoints(app_with_spark: Quart) -> None:
         assert res_del.status_code == 200
         data_del = await res_del.get_json()
         assert data_del["status"] == "success"
+
+
+@pytest.mark.anyio
+async def test_web_error_hides_exception_details(app_with_spark: Quart) -> None:
+    """R2：端點內部例外不得外洩細節（str(exc)），回應需改帶 error_id（報告 §5.3.6）。"""
+    from unittest.mock import patch
+
+    marker = "SPARK-LEAK-MARKER-777"
+    async with app_with_spark.test_client() as client:
+        with patch("handlers.spark.web._get_service", side_effect=RuntimeError(marker)):
+            res = await client.get("/api/spark/stats")
+
+    assert res.status_code == 500
+    text = await res.get_data(as_text=True)
+    assert marker not in text
+    data = await res.get_json()
+    assert data.get("error_id")

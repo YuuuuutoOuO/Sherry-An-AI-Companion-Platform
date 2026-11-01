@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,12 +19,28 @@ from core.db import db_transaction, get_db_connection
 
 logger = logging.getLogger(__name__)
 
+_TZ_TW = timezone(timedelta(hours=8))
+
 DB_PATH: Path = settings.DATA_DIR / "schedules.db"
 _lock = asyncio.Lock()
 
 
+def _ensure_schedule_columns(cur: Any) -> None:
+    """R7：冪等補齊軟刪四柱（含審計欄位），支援舊版資料庫原地升級。"""
+    cur.execute("PRAGMA table_info(schedule_tasks)")
+    existing = {str(row[1]) for row in cur.fetchall()}
+    if "is_deleted" not in existing:
+        cur.execute("ALTER TABLE schedule_tasks ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0;")
+    if "deleted_at" not in existing:
+        cur.execute("ALTER TABLE schedule_tasks ADD COLUMN deleted_at TEXT;")
+    if "created_at" not in existing:
+        cur.execute("ALTER TABLE schedule_tasks ADD COLUMN created_at TEXT;")
+    if "updated_at" not in existing:
+        cur.execute("ALTER TABLE schedule_tasks ADD COLUMN updated_at TEXT;")
+
+
 def _init_schedule_db() -> None:
-    """初始化 schedules.db 資料表與索引。"""
+    """初始化 schedules.db 資料表與索引（含 R7 軟刪欄位遷移）。"""
     try:
         with db_transaction(DB_PATH) as cur:
             cur.execute("""
@@ -36,11 +53,17 @@ def _init_schedule_db() -> None:
                     trigger_time INTEGER,
                     cron_expr TEXT,
                     content TEXT NOT NULL,
-                    is_active INTEGER NOT NULL DEFAULT 1
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    is_deleted INTEGER NOT NULL DEFAULT 0,
+                    deleted_at TEXT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
                 )
             """)
+            _ensure_schedule_columns(cur)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_sched_user ON schedule_tasks(user_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_sched_trigger ON schedule_tasks(trigger_time);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_sched_tasks_deleted ON schedule_tasks(is_deleted);")
     except Exception as e:
         logger.error("[ScheduleStorage] 初始化 schedules.db 失敗: %s", e)
 
@@ -69,7 +92,7 @@ async def load_all_tasks() -> list[dict[str, Any]]:
             conn = get_db_connection(DB_PATH)
             try:
                 cur = conn.cursor()
-                cur.execute("SELECT * FROM schedule_tasks")
+                cur.execute("SELECT * FROM schedule_tasks WHERE is_deleted = 0")
                 rows = cur.fetchall()
                 return [_row_to_dict(r) for r in rows]
             finally:
@@ -88,7 +111,7 @@ async def load_tasks_by_user(user_id: str) -> list[dict[str, Any]]:
             conn = get_db_connection(DB_PATH)
             try:
                 cur = conn.cursor()
-                cur.execute("SELECT * FROM schedule_tasks WHERE user_id = ?", (str(user_id),))
+                cur.execute("SELECT * FROM schedule_tasks WHERE user_id = ? AND is_deleted = 0", (str(user_id),))
                 rows = cur.fetchall()
                 return [_row_to_dict(r) for r in rows]
             finally:
@@ -152,12 +175,20 @@ async def add_task(
 
 
 async def remove_task(task_id: str) -> bool:
-    """移除指定排程任務。"""
+    """移除指定排程任務（R7：軟刪除保留軌跡）。"""
     async with _lock:
         def _delete() -> bool:
             try:
                 with db_transaction(DB_PATH) as cur:
-                    cur.execute("DELETE FROM schedule_tasks WHERE task_id = ?", (str(task_id),))
+                    cur.execute(
+                        "UPDATE schedule_tasks SET is_deleted = 1, deleted_at = ?, updated_at = ? "
+                        "WHERE task_id = ? AND is_deleted = 0",
+                        (
+                            datetime.now(_TZ_TW).strftime("%Y-%m-%d %H:%M:%S"),
+                            datetime.now(_TZ_TW).strftime("%Y-%m-%d %H:%M:%S"),
+                            str(task_id),
+                        ),
+                    )
                     return cur.rowcount > 0
             except Exception as e:
                 logger.error("[ScheduleStorage] 刪除任務失敗: %s", e)
@@ -170,7 +201,7 @@ async def remove_task(task_id: str) -> bool:
 
 
 async def purge_once_tasks_before(ts: int) -> list[dict[str, Any]]:
-    """移除所有 trigger_time <= ts 的單次任務並回傳（單一原子交易）。"""
+    """軟刪除所有 trigger_time <= ts 的單次任務並回傳（單一原子交易）。"""
     async with _lock:
         def _purge() -> list[dict[str, Any]]:
             triggered: list[dict[str, Any]] = []
@@ -178,16 +209,18 @@ async def purge_once_tasks_before(ts: int) -> list[dict[str, Any]]:
                 with db_transaction(DB_PATH) as cur:
                     cur.execute("""
                         SELECT * FROM schedule_tasks
-                        WHERE schedule_type = 'once' AND trigger_time <= ?
+                        WHERE schedule_type = 'once' AND trigger_time <= ? AND is_deleted = 0
                     """, (ts,))
                     rows = cur.fetchall()
                     triggered = [_row_to_dict(r) for r in rows]
 
                     if triggered:
+                        now_str = datetime.now(_TZ_TW).strftime("%Y-%m-%d %H:%M:%S")
                         cur.execute("""
-                            DELETE FROM schedule_tasks
-                            WHERE schedule_type = 'once' AND trigger_time <= ?
-                        """, (ts,))
+                            UPDATE schedule_tasks
+                            SET is_deleted = 1, deleted_at = ?, updated_at = ?
+                            WHERE schedule_type = 'once' AND trigger_time <= ? AND is_deleted = 0
+                        """, (now_str, now_str, ts))
                         logger.info("schedule_storage: purged %d once tasks (ts<=%s)", len(triggered), ts)
             except Exception as e:
                 logger.error("[ScheduleStorage] 清理到期單次任務失敗: %s", e)

@@ -134,7 +134,7 @@ class WeatherTool(BaseTool):
                     city_future.set_result(raw.strip())
 
             city_extract_task = InferenceTask(
-                priority=0,
+                priority=settings.priority_for(settings.Priority.INTERACTIVE),
                 system_prompt=(
                     "[PARSER MODE]\n"
                     "請從使用者輸入萃取出「城市名稱」的英文拼音，"
@@ -144,7 +144,7 @@ class WeatherTool(BaseTool):
                 ),
                 user_prompt=user_query,
                 callback=_on_city_extract,
-                model=settings.CLASSIFIER_MODEL,
+                model=settings.LIGHT_MODEL,
                 task_id=f"weather-extract-{message.id}",
             )
             await brain.enqueue_task(city_extract_task)

@@ -3,17 +3,26 @@ import logging
 from pathlib import Path
 import re
 from datetime import datetime, timezone, timedelta
+from typing import Any
+
 import settings
 
 logger = logging.getLogger(__name__)
+
+_DETAIL_EXPANSION_PATTERN = r"(詳細(說明|解釋|分析|介紹|講|回答)|仔細(說明|分析|解釋)|鉅細靡遺|完整(說明|解釋|分析))"
 
 # 高優先度的 Lorebook 關鍵字 pattern — 這些會被注入在對話歷史的「尾部」(緊貼生成點)，
 # 模仿 SillyTavern Author's Note 的「深度注入」效果。
 _HIGH_PRIORITY_LORE_PATTERNS = frozenset([
     r"(性暗示|色色|瑟瑟|開車|撩|黃腔|調情|曖昧|色|做愛|摸|胸部?|乳|奶|臀|屁股|下面|裸|脫|舔|插入?|射精|弄壞|發情|想要妳?|肉體|性感|瑟|汁|雞雞|ㄐㄐ|老二|屌|巨根|長短|公分|射出來|中出|無套|內射|高潮|性愛|懷孕|親吻?|嘴|愛愛|小穴)",
     r"(橘雪莉|tachibana.?sher|sherry).{0,10}(的圖|照片|圖片|看|搜尋|找|搜圖|本人|自己)",
-    r"(詳細|仔細|描述|不.?省略|清楚|鉅細靡遺|具體|完整)",
+    _DETAIL_EXPANSION_PATTERN,
     r"(有誰|是誰|誰啦|舉例|列出|說出來|講出來|條列|點名|證明|名單|沒人|騙人|哪有|誰會|喜歡|愛|討厭|朋友|夥伴|人際|關係|認識|有哪些|甚麼人|什麼人)",
+])
+
+# 僅限於當前使用者輸入（即時指令）才觸發的高優先度 pattern，避免歷史紀錄殘留持續觸發
+_CURRENT_TURN_ONLY_PATTERNS = frozenset([
+    _DETAIL_EXPANSION_PATTERN,
 ])
 
 
@@ -119,6 +128,12 @@ def build_dynamic_persona(
     intent_name: str,
     channel_id: int | None = None,
     server_id: str = "",
+    user_query: str = "",
+    bot: Any | None = None,
+    guild_id: int | str | None = None,
+    soul_name: str | None = None,
+    *,
+    include_memory: bool = True,
 ) -> tuple[str, str]:
     """動態人格拼裝系統（ST 雙層注入與 SOUL 外部化版）。
 
@@ -131,6 +146,10 @@ def build_dynamic_persona(
         intent_name: 意圖分類名稱（如 CHAT, STOCK, DRAW 等）。
         channel_id: 當前頻道 ID（用於特定頻道 SOUL 設定載入）。
         server_id: 當前伺服器識別碼（用於過濾跨伺服器世界記憶）。
+        user_query: 當前使用者輸入（用於行為記憶的自我指涉判斷）。
+        bot: Discord Bot 實例（用於讀取即時情境狀態，可選）。
+        guild_id: 當前伺服器 ID（用於讀取音樂播放狀態，可選）。
+        soul_name: 指定 SOUL 檔名（沙盒多角色用）；None 代表沿用頻道映射／全域預設。
 
     Returns:
         tuple[str, str]: (head_persona, tail_lore) 二元組。
@@ -143,7 +162,11 @@ def build_dynamic_persona(
     weekday_names = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
     time_block = f"⏰【目前時間】：{now_tw.strftime('%Y-%m-%d %H:%M')}（台灣時間，{weekday_names[now_tw.weekday()]}）"
 
-    soul_text = _load_soul_persona(channel_id)
+    if soul_name:
+        # 沙盒 NPC：只使用指定的 SOUL，不套用 CHANNEL_SOUL_MAP，避免污染正式群設定。
+        soul_text = _load_soul_persona_by_name(str(soul_name))
+    else:
+        soul_text = _load_soul_persona(channel_id)
     rule_text = _load_common_rules()
     head_blocks: list[str] = [soul_text]
     if rule_text:
@@ -187,12 +210,18 @@ def build_dynamic_persona(
 
     # ── 掃描 LOREBOOK，依優先度分流至動態尾部 (tail_lore) ───────────────
     text_to_scan = current_text.lower()
+    target_turn_text = (
+        user_query.lower()
+        if user_query
+        else (current_text.splitlines()[-1].lower() if current_text else "")
+    )
     general_lores: list[str] = []
     override_lores: list[str] = []
 
     lorebook_items = tuple(getattr(settings, "LOREBOOK", {}).items())
     for pattern_obj, is_high_priority, lore_fact in _compile_lorebook(lorebook_items):
-        if pattern_obj.search(text_to_scan):
+        scan_target = target_turn_text if pattern_obj.pattern in _CURRENT_TURN_ONLY_PATTERNS else text_to_scan
+        if pattern_obj.search(scan_target):
             if is_high_priority:
                 override_lores.append(f"- {lore_fact}")
             else:
@@ -209,15 +238,66 @@ def build_dynamic_persona(
     tail_parts: list[str] = [time_block]
 
     # 世界記憶注入（世界近期大事，屬動態情境，預算控制在 5~8 筆）
-    try:
-        from handlers.memory.world_memory import get_world_memory_snippet
-        world_snippet = get_world_memory_snippet(
-            days=3, min_importance=3, server_id=server_id, limit=6
-        )
-        if world_snippet:
-            tail_parts.append(world_snippet)
-    except Exception:
-        pass    # 世界記憶模組未載入時靜默跳過
+    if include_memory:
+        try:
+            from handlers.memory.world_memory import get_world_memory_snippet
+            world_snippet = get_world_memory_snippet(
+                days=3, min_importance=3, server_id=server_id, limit=6
+            )
+            if world_snippet:
+                tail_parts.append(world_snippet)
+        except Exception:
+            pass    # 世界記憶模組未載入時靜默跳過
+
+    # 雪莉自我專屬記憶注入（日記、生活小劇場、近期看過的文章與個人觀點，尾部注入確保 KV Cache 命中）
+    if include_memory:
+        try:
+            from handlers.memory.self_memory import get_self_memory_snippet
+            self_snippet = get_self_memory_snippet(query_text=current_text, limit=4)
+            if self_snippet:
+                tail_parts.append(self_snippet)
+        except Exception as exc:
+            logger.debug("[SelfMemory] 動態自我記憶尾段注入略過: %s", exc)
+
+    # 雪莉行為記憶注入（只有使用者主動問「你剛剛／你記得」時才檢索，平常 0 Token）
+    if include_memory:
+        try:
+            from handlers.memory.self_memory import get_action_memory_snippet
+            action_snippet = get_action_memory_snippet(
+                query_text=user_query or current_text,
+                channel_id=channel_id,
+            )
+            if action_snippet:
+                tail_parts.append(action_snippet)
+        except Exception as exc:
+            logger.debug("[ActionMemory] 動態行為記憶尾段注入略過: %s", exc)
+
+    # 即時情境狀態注入（目前播放的音樂；沒有播放時 0 Token）
+    if bot is not None and guild_id not in (None, ""):
+        try:
+            from handlers.social.live_state import build_live_state_snippet
+            live_state = build_live_state_snippet(bot, guild_id)
+            if live_state:
+                tail_parts.append(live_state)
+        except Exception as exc:
+            logger.debug("[LiveState] 即時狀態尾段注入略過: %s", exc)
+
+    # 動態情感狀態注入（R21：僅影響尾端動態指引，嚴禁污染靜態前綴，確保 KV Cache 命中）
+    if getattr(settings, "EMOTION_ENABLED", True):
+        try:
+            import math
+            from handlers.emotion.service import get_emotion_service
+            from handlers.emotion.state import build_emotion_prompt_tail
+
+            emotion_svc = get_emotion_service()
+            target_entity_type = "channel" if channel_id else ("guild" if server_id else "global")
+            target_entity_id = str(channel_id) if channel_id else (str(server_id) if server_id else "default")
+            aff_state = emotion_svc.get_state(target_entity_type, target_entity_id)
+            mag = math.sqrt(aff_state.pleasure**2 + aff_state.arousal**2 + aff_state.dominance**2)
+            if mag >= 0.25:
+                tail_parts.append(build_emotion_prompt_tail(aff_state))
+        except Exception as exc:
+            logger.debug("[EMOTION] 動態情感尾段注入略過: %s", exc)
 
     if general_lores:
         tail_parts.append(
@@ -243,4 +323,4 @@ def get_current_time_block() -> str:
     TAIWAN_TZ = timezone(timedelta(hours=8))
     now_tw = datetime.now(TAIWAN_TZ)
     weekday_names = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
-    return f"⏰【目前時間】：{now_tw.strftime('%Y-%m-%d %H:%M')}（台灣時間，{weekday_names[now_tw.weekday()]}）"
+    return f"⏰【目前時間】：{now_tw.strftime('%Y-%m-%d %H:%M')}（台灣時間，{weekday_names[now_tw.weekday()]}）"

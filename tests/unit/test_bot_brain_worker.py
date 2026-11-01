@@ -14,8 +14,10 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+import aiohttp
 import pytest
 
+from handlers.bot_brain.client import _GEMINI_THINKING_BUDGET
 from handlers.bot_brain.cog import BotBrain
 from handlers.bot_brain.models import InferenceTask
 
@@ -194,7 +196,7 @@ class TestBotBrainGeminiFallbackAndTokenProtection:
     """測試 Gemini 視覺模型容錯備援、503 退避與輸出 Token 空間保障。"""
 
     def test_gemini_token_elevation_in_client(self) -> None:
-        """驗證 Gemini 後端在呼叫時，max_tokens 會自動被保障在至少 GEMINI_MIN_OUTPUT_TOKENS (4096)。"""
+        """驗證 Gemini 的 max_tokens 會自動高於下限保護與當前思考預算，避免思考吃光額度。"""
         from handlers.bot_brain.client import OllamaClient
         import settings
 
@@ -222,12 +224,12 @@ class TestBotBrainGeminiFallbackAndTokenProtection:
 
         async def _run() -> None:
             fake_session = FakeSession()
-            # 1. 預設 1024 傳入 Gemini 時，應自動提升為 4096
+            # 1. 傳入偏低額度 (1024) 時，應自動拉高到足以容納思考 + 輸出
             async for _ in client._stream_openai_compatible(
                 fake_session,  # type: ignore
                 base_url="https://generativelanguage.googleapis.com/v1beta/openai",
                 api_key="test_key",
-                actual_model="gemini-2.5-flash",
+                actual_model="gemini-3.5-flash-lite",
                 system_prompt="sys",
                 user_prompt="usr",
                 backend_label="Gemini",
@@ -235,23 +237,29 @@ class TestBotBrainGeminiFallbackAndTokenProtection:
             ):
                 pass
 
-            # 2. 若顯式指定大於 4096 (如 8192)，應保留 8192
+            # 2. 明確指定 16384 時，額度已高於任何思考預算，應原樣保留，不被覆寫
             async for _ in client._stream_openai_compatible(
                 fake_session,  # type: ignore
                 base_url="https://generativelanguage.googleapis.com/v1beta/openai",
                 api_key="test_key",
-                actual_model="gemini-2.5-flash",
+                actual_model="gemini-3.5-flash-lite",
                 system_prompt="sys",
                 user_prompt="usr",
                 backend_label="Gemini",
-                max_tokens=8192,
+                max_tokens=16384,
             ):
                 pass
 
             assert len(recorded_payloads) == 2
+            # 額度必須同時滿足兩個條件：不少於下限保護，且高於當前思考預算
+            # （否則思考會吃光額度導致空輸出或回覆被截斷）。
+            effort = settings.GEMINI_REASONING_EFFORT
+            thinking_budget = _GEMINI_THINKING_BUDGET.get(effort)
             assert recorded_payloads[0]["max_tokens"] >= settings.GEMINI_MIN_OUTPUT_TOKENS
-            assert recorded_payloads[0]["max_tokens"] == 4096
-            assert recorded_payloads[1]["max_tokens"] == 8192
+            if thinking_budget is not None:
+                assert recorded_payloads[0]["max_tokens"] > thinking_budget
+            # 額度已高於任何思考預算時，應原樣保留
+            assert recorded_payloads[1]["max_tokens"] == 16384
 
         asyncio.run(_run())
 
@@ -262,10 +270,10 @@ class TestBotBrainGeminiFallbackAndTokenProtection:
 
             async def fake_chat(model: str, *args: Any, **kwargs: Any) -> str:
                 models_called.append(model)
-                if "3.6-flash" in model:
-                    # 模擬第一次呼叫 3.6-flash 遇到 503 尖峰
+                if "3.5-flash-lite" in model:
+                    # 模擬第一次呼叫 3.5-flash-lite 遇到 503 尖峰
                     return ""
-                # 第二次呼叫備援模型 2.5-flash 成功回傳
+                # 第二次呼叫備援模型 3.8-flash 成功回傳
                 return "圖片解析成功：少女正在喝咖啡"
 
             brain._ollama.chat = fake_chat  # type: ignore
@@ -277,31 +285,31 @@ class TestBotBrainGeminiFallbackAndTokenProtection:
                 user_prompt="usr",
                 callback=callback_mock,
                 task_id="gemini_img_task",
-                model="gemini:gemini-3.6-flash",
+                model="gemini:gemini-3.5-flash-lite",
                 images=["data:image/jpeg;base64,..."],
             )
 
             await brain.enqueue_task(task)
             await brain._process_task(task, max_retries=3, retry_delay=0.01)
 
-            # 驗證第一次呼叫原模型，第二次自動切換至備援模型 gemini:gemini-2.5-flash
+            # 驗證第一次呼叫原模型，第二次自動切換至備援模型 gemini:gemini-3.8-flash
             assert len(models_called) == 2
-            assert models_called[0] == "gemini:gemini-3.6-flash"
-            assert models_called[1] == "gemini:gemini-2.5-flash"
+            assert models_called[0] == "gemini:gemini-3.5-flash-lite"
+            assert models_called[1] == "gemini:gemini-3.8-flash"
             callback_mock.assert_awaited_once_with("圖片解析成功：少女正在喝咖啡")
 
         asyncio.run(_run())
 
     def test_gemini_three_stage_consecutive_fallback(self, brain: BotBrain) -> None:
-        """驗證當 attempt 1 與 attempt 2 皆失敗時，attempt 3 能切換至第三備援模型 (gemini-2.0-flash)。"""
+        """驗證當 attempt 1 與 attempt 2 皆失敗時，attempt 3 能切換至第三備援模型 (gemini-3.6-flash)。"""
         async def _run() -> None:
             models_called: list[str] = []
 
             async def fake_chat(model: str, *args: Any, **kwargs: Any) -> str:
                 models_called.append(model)
-                if "3.6-flash" in model or "2.5-flash" in model:
+                if "3.5-flash-lite" in model or "3.8-flash" in model:
                     return ""
-                return "第三次備援成功：gemini-2.0-flash"
+                return "第三次備援成功：gemini-3.6-flash"
 
             brain._ollama.chat = fake_chat  # type: ignore
 
@@ -312,7 +320,7 @@ class TestBotBrainGeminiFallbackAndTokenProtection:
                 user_prompt="usr",
                 callback=callback_mock,
                 task_id="gemini_three_stage_task",
-                model="gemini:gemini-3.6-flash",
+                model="gemini:gemini-3.5-flash-lite",
                 images=["data:image/jpeg;base64,..."],
             )
 
@@ -320,11 +328,83 @@ class TestBotBrainGeminiFallbackAndTokenProtection:
             await brain._process_task(task, max_retries=3, retry_delay=0.01)
 
             assert len(models_called) == 3
-            assert models_called[0] == "gemini:gemini-3.6-flash"
-            assert models_called[1] == "gemini:gemini-2.5-flash"
-            assert models_called[2] == "gemini:gemini-2.0-flash"
-            callback_mock.assert_awaited_once_with("第三次備援成功：gemini-2.0-flash")
+            assert models_called[0] == "gemini:gemini-3.5-flash-lite"
+            assert models_called[1] == "gemini:gemini-3.8-flash"
+            assert models_called[2] == "gemini:gemini-3.6-flash"
+            callback_mock.assert_awaited_once_with("第三次備援成功：gemini-3.6-flash")
 
         asyncio.run(_run())
+
+    def test_local_model_offline_fallback_to_cloud(self, brain: BotBrain) -> None:
+        """驗證當本地模型連線失敗 (Port 1919 未啟動) 時，BotBrain 能安全降級切換至雲端備援模型。"""
+        async def _run() -> None:
+            models_called: list[str] = []
+
+            async def fake_chat(model: str, *args: Any, **kwargs: Any) -> str:
+                models_called.append(model)
+                if model.startswith("freetoken:"):
+                    raise aiohttp.ClientConnectorError(
+                        connection_key=MagicMock(),
+                        os_error=OSError(10061, "Connect call failed ('127.0.0.1', 1919)"),
+                    )
+                return "雲端備援成功回覆"
+
+            brain._ollama.chat = fake_chat  # type: ignore
+
+            callback_mock = AsyncMock()
+            task = InferenceTask(
+                priority=1,
+                system_prompt="sys",
+                user_prompt="usr",
+                callback=callback_mock,
+                task_id="local_offline_fallback_task",
+                model="freetoken:Gemma-4-26B-A4B-NVFP4",
+            )
+
+            await brain.enqueue_task(task)
+            await brain._process_task(task, max_retries=3, retry_delay=0.01)
+
+            assert len(models_called) >= 2
+            assert models_called[0] == "freetoken:Gemma-4-26B-A4B-NVFP4"
+            assert models_called[1].startswith("gemini:")
+            callback_mock.assert_awaited_once_with("雲端備援成功回覆")
+
+        asyncio.run(_run())
+
+    def test_content_filter_fails_fast_without_fallback_retry(self, brain: BotBrain) -> None:
+        """驗證當遭遇供應商安全過濾 (PROHIBITED_CONTENT) 時，BotBrain 立即終止重試且不切換 fallback。"""
+        async def _run() -> None:
+            models_called: list[str] = []
+
+            async def fake_chat(model: str, *args: Any, **kwargs: Any) -> str:
+                models_called.append(model)
+                brain._ollama.last_stream_diagnostics = {
+                    "finish_reason": "content_filter: PROHIBITED_CONTENT",
+                }
+                return ""
+
+            brain._ollama.chat = fake_chat  # type: ignore
+
+            callback_mock = AsyncMock()
+            task = InferenceTask(
+                priority=1,
+                system_prompt="sys",
+                user_prompt="usr with prohibited words",
+                callback=callback_mock,
+                task_id="content_filtered_task",
+                model="gemini:gemini-3.6-flash",
+            )
+
+            await brain.enqueue_task(task)
+            await brain._process_task(task, max_retries=3, retry_delay=0.01)
+
+            # 驗證只嘗試了 1 次即中斷，沒有浪費次數重試或切換 fallback 模型
+            assert len(models_called) == 1
+            assert models_called[0] == "gemini:gemini-3.6-flash"
+            assert task.is_content_filtered is True
+            callback_mock.assert_awaited_once_with("")
+
+        asyncio.run(_run())
+
 
 

@@ -63,18 +63,6 @@ def disadvantage_roll(sides: int = 20) -> tuple[int, int, int]:
     return d1, d2, min(d1, d2)
 
 
-def ability_modifier(score: int) -> int:
-    """Calculate standard D&D ability modifier.
-
-    Args:
-        score: Ability score value (e.g., 14).
-
-    Returns:
-        Modifier value (e.g., +2).
-    """
-    return (score - 10) // 2
-
-
 def roll_ability_scores() -> dict[str, int]:
     """Generate standard 6 ability scores using 4d6 (drop lowest).
 

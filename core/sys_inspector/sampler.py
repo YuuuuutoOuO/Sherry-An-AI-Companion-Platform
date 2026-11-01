@@ -18,11 +18,26 @@ logger = logging.getLogger(__name__)
 _last_net_bytes: tuple[int, int, float] | None = None
 _CACHED_SYSTEM_METRICS: dict[str, Any] = {}
 _LAST_METRICS_TIME: float = 0.0
+_METRICS_SAMPLE_LOCK: asyncio.Lock | None = None
 _DEFAULT_METRICS_CACHE_TTL: float = 2.0
+_CACHED_GPU_INFO: list[dict[str, Any]] = []
+_LAST_GPU_SAMPLE_TIME: float = 0.0
+_GPU_SAMPLE_TTL: float = 4.0
+_NVIDIA_SMI_AVAILABLE: bool = True
+_LAST_NVIDIA_CHECK_TIME: float = 0.0
 
 
 def _sample_gpu() -> list[dict[str, Any]]:
-    """以子進程呼叫 nvidia-smi 採樣 GPU 狀態。"""
+    """以子進程呼叫 nvidia-smi 採樣 GPU 狀態（含 TTL 防抖與不可用快取）。"""
+    global _CACHED_GPU_INFO, _LAST_GPU_SAMPLE_TIME, _NVIDIA_SMI_AVAILABLE, _LAST_NVIDIA_CHECK_TIME
+    now = time.time()
+    if (now - _LAST_GPU_SAMPLE_TIME < _GPU_SAMPLE_TTL) and _CACHED_GPU_INFO:
+        return _CACHED_GPU_INFO
+
+    # 若已知系統無 nvidia-smi，每 60 秒才重新探測一次，避免浪費 CPU
+    if not _NVIDIA_SMI_AVAILABLE and (now - _LAST_NVIDIA_CHECK_TIME < 60.0):
+        return []
+
     gpu_info: list[dict[str, Any]] = []
     try:
         cmd = [
@@ -50,8 +65,12 @@ def _sample_gpu() -> list[dict[str, Any]]:
                             "temperature_c": temp,
                         }
                     )
+            _NVIDIA_SMI_AVAILABLE = True
+            _CACHED_GPU_INFO = gpu_info
+            _LAST_GPU_SAMPLE_TIME = now
     except Exception:
-        pass
+        _NVIDIA_SMI_AVAILABLE = False
+        _LAST_NVIDIA_CHECK_TIME = now
     return gpu_info
 
 
@@ -143,13 +162,21 @@ def get_system_metrics() -> dict[str, Any]:
 
 
 async def get_system_metrics_async(ttl: float = _DEFAULT_METRICS_CACHE_TTL) -> dict[str, Any]:
-    """非同步取得系統度量，內建 TTL 防抖快取與 to_thread 執行保護。"""
-    global _CACHED_SYSTEM_METRICS, _LAST_METRICS_TIME
+    """非同步取得系統度量，合併並行快取 misses 並於背景執行緒採樣。"""
+    global _CACHED_SYSTEM_METRICS, _LAST_METRICS_TIME, _METRICS_SAMPLE_LOCK
+
     now = time.time()
     if (now - _LAST_METRICS_TIME < ttl) and _CACHED_SYSTEM_METRICS:
         return _CACHED_SYSTEM_METRICS
 
-    metrics = await asyncio.to_thread(get_system_metrics)
-    _CACHED_SYSTEM_METRICS = metrics
-    _LAST_METRICS_TIME = now
-    return metrics
+    if _METRICS_SAMPLE_LOCK is None:
+        _METRICS_SAMPLE_LOCK = asyncio.Lock()
+    async with _METRICS_SAMPLE_LOCK:
+        now = time.time()
+        if (now - _LAST_METRICS_TIME < ttl) and _CACHED_SYSTEM_METRICS:
+            return _CACHED_SYSTEM_METRICS
+
+        metrics = await asyncio.to_thread(get_system_metrics)
+        _CACHED_SYSTEM_METRICS = metrics
+        _LAST_METRICS_TIME = time.time()
+        return metrics

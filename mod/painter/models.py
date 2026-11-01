@@ -203,14 +203,3 @@ class PaintingMetadata:
     width: int = 800
     height: int = 800
     tags: list[str] = field(default_factory=list)
-
-
-@dataclass
-class CanvasState:
-    """Live state of the canvas during execution."""
-    width: int = 800
-    height: int = 800
-    background_color: RGBAColor = field(default_factory=lambda: RGBAColor(255, 255, 255, 1.0))
-    active_layer: str = "main"
-    current_brush: BrushConfig = field(default_factory=BrushConfig)
-    step_count: int = 0

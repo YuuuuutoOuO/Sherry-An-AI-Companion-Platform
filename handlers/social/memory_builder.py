@@ -13,6 +13,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from handlers.social.dispatch.prompts import build_retrieved_memory_tail
+
 logger = logging.getLogger(__name__)
 
 
@@ -73,6 +75,13 @@ def build_user_memory_block(
             user_content_parts.append(rel_snippet)
         if snippet:
             user_content_parts.append(snippet)
+        retrieval_tail = build_retrieved_memory_tail(
+            query_text,
+            user_id,
+            exclude_text="\n".join(user_content_parts),
+        )
+        if retrieval_tail:
+            user_content_parts.append(retrieval_tail)
 
         if user_content_parts:
             combined_user_content = "\n".join(user_content_parts)
@@ -82,7 +91,7 @@ def build_user_memory_block(
                 f"{combined_user_content}"
             )
 
-        # 2. 被 @提及 或 暱稱提及 的第三方使用者記憶（最多 1 人，上限 1 條 fact）
+        # 2. 被顯式 @提及 的第三方使用者記憶（最多 1 人，上限 1 條 fact，僅限當前對話明確提及者）
         target_uids: list[str] = []
         target_map: dict[str, str] = {}
 
@@ -96,9 +105,6 @@ def build_user_memory_block(
                     if uid_str not in target_uids:
                         target_uids.append(uid_str)
                         target_map[uid_str] = getattr(u, "display_name", str(uid))
-                    if len(target_uids) >= 1:
-                        break
-
         if len(target_uids) < 1 and query_text and hasattr(mem_mgr, "_store") and isinstance(mem_mgr._store, dict):
             for uid_str, data in mem_mgr._store.items():
                 if uid_str == str(user_id):
@@ -123,6 +129,16 @@ def build_user_memory_block(
                 res_o = mem_mgr.get_user_memory_snippet(int(uid_str))
                 if isinstance(res_o, str):
                     other_snippet = res_o
+            other_tail = build_retrieved_memory_tail(
+                query_text,
+                int(uid_str),
+                exclude_text=other_snippet,
+                limit=1,
+            )
+            if other_tail:
+                other_snippet = (
+                    f"{other_snippet}\n{other_tail}" if other_snippet else other_tail
+                )
             if other_snippet:
                 t_name = target_map.get(uid_str, uid_str)
                 blocks.append(

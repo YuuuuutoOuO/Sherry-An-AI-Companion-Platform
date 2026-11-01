@@ -233,6 +233,93 @@ def test_cloud_analysis_client_fallback_on_error() -> None:
     asyncio.run(_test())
 
 
+def test_content_filter_incident_is_classified_separately() -> None:
+    """內容過濾放棄不應被誤分類為 EXTERNAL_API_TIMEOUT。"""
+    async def _test() -> None:
+        mock_cloud = MagicMock()
+        mock_cloud._generate_async = AsyncMock(side_effect=RuntimeError("Cloud API unavailable"))
+        client = CloudAnalysisClient(cloud_client=mock_cloud)
+
+        incident = IncidentReport(
+            incident_type=IncidentType.INFERENCE_FAILURE,
+            severity=IncidentSeverity.CRITICAL,
+            latency_ms=750,
+            trigger_reason=(
+                "InferenceGiveUp: Task memory-sync-1 在 1 次嘗試後徹底失敗放棄: "
+                "content_filtered: 無替代模型"
+            ),
+        )
+        snapshot = LogSnapshot(
+            window_minutes=5,
+            total_lines=9,
+            error_count=3,
+            warning_count=3,
+            bot_log_snippet="Gemini 回傳空白字串",
+            runtime_event_snippet="",
+            combined_text="finish_reason=content_filter: PROHIBITED_CONTENT",
+        )
+
+        result = await client.analyze_incident(incident, snapshot)
+
+        assert result.bottleneck_category == "CONTENT_FILTER"
+        assert "EXTERNAL_API_TIMEOUT" != result.bottleneck_category
+        assert "content_filter" in result.root_cause
+
+    asyncio.run(_test())
+
+
+def test_non_filter_inference_failure_still_external_timeout() -> None:
+    """非過濾類的推論失敗維持原本的 EXTERNAL_API_TIMEOUT 分類。"""
+    async def _test() -> None:
+        mock_cloud = MagicMock()
+        mock_cloud._generate_async = AsyncMock(side_effect=RuntimeError("Cloud API unavailable"))
+        client = CloudAnalysisClient(cloud_client=mock_cloud)
+
+        incident = IncidentReport(
+            incident_type=IncidentType.INFERENCE_FAILURE,
+            severity=IncidentSeverity.CRITICAL,
+            latency_ms=750,
+            trigger_reason="InferenceGiveUp: Task x 徹底失敗放棄: TimeoutError",
+        )
+        snapshot = LogSnapshot(
+            window_minutes=5, total_lines=5, error_count=2, warning_count=0,
+            bot_log_snippet="", runtime_event_snippet="", combined_text="",
+        )
+
+        result = await client.analyze_incident(incident, snapshot)
+
+        assert result.bottleneck_category == "EXTERNAL_API_TIMEOUT"
+
+    asyncio.run(_test())
+
+
+def test_content_filter_recommends_no_self_healing() -> None:
+    """內容過濾不應觸發降級模型等自動處置（重試與同廠備援皆無效）。"""
+    async def _test() -> None:
+        mock_cloud = MagicMock()
+        mock_cloud._generate_async = AsyncMock(side_effect=RuntimeError("Cloud API unavailable"))
+        client = CloudAnalysisClient(cloud_client=mock_cloud)
+
+        incident = IncidentReport(
+            incident_type=IncidentType.INFERENCE_FAILURE,
+            severity=IncidentSeverity.CRITICAL,
+            latency_ms=750,
+            trigger_reason="InferenceGiveUp: content_filtered: 無替代模型",
+        )
+        snapshot = LogSnapshot(
+            window_minutes=5, total_lines=5, error_count=2, warning_count=0,
+            bot_log_snippet="", runtime_event_snippet="", combined_text="",
+        )
+
+        result = await client.analyze_incident(incident, snapshot)
+        action = SelfHealingAdvisor.evaluate_action(incident, result)
+
+        assert result.bottleneck_category == "CONTENT_FILTER"
+        assert action.strategy == SelfHealingStrategy.NONE
+
+    asyncio.run(_test())
+
+
 def test_privacy_and_no_chat_leakage(tmp_path: Path) -> None:
     """測試日誌快照與 Prompt 建構嚴格脫敏，絕不洩漏對話原文與 reply_preview。"""
     async def _test() -> None:
@@ -660,12 +747,9 @@ def test_web_blueprint_routes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
         client = app.test_client()
 
-        # 1. 測試 GET /api/system/audit/kpi (公開可存取)
+        # 1. 測試 GET /api/system/audit/kpi (R3：需管理員權限，未登入 401)
         resp_stats = await client.get("/api/system/audit/kpi")
-        assert resp_stats.status_code == 200
-        stats_json = await resp_stats.get_json()
-        assert stats_json["status"] == "success"
-        assert "total_audits" in stats_json["kpi"]
+        assert resp_stats.status_code == 401
 
         # 2. 測試未登入時查看詳細報告與手動診斷 (回傳 401)
         with patch("web_ui.server._is_admin_request", return_value=False):
@@ -704,6 +788,13 @@ def test_web_blueprint_routes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
             assert detail_json["record"]["bottleneck_category"] == "MANUAL_AUDIT"
             assert "維持定期檢視" in detail_json["record"]["recommendations"]
 
+            # 3d. 測試 GET /api/system/audit/kpi (R3：登入後解鎖 KPI 摘要)
+            resp_stats_admin = await client.get("/api/system/audit/kpi")
+            assert resp_stats_admin.status_code == 200
+            stats_admin_json = await resp_stats_admin.get_json()
+            assert stats_admin_json["status"] == "success"
+            assert "total_audits" in stats_admin_json["kpi"]
+
     asyncio.run(_test())
 
 
@@ -731,6 +822,45 @@ def test_notify_sync_helpers() -> None:
         notify_failure_sync(125000, error_msg="Timeout", trace_id="tr-fail")
         mock_cog.handle_failure.assert_called_once()
         assert mock_cog.handle_failure.call_args.kwargs["error_msg"] == "Timeout"
+
+
+def test_content_filter_failure_does_not_notify() -> None:
+    """內容過濾屬預期行為，不應觸發嚴重異常通知（即使命中 give-up 關鍵字）。"""
+    async def dummy_coro(*args: Any, **kwargs: Any) -> None:
+        pass
+
+    mock_cog = MagicMock()
+    mock_cog.handle_failure = MagicMock(side_effect=dummy_coro)
+
+    with patch("core.sys_inspector.notifications._GLOBAL_COG", mock_cog):
+        notify_failure_sync(
+            750,
+            error_msg=(
+                "InferenceGiveUp: Task memory-sync-1 在 1 次嘗試後徹底失敗放棄: "
+                "content_filtered: 無替代模型"
+            ),
+            trace_id="tr-filtered",
+        )
+
+    mock_cog.handle_failure.assert_not_called()
+
+
+def test_non_filter_giveup_still_notifies() -> None:
+    """非過濾類的 give-up 仍應維持原本的嚴重異常通知。"""
+    async def dummy_coro(*args: Any, **kwargs: Any) -> None:
+        pass
+
+    mock_cog = MagicMock()
+    mock_cog.handle_failure = MagicMock(side_effect=dummy_coro)
+
+    with patch("core.sys_inspector.notifications._GLOBAL_COG", mock_cog):
+        notify_failure_sync(
+            750,
+            error_msg="InferenceGiveUp: Task x 徹底失敗放棄: TimeoutError",
+            trace_id="tr-timeout",
+        )
+
+    mock_cog.handle_failure.assert_called_once()
 
 
 

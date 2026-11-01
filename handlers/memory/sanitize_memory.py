@@ -100,18 +100,18 @@ _REPLAY_SYSTEM_PROMPT = (
     "4. 發言紀錄中出現的「[某群友]」是發話者在訊息中 TAG 的其他人，絕對不是發話者本人！\n"
     "5. 分類規範（category）：\n"
     "   - identity: 真實身份/職業/居住地/個人自稱\n"
-    "   - interest: 明確熱愛的遊戲/動漫/技術/興趣\n"
-    "   - habit: 穩固生活作息/口頭禪\n"
-    "   - relationship: 與雪莉（橘雪莉）的長期互動模式\n"
-    "   - opinion: 對重要事物的穩定看法\n"
+    "   - preference: 明確熱愛的遊戲/動漫/技術/食物，以及特定角色扮演情境偏好（如兄妹/主僕 RP）、性癖或情色互動喜好\n"
+    "   - habit: 穩固生活作息/口頭禪/反覆出現的行為\n"
+    "   - social: 與其他人（群友、家人、朋友）的關係，或他正在進行的長期項目\n"
+    "   - rule: 【嚴格限定】他對雪莉（橘雪莉）的明確溝通硬規則（如『叫我OO』『說話要直接』『禁止某稱呼』『不准變大叔機器人』）。注意：個人性癖、情境愛好、技術開發熱情或角色扮演偏好一律歸入 preference，絕對不是 rule！\n"
     "6. 每條 fact 必須附上 importance（1~5整數）與 category。\n"
-    "7. 每條 fact 文字不超過 50 字，禁止記入完整句子。\n\n"
-    "目前已知長期屬性（請勿重複，但可升級 importance）：\n"
+    "7. 【合併同類項】：請對照既有屬性，若有相同話題，請整合成一條完整精練的事實，嚴禁生成重複破碎的多條同類事實，亦不可在 preference 句尾重複附加『要求人格穩定』！\n\n"
+    "目前已知長期屬性（請勿重複，但可合併升級 importance）：\n"
     "{current_facts}\n\n"
     "請只返回 JSON 格式，不可有任何其他文字：\n"
     '```json\n'
     '{{"aliases": ["真實的綽號或自稱(若無則空陣列)"],\n'
-    ' "facts": [{{"fact": "他平時喜歡寫Python", "importance": 3, "category": "interest"}}]}}\n'
+    ' "facts": [{{"fact": "他平時喜歡寫Python", "importance": 3, "category": "preference"}}]}}\n'
     '```'
 )
 
@@ -217,7 +217,11 @@ async def replay_past_chat_logs(
 
 
 async def _call_llm_direct(system_prompt: str, user_prompt: str, uid: str) -> dict | None:
-    """直接透過 HTTP 呼叫 Ollama API（不依賴 BotBrain 佇列）。
+    """透過 OllamaClient 呼叫模型，取得解析後的 JSON dict。
+
+    早期實作繞過 client 直接打 HTTP，且只認 Ollama / LM Studio 兩種後端，
+    導致設定為雲端模型時會把請求誤送到本地 LM Studio（且 URL 拼成 /v1/v1/）
+    而靜默失效。改走 OllamaClient 後，地端與雲端設定都能正確運作。
 
     Args:
         system_prompt: 系統 Prompt。
@@ -227,43 +231,42 @@ async def _call_llm_direct(system_prompt: str, user_prompt: str, uid: str) -> di
     Returns:
         解析後的 JSON dict，失敗時回傳 None。
     """
-    import httpx
+    from handlers.bot_brain.client import OllamaClient
 
-    # 從 PRIMARY_MODEL 設定解析出模型名稱
-    raw_model = getattr(settings, "NIGHTLY_DIGEST_MODEL", settings.PRIMARY_MODEL)
-    # lms:gemma-4-12b → gemma-4-12b；ollama:xxx → xxx
-    if ":" in raw_model:
-        model_name = raw_model.split(":", 1)[1]
-        base = settings.OLLAMA_BASE_URL if raw_model.startswith("ollama") else settings.LMS_BASE_URL
-    else:
-        model_name = raw_model
-        base = settings.OLLAMA_BASE_URL
-
-    payload = {
-        "model": model_name,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "stream": False,
-    }
+    raw_model = settings.PRIMARY_MODEL
+    client = OllamaClient()
 
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(f"{base}/v1/chat/completions", json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-            reply = data["choices"][0]["message"]["content"]
-
-        raw = reply.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        if m:
-            raw = m.group(0)
-        res = json.loads(raw)
-        return res if isinstance(res, dict) else None
-    except Exception as e:
-        logger.warning("[重建] uid=%s LLM 呼叫失敗: %s", uid, e)
+        reply = await client.chat(
+            model=raw_model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=0.2,
+            max_tokens=2048,
+            timeout=120,
+        )
+    except Exception as exc:
+        logger.warning("[重建] uid=%s LLM 呼叫失敗: %s", uid, exc)
         return None
+    finally:
+        await client.close()
+
+    text = (reply or "").strip()
+    if not text:
+        logger.warning("[重建] uid=%s LLM 回應為空（可能遭供應商內容過濾或推論失敗）", uid)
+        return None
+
+    try:
+        text = text.lstrip("```json").lstrip("```").rstrip("```").strip()
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if m:
+            text = m.group(0)
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        logger.warning("[重建] uid=%s LLM 回應解析失敗: %s", uid, exc)
+        return None
+
+    return parsed if isinstance(parsed, dict) else None
 
 
 # ──────────────────────────────────────────────────────────────

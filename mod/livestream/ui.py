@@ -110,17 +110,17 @@ class StreamControlView(ui.View):
         return embed
 
     @ui.button(label="▶️ 播片/串流", style=discord.ButtonStyle.success, row=0)
-    async def btn_play(self, interaction: discord.Interaction, button: ui.Button) -> None:
+    async def btn_play(self, interaction: discord.Interaction, button: ui.Button[Any]) -> None:
         """彈出播片表單。"""
         await interaction.response.send_modal(StreamPlayModal(self.cog))
 
     @ui.button(label="⏹️ 停止播放", style=discord.ButtonStyle.danger, row=0)
-    async def btn_stop(self, interaction: discord.Interaction, button: ui.Button) -> None:
+    async def btn_stop(self, interaction: discord.Interaction, button: ui.Button[Any]) -> None:
         """停止播放並切回待機畫面。"""
         await self.cog._handle_stop(interaction)
 
     @ui.button(label="🔄 重新整理", style=discord.ButtonStyle.secondary, row=0)
-    async def btn_refresh(self, interaction: discord.Interaction, button: ui.Button) -> None:
+    async def btn_refresh(self, interaction: discord.Interaction, button: ui.Button[Any]) -> None:
         """重新整理狀態。"""
         embed = self.build_dashboard_embed()
         await interaction.response.edit_message(embed=embed, view=self)
