@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from mod.market_plugin.utils import get_or_fetch_channel
+from core.concurrency import heavy_io_pool
 
 if TYPE_CHECKING:
     from discord.ext import commands
@@ -39,7 +40,7 @@ async def run_morning_verify_report(
         crypto_tickers = fetcher.get_target_crypto()
         all_tickers = list(set(ai_tickers + crypto_tickers))
 
-        prices = await bot.loop.run_in_executor(None, fetcher.get_current_prices, all_tickers)
+        prices = await bot.loop.run_in_executor(heavy_io_pool, fetcher.get_current_prices, all_tickers)
         if not prices:
             logger.warning("[market_plugin] ⚠️ 無法獲取當前價格，早報驗收延遲")
             return

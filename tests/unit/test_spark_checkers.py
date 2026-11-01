@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -445,3 +446,149 @@ async def test_weather_checker_temp_above() -> None:
     # Assert
     assert res.should_fire is True
     assert "高溫特報" in res.current_value
+
+
+# ===========================================================================
+# 5. SPARK 2.0 進階排程 (days_of_week, max_runs) 與 WebMonitor 測試
+# ===========================================================================
+
+@pytest.mark.anyio
+async def test_schedule_checker_days_of_week() -> None:
+    """測試 days_of_week 星期過濾功能。"""
+    checker = ScheduleChecker()
+    # 限制平日 0~4 (週一到週五)
+    trigger = Trigger(
+        trigger_id="s-weekdays",
+        user_id=1,
+        channel_id=1,
+        trigger_type="schedule",
+        condition={
+            "mode": "interval",
+            "interval_minutes": 10,
+            "days_of_week": [0, 1, 2, 3, 4],
+        },
+        last_triggered_at="",
+    )
+
+    # 模擬週六 (2026-10-17 is Saturday, weekday=5)
+    saturday_dt = datetime(2026, 10, 17, 10, 0, 0, tzinfo=timezone.utc)
+    res_sat = await checker.should_fire(trigger, now_dt=saturday_dt)
+    assert res_sat.should_fire is False
+    assert "星期" in res_sat.current_value
+
+    # 模擬週一 (2026-10-19 is Monday, weekday=0)
+    monday_dt = datetime(2026, 10, 19, 10, 0, 0, tzinfo=timezone.utc)
+    res_mon = await checker.should_fire(trigger, now_dt=monday_dt)
+    assert res_mon.should_fire is True
+
+
+@pytest.mark.anyio
+async def test_schedule_checker_max_runs() -> None:
+    """測試 max_runs 上限判定與 one_shot_fired 自動標記。"""
+    checker = ScheduleChecker()
+
+    # 1. 已達上限
+    trigger_maxed = Trigger(
+        trigger_id="s-maxed",
+        user_id=1,
+        channel_id=1,
+        trigger_type="schedule",
+        condition={"mode": "interval", "interval_minutes": 10, "max_runs": 3},
+        extra_data={"run_count": 3},
+    )
+    res_maxed = await checker.should_fire(trigger_maxed)
+    assert res_maxed.should_fire is False
+    assert "已達執行次數上限" in res_maxed.current_value
+
+    # 2. 這是第 3 次（達到上限，本次觸發後應 auto-pause）
+    trigger_last_run = Trigger(
+        trigger_id="s-last-run",
+        user_id=1,
+        channel_id=1,
+        trigger_type="schedule",
+        condition={"mode": "interval", "interval_minutes": 10, "max_runs": 3},
+        extra_data={"run_count": 2},
+        last_triggered_at="",
+    )
+    res_last = await checker.should_fire(trigger_last_run)
+    assert res_last.should_fire is True
+    assert res_last.detail_data.get("one_shot_fired") is True
+
+
+class FakeWebMonitorClient:
+    """測試專用 Web 檢索客戶端。"""
+
+    def __init__(self, results: list[dict[str, Any]]) -> None:
+        self.results = results
+
+    async def search(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        return self.results
+
+
+@pytest.mark.anyio
+async def test_web_monitor_checker_deduplication() -> None:
+    """測試 WebMonitorChecker 內容指紋比對與去重機制。"""
+    from handlers.spark.checkers.web_monitor_checker import WebMonitorChecker
+
+    initial_results = [
+        {"title": "美國最新CPI公布", "snippet": "年增2.4%符合市場預期", "url": "https://news.example/1"},
+    ]
+    client = FakeWebMonitorClient(initial_results)
+    checker = WebMonitorChecker(web_client=client)
+
+    trigger = Trigger(
+        trigger_id="wm-1",
+        user_id=1,
+        channel_id=1,
+        trigger_type="web_monitor",
+        condition={"query": "CPI", "interval_minutes": 10},
+    )
+
+    # 1. 首次檢索 -> 應觸發
+    res1 = await checker.should_fire(trigger)
+    assert res1.should_fire is True
+    content_hash = res1.detail_data.get("last_content_hash")
+    assert content_hash
+
+    # 2. 第二次檢索，指紋一致 -> 不觸發
+    trigger.condition["last_content_hash"] = content_hash
+    res2 = await checker.should_fire(trigger)
+    assert res2.should_fire is False
+    assert "內容無新變化" in res2.current_value
+
+    # 3. 內容更新（出現重大降息新情報） -> 重新觸發
+    client.results = [
+        {"title": "聯準會突宣布降息兩碼", "snippet": "主席鮑爾發表演說", "url": "https://news.example/2"},
+    ]
+    res3 = await checker.should_fire(trigger)
+    assert res3.should_fire is True
+    assert res3.detail_data.get("last_content_hash") != content_hash
+
+
+@pytest.mark.anyio
+async def test_web_monitor_checker_ai_condition() -> None:
+    """測試 WebMonitorChecker 的 AI 語意守門員過濾。"""
+    from handlers.spark.checkers.web_monitor_checker import WebMonitorChecker
+
+    client = FakeWebMonitorClient([
+        {"title": "美股盤後分析", "snippet": "今日成交量平淡", "url": "https://news.example/3"},
+    ])
+
+    mock_evaluator = MagicMock()
+    # 語意條件不滿足
+    mock_evaluator.evaluate = AsyncMock(return_value=(False, "無重大突破或數據發布"))
+
+    checker = WebMonitorChecker(web_client=client, ai_evaluator=mock_evaluator)
+    trigger = Trigger(
+        trigger_id="wm-eval",
+        user_id=1,
+        channel_id=1,
+        trigger_type="web_monitor",
+        condition={"query": "CPI", "ai_condition": "重大突破或數據發布"},
+    )
+
+    res = await checker.should_fire(trigger)
+    assert res.should_fire is False
+    assert "未滿足語意過濾條件" in res.current_value
+    mock_evaluator.evaluate.assert_awaited_once()
+

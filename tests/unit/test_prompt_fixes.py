@@ -52,6 +52,50 @@ class TestPromptFixes(unittest.TestCase):
         self.assertIn("2026", _TICKER_EXTRACT_SYSTEM_PROMPT)
         self.assertIn("誤識別為股票代號", _TICKER_EXTRACT_SYSTEM_PROMPT)
 
+    def test_common_rules_length_and_action_simplicity(self) -> None:
+        """驗證通用互動規則包含日常閒聊簡短有溫度與動作描寫嚴格從簡之規範。"""
+        common_rules = _load_common_rules()
+        self.assertIn("日常閒聊篇幅鐵則", common_rules)
+        self.assertIn("保持簡短有溫度（約 30～80 字、1～3 句話為佳）", common_rules)
+        self.assertIn("動作描寫嚴格從簡", common_rules)
+        self.assertIn("至多偶爾帶 1 個簡短神態或動作點綴", common_rules)
+        self.assertIn("撰寫大段小說式的心理活動", common_rules)
+
+    def test_sherry_soul_concise_chat(self) -> None:
+        """驗證雪莉預設靈魂包含日常對話活潑簡短（1~3句為佳）之設定。"""
+        sherry_soul = _load_soul_persona_by_name("manosaba_sherry_default.md")
+        self.assertIn("日常對話保持活潑簡短（1~3句為佳）", sherry_soul)
+
+    def test_lorebook_detail_expansion_turn_isolation(self) -> None:
+        """驗證細節擴展指令僅在當前提問明確要求時觸發，不會被普通詞彙或歷史紀錄誤觸發。"""
+        from handlers.social.persona import build_dynamic_persona
+
+        # 1. 普通詞彙（如「清楚」、「具體」）不應觸發細節擴展指令
+        _, tail_lore_normal = build_dynamic_persona(
+            current_text="我想了解情況，請你說清楚具體一點",
+            intent_name="CHAT",
+            user_query="我想了解情況，請你說清楚具體一點",
+        )
+        self.assertNotIn("【⚠️細節擴展指令】", tail_lore_normal)
+
+        # 2. 明確要求「詳細說明」時應正確觸發
+        _, tail_lore_detail = build_dynamic_persona(
+            current_text="請詳細說明這個案件的經過",
+            intent_name="CHAT",
+            user_query="請詳細說明這個案件的經過",
+        )
+        self.assertIn("【⚠️細節擴展指令】", tail_lore_detail)
+
+        # 3. 歷史紀錄中雖有「詳細說明」，但當前輪次只是閒聊時，不應殘留觸發
+        history_context = "User: 請詳細說明案件\nBot: 詳細內容如下...\nUser: 那漢娜今天心情如何？"
+        _, tail_lore_history = build_dynamic_persona(
+            current_text=history_context,
+            intent_name="CHAT",
+            user_query="那漢娜今天心情如何？",
+        )
+        self.assertNotIn("【⚠️細節擴展指令】", tail_lore_history)
+
+
 
 if __name__ == "__main__":
     unittest.main()

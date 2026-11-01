@@ -8,16 +8,23 @@ class TextToSpeech:
     def __init__(self) -> None:
         try:
             from TTS.api import TTS
+            import torch
             import settings
+
+            # 依設備可用性自動決定執行端，避免在無 GPU 環境拋出異常
+            req_device = getattr(settings, "VOICE_TTS_DEVICE", "cuda").lower()
+            device = "cuda" if (req_device == "cuda" and torch.cuda.is_available()) else "cpu"
+
             # 確保模型路徑存在，或是依賴線上自動下載
-            self._model = TTS(model_name=settings.VOICE_TTS_MODEL_NAME, progress_bar=False).to("cuda")
+            self._model = TTS(model_name=settings.VOICE_TTS_MODEL_NAME, progress_bar=False).to(device)
             self.language = settings.VOICE_TTS_LANGUAGE
             self.speaker_wav = settings.VOICE_TTS_SPEAKER_WAV
+            self.device = device
             
             if not os.path.exists(self.speaker_wav):
                 logger.warning(f"TTS 聲音樣本不存在: {self.speaker_wav}")
                 
-            logger.info("TTS 模型加載成功")
+            logger.info("TTS 模型加載成功 (Device: %s)", device)
         except ImportError:
             logger.error("TTS 套件未安裝")
             self._model = None
@@ -51,8 +58,10 @@ class TextToSpeech:
         """卸載 TTS 語音模型並釋放 GPU 快取顯存。"""
         self._model = None
         try:
+            import gc
             import torch
+            gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-        except ImportError:
+        except (ImportError, Exception):
             pass

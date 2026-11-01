@@ -25,6 +25,7 @@ Pillow>=12.3.0
 imageio-ffmpeg>=0.6.0
 
 # Voice system (STT / TTS)
+discord-ext-voice-recv>=0.5.2a179
 transformers>=4.40.0
 huggingface_hub>=0.23.0
 TTS>=0.22.0

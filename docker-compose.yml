@@ -9,7 +9,20 @@ services:
       WEB_UI_HOST: 0.0.0.0
       WEB_UI_PORT: "8763"
     ports:
-      - "8763:8763"
+      - "127.0.0.1:8763:8763"
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+    mem_limit: 4G
+    cpus: 4
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8763/api/version')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

@@ -71,8 +71,29 @@ class IntegratedStrategy(BaseDispatchStrategy):
             "CHAT",
             channel_id=channel_id,
             server_id=str(message.guild.id) if message.guild else "",
+            user_query=clean_query,
+            bot=bot,
+            guild_id=message.guild.id if message.guild else None,
         )
         memory_block = build_user_memory_block(bot, user_id, display_name, query_text=clean_query)
+
+        if session and session.is_enabled:
+            pre_steps: list[tuple[str, str] | tuple[str, str, int | None]] = []
+            vibe_hint = "感知群聊話題氛圍與對話脈絡" if vibe_snippet else "解析對話情境與話題脈絡"
+            query_len = len(clean_query.strip())
+            pre_steps.append(("intent", f"{vibe_hint} (長度: {query_len} 字)"))
+
+            if memory_block and memory_block.strip():
+                mem_lines = [line.strip() for line in memory_block.splitlines() if line.strip().startswith("-")]
+                mem_count = len(mem_lines) if mem_lines else 1
+                pre_steps.append(("memory", f"檢索群友 [{display_name}] 互動記憶 ({mem_count} 筆相關事實與親密度)"))
+            else:
+                pre_steps.append(("memory", f"檢索群友 [{display_name}] 互動記錄 (無特定前置印象，啟用通用社交模型)"))
+
+            if images or active_vis:
+                pre_steps.append(("vision", "載入多模態圖像線索與名偵探特徵感知"))
+
+            session.push_steps(pre_steps)
 
         vibe_block = (
             "【頻道近期話題氛圍】(這只是讓妳用來讀空氣的背景氣氛！)\n"
@@ -97,9 +118,9 @@ class IntegratedStrategy(BaseDispatchStrategy):
             )
 
         length_rule = (
-            "2. 【自然生動的對話】：請徹底貫徹妳當前的角色人設特質與語氣風格進行對話。"
-            "日常打招呼、簡短問候或隨意閒聊請自然流暢回覆（約 1～2 句話即可，不刻意冗長展開）；"
-            "遇到深入討論、特定問題或心情分享時再充分表達想法與情緒。"
+            "2. 【自然生動且精準的篇幅】：徹底貫徹角色個性與說話口吻。\n"
+            "   - 【日常互動與閒聊】：篇幅請保持精簡自然（約 30~80 字，1~3 句話為佳），有溫度且口語化，如同身邊好友面對面隨口交流。可帶至多 1 個簡短神態或動作點綴，嚴禁輸出大段小說式心理戲、繁冗動作描寫或說教式長文！\n"
+            "   - 【分析、搜尋與深度解答】：僅在處理工具回傳數據（如情報搜尋、股票分析、長文總結）或對方明確要求「詳細說明/深度分析」時，才展開條理分明、豐富詳實的完整回答。"
         )
 
         cot_instruction = ""
@@ -187,6 +208,7 @@ class IntegratedStrategy(BaseDispatchStrategy):
             timeout=float(settings.OLLAMA_TIMEOUT),
             images=images,
             stream_callback=stream_cb,
+            user_id=message.author.id,
         )
 
         # ── 【降級防護：Pass-1 規劃空回覆時，跳過工具規劃直接合成回覆】 ───────

@@ -1,0 +1,55 @@
+TITLE:橘雪莉 Sherry — Discord AI Companion & Agent Platform
+SUB:個人專案作品集｜後端 / AI 應用工程｜Python · discord.py · Quart · asyncio · LLM
+P:姓名：【請填寫】　｜　Email：【請填寫】　｜　GitHub：https://github.com/YuuuuutoOuO/Sherry-An-AI-Companion-Platform
+H1:專案簡介
+P:橘雪莉是一個擁有獨立人設（Soul）、會讀空氣、能自我反思的 Discord 虛擬群友與全能 AI 代理人（Agent）平台。系統整合 8 種 LLM 推理後端（Ollama / LM Studio / vLLM / OpenRouter / OpenAI / Gemini / DeepSeek / Claude），提供長期記憶、工具呼叫、語音互動、音樂播放、深度研究、數位繪圖與 Web 管理後台，並支援 Windows / Linux / Docker 部署。
+P:專案自 2025 年起持續開發迭代至 v1.10.0，累積約 600+ 次 Git commit、約 11 萬行 Python 程式碼，並建置 CI（GitHub Actions）、pre-commit、mypy 與 Import-Linter 架構邊界檢查。
+H1:專案資訊
+B:角色：獨立設計與開發（架構、後端、LLM 應用、Web UI、部署與維運）
+B:技術棧：Python 3.10–3.12、discord.py 2.x、asyncio、Quart（Web UI）、SQLite（WAL）、FFmpeg、Docker / docker-compose、GitHub Actions
+B:AI 相關：多 LLM 供應商抽象、Prompt Caching / KV Cache 前綴對齊、Tool Calling（Two-Pass Agent）、長期記憶與 Top-K 檢索、STT / TTS / VAD 語音管線、Stable Diffusion 繪圖整合
+IMG:【圖片位置 1】系統整體架構圖（可貼 README 中的 Mermaid 架構圖或分層架構示意圖）
+H1:核心技術亮點
+H2:1. 分層解耦的微核心架構（Clean Architecture）
+B:設計 App / Core / Handlers / Mod 四層架構：Orchestrator 抽離至應用層以消除循環依賴；Core 提供 Contracts、DB、Guard、Registry、State、Recovery 等基礎能力。
+B:採用依賴倒置（IoC）與 Composition Root 注入客戶端，並以 Import-Linter 契約在 CI 強制檢查層間邊界，避免架構腐化。
+B:10 個可插拔擴充模組（Mod）：深度研究、數位繪圖、實況劇院、股市虛擬交易、情報哨兵、D&D 跑團、小遊戲、YouTube 轉 GIF 等，與核心鬆耦合。
+H2:2. LLM 推理效能最佳化（KV Cache / Prefix Caching）
+B:提出 Zone 1（靜態：Soul 人設 + 精簡工具索引）/ Zone 2（動態：Vibe、歷史對話、記憶、世界觀）的 Prompt 分區策略，使 Pass-1（規劃）與 Pass-2（人格生成）的系統前綴 100% 位元組對齊。
+B:Pass-2 可直接命中 Pass-1 建立的 5,500+ tokens 快取，免除二次 Prefill，TTFT 降至 < 200ms。
+B:將工具 Prompt 精簡為 Compact Tool Index，每輪節省 900+ tokens；高頻查詢（記憶、股市）加入 Tier-1 TTL 快取，並以 asyncio.gather 並行調度工具。
+IMG:【圖片位置 2】KV Cache 對齊流程圖 / 推理延遲（TTFT、cache_hit_ratio）前後對比截圖
+H2:3. 系統自癒與重啟復原框架（Resilience & Recovery）
+B:設計 core/recovery：以 SQLite WAL 持久化狀態快照（RecoveryStorage），開機時由 BootReconciler 進行冪等對帳，並加入 Crash-Loop 保護（短時間連續失敗 ≥ 2 次自動隔離，避免重啟迴圈）。
+B:音樂播放斷點續播：重啟後自動重進語音頻道，並以 FFmpeg -ss 秒級接播、清理舊控制卡片。
+B:AI 任務中斷復原：以 InFlightTaskRegistry 追蹤進行中的推理任務；短暫重啟（< 45s）自動重算並原地覆寫答案，超時則優雅更新訊息，消除殭屍 Loading 訊息；以 Semaphore 節流避免重啟後請求風暴。
+IMG:【圖片位置 3】自癒流程圖 / 工作與自癒中樞（/tasks）畫面截圖
+H2:4. 長期記憶與 Agent 工具系統
+B:長期記憶萃取、物理消毒與世界記憶；以相關度 + 重要性加權（rank = base_importance + relevance × 5.0）進行 Top-K 檢索，僅注入最相關記憶。
+B:Two-Pass Agent：Pass-1 規劃並決定是否呼叫工具，Pass-2 以人格口吻整合結果；支援 Action Early Termination 以縮短回應時間。
+B:LiveThinkingSession 即時展示思維鏈（message.edit）、SmartMessageDispatcher 處理 Discord 2000 字上限的智慧分段。
+H2:5. 條件觸發推播（SPARK）與全景監控（APM）
+B:SPARK 核心：支援價格監控、定期排程、RSS、天氣劇變 4 種觸發器，結合 NLP 自然語言意圖解析、智慧冷卻與防過度推播。
+B:建立微觀延遲遙測（ttft_ms、prefill_latency_ms、decode_latency_ms、cache_hit_ratio）、健康哨兵與 /self-monitoring 稽核指令；ERROR 與系統警報自動私訊管理員。
+IMG:【圖片位置 4】SPARK 管理看板（spark.html）或系統監控 / 延遲遙測截圖
+H2:6. 多模態與擴充功能
+B:語音：STT / TTS / VAD 語音通話，含 FFmpeg 行程自癒與異常斷線處理。
+B:深度研究（地端 LLM 多輪檢索產出報告）、數位畫布繪圖、美股虛擬量化交易（持倉、損益與 AI 決策歷程）、D&D 跑團系統。
+IMG:【圖片位置 5】Discord 實際對話 / 音樂控制卡片 / 繪圖作品截圖
+H2:7. Web UI 2.0 管理後台
+B:以 Quart 開發全域設定線上熱編輯後台，涵蓋工作與自癒中樞、深度研究控制台、畫畫工作室、吐槽管理、虛擬炒股、系統資源圖表與 SPARK 推播看板。
+B:管理員審計日誌：記錄登入 IP、來源網路標籤（Localhost / Radmin / LAN）、裝置系統與操作時間軸。
+IMG:【圖片位置 6】Web UI 後台畫面截圖（首頁 / 任務中樞 / 系統監控）
+H1:工程實踐與 DevOps
+B:CI/CD：GitHub Actions 自動化檢查；pre-commit、mypy 型別檢查、Import-Linter 架構契約。
+B:部署：Dockerfile / docker-compose，提供 Windows 與 Linux 的啟動、重啟與更新腳本；以 requirements.lock 鎖定依賴版本。
+B:遵循 Git Commit 規範，維護完整技術文件（Docs/）與版本歷程。
+H1:成果與收穫
+B:實作並驗證 Prefix Caching 對齊策略，將二階段 Agent 的第二階段首字延遲降至 200ms 以下。
+B:將「自癒」概念落實於 Bot 服務：服務重啟後音樂、AI 推理任務可無痛接續，提升可用性。
+B:完整經歷需求分析、架構設計、效能調校、監控、部署到長期維運的全流程，具備獨立交付中大型 AI 應用的能力。
+H1:面試可延伸講述的主題
+B:為何採用 Zone 1 / Zone 2 分區？如何確保前綴位元組級一致？
+B:如何設計冪等的開機對帳與 Crash-Loop 保護？
+B:asyncio 優先權佇列與 Semaphore 在高並發 LLM 呼叫下的取捨。
+B:多 LLM 供應商抽象與容錯策略。

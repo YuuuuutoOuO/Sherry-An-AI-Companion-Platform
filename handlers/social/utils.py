@@ -7,6 +7,7 @@ from typing import Any
 import discord
 import settings
 from handlers.social.observability import log_event
+from handlers.social.persona_guard import sanitize_reply
 
 logger = logging.getLogger(__name__)
 
@@ -27,24 +28,77 @@ _TOOL_REPLY_REGEX = re.compile(
 )
 
 
-def is_admin_user(target: discord.Member | discord.User | discord.Interaction | None) -> bool:
-    """判斷目標使用者或 Interaction 是否具備管理員權限。
+def is_bot_super_admin(target: discord.Member | discord.User | discord.Interaction | None) -> bool:
+    """判斷目標使用者或 Interaction 是否具備全域機器人超級管理員權限 (Bot SuperAdmin)。
 
-    相容 discord.Interaction、discord.Member 與 discord.User。
-    判定依序：
-    1. settings.ADMIN_USER_IDS 明確指定的使用者。
-    2. 伺服器擁有者 (Guild Owner)。
-    3. 具備 Discord 原生 Administrator（系統管理員）權限之成員。
-    4. settings.ADMIN_ROLE_IDS 明確指定之管理身分組成員。
-    遵循安全原則預設拒絕（Fail-Closed）：若皆不符合，判定為無權限。
+    僅驗證全域 settings.ADMIN_USER_IDS 與 settings.ADMIN_ROLE_IDS。
+    不包含單一 Discord 伺服器之 Administrator 或 Server Owner。
 
     Args:
         target: Discord Interaction、Member 或 User 物件。
 
     Returns:
-        bool: 是否具備管理員權限。
+        bool: 是否為全域超級管理員。
     """
     if target is None:
+        return False
+
+    user: discord.Member | discord.User
+    if isinstance(target, discord.Interaction):
+        user = target.user
+    elif isinstance(target, discord.Member):
+        user = target
+    else:
+        user = target
+
+    user_id = getattr(user, "id", None)
+    if user_id is None:
+        return False
+
+    # 1. 顯式全域管理員 ID
+    admin_uids = getattr(settings, "ADMIN_USER_IDS", [])
+    if isinstance(admin_uids, int) and user_id == admin_uids:
+        return True
+    if isinstance(admin_uids, (list, tuple, set)) and user_id in admin_uids:
+        return True
+
+    # 2. 顯式指定之管理身分組 (ADMIN_ROLE_IDS)
+    if settings.ADMIN_ROLE_IDS and hasattr(user, "roles"):
+        roles = getattr(user, "roles", None)
+        if isinstance(roles, (list, tuple, set)):
+            return any(getattr(r, "id", None) in settings.ADMIN_ROLE_IDS for r in roles if hasattr(r, "id"))
+
+    return False
+
+
+def is_admin_user(
+    target: discord.Member | discord.User | discord.Interaction | None,
+    super_admin_only: bool = False,
+) -> bool:
+    """判斷目標使用者或 Interaction 是否具備管理員權限。
+
+    相容 discord.Interaction、discord.Member 與 discord.User。
+    判定依序：
+    1. settings.ADMIN_USER_IDS 明確指定的使用者。
+    2. settings.ADMIN_ROLE_IDS 明確指定之管理身分組成員。
+    3. （若 super_admin_only=False）伺服器擁有者 (Guild Owner)。
+    4. （若 super_admin_only=False）具備 Discord 原生 Administrator 權限之成員。
+    遵循安全原則預設拒絕（Fail-Closed）：若皆不符合，判定為無權限。
+
+    Args:
+        target: Discord Interaction、Member 或 User 物件。
+        super_admin_only: 若為 True，僅允許全域 Bot 超級管理員。
+
+    Returns:
+        bool: 是否具備相應之管理員權限。
+    """
+    if target is None:
+        return False
+
+    if is_bot_super_admin(target):
+        return True
+
+    if super_admin_only:
         return False
 
     user: discord.Member | discord.User
@@ -56,28 +110,19 @@ def is_admin_user(target: discord.Member | discord.User | discord.Interaction | 
         user = target
         guild = target.guild
     else:
-        user = target
+        user = target  # type: ignore
+    user_id = getattr(user, "id", None)
+    if user_id is None:
+        return False
 
-    # 1. 顯式全域管理員 ID
-    admin_uids = getattr(settings, "ADMIN_USER_IDS", [])
-    if isinstance(admin_uids, int) and user.id == admin_uids:
-        return True
-    if isinstance(admin_uids, (list, tuple, set)) and user.id in admin_uids:
-        return True
-
-    # 2. 伺服器擁有者 (Guild Owner)
-    if guild and getattr(guild, "owner_id", None) == user.id:
+    # 3. 伺服器擁有者 (Guild Owner)
+    if guild and getattr(guild, "owner_id", None) == user_id:
         return True
 
-    # 3. Discord 原生 Administrator 權限
+    # 4. Discord 原生 Administrator 權限
     perms = getattr(user, "guild_permissions", None)
     if perms and getattr(perms, "administrator", False):
         return True
-
-    # 4. 顯式指定之管理身分組 (ADMIN_ROLE_IDS)
-    if settings.ADMIN_ROLE_IDS and hasattr(user, "roles"):
-        roles = getattr(user, "roles", [])
-        return any(getattr(r, "id", None) in settings.ADMIN_ROLE_IDS for r in roles)
 
     return False
 
@@ -243,6 +288,178 @@ class ContextCompressionCache:
 # 對話濃縮的記憶體 LRU + 水位快取
 _CONTEXT_COMPRESS_CACHE = ContextCompressionCache(capacity=256, default_ttl=60.0)
 
+# 回覆引用區塊的內容上限：避免引用一則超長公告時吃掉整個 Prompt。
+REPLY_QUOTE_MAX_CHARS: int = 500
+
+
+def _quoted_message_text(msg: Any) -> str:
+    """取出被引用訊息的可用文字；沒有純文字時退回 Embed／附件／貼圖描述。"""
+    text = getattr(msg, "clean_content", "") or getattr(msg, "content", "")
+    text = str(text).strip()
+    if text:
+        return text
+
+    embeds = getattr(msg, "embeds", None) or []
+    if embeds:
+        parts: list[str] = []
+        for embed in embeds[:2]:
+            title = str(getattr(embed, "title", "") or "").strip()
+            desc = str(getattr(embed, "description", "") or "").strip()
+            joined = "｜".join(p for p in (title, desc) if p)
+            if joined:
+                parts.append(joined)
+        if parts:
+            return "（內嵌資訊卡：" + " / ".join(parts) + "）"
+        return "（貼了一張資訊卡或圖片）"
+
+    attachments = getattr(msg, "attachments", None) or []
+    if attachments:
+        names = [str(getattr(a, "filename", "") or "檔案") for a in attachments[:3]]
+        return "（附件：" + "、".join(names) + "）"
+
+    stickers = getattr(msg, "stickers", None) or []
+    if stickers:
+        names = [str(getattr(s, "name", "") or "貼圖") for s in stickers[:3]]
+        return "（貼圖：" + "、".join(names) + "）"
+
+    return ""
+
+
+async def resolve_reply_reference(message: Any) -> Any | None:
+    """盡力取得「這則訊息所回覆的原訊息」。
+
+    Discord 的 ``message.reference.resolved`` 只有在事件當下就載入到原訊息
+    （或原訊息仍在客戶端快取）時才有值；機器人重啟後、或回覆幾小時前的舊訊息
+    時通常是 ``None``。此時必須主動 ``fetch_message`` 補抓，否則呼叫端會誤以為
+    「這則訊息沒有在回覆任何人」。
+
+    Args:
+        message: 觸發的 Discord 訊息。
+
+    Returns:
+        原訊息物件；取不到（無引用、已刪除、權限不足）時回傳 None。
+    """
+    reference = getattr(message, "reference", None)
+    if reference is None:
+        return None
+
+    # 轉發（forward）不是回覆，原訊息通常也不存在，直接略過。
+    if getattr(getattr(reference, "type", None), "name", "") == "forward":
+        return None
+
+    resolved = getattr(reference, "resolved", None)
+    if isinstance(resolved, discord.Message):
+        return resolved
+    if isinstance(resolved, discord.DeletedReferencedMessage):
+        # Discord 已告知原訊息被刪除，再打 API 只會拿到 404。
+        return None
+
+    message_id = getattr(reference, "message_id", None)
+    if message_id is None:
+        return None
+
+    channel = getattr(message, "channel", None)
+    ref_channel_id = getattr(reference, "channel_id", None)
+    channel_id = getattr(channel, "id", None)
+    if (
+        channel is not None
+        and ref_channel_id is not None
+        and channel_id is not None
+        and str(ref_channel_id) != str(channel_id)
+    ):
+        # 跨頻道／討論串引用：改從原訊息所在的頻道抓。
+        guild = getattr(channel, "guild", None)
+        getter = getattr(guild, "get_channel_or_thread", None) if guild is not None else None
+        if callable(getter):
+            try:
+                target = getter(int(ref_channel_id))
+            except (TypeError, ValueError):
+                target = None
+            if target is not None and hasattr(target, "fetch_message"):
+                channel = target
+
+    if channel is None or not hasattr(channel, "fetch_message"):
+        return None
+
+    try:
+        return await channel.fetch_message(message_id)
+    except Exception as exc:  # NotFound / Forbidden / HTTPException 一律視為讀不到
+        logger.debug("resolve_reply_reference: 補抓引用訊息失敗 (id=%s): %s", message_id, exc)
+        return None
+
+
+async def build_reply_quote_context(
+    message: Any,
+    *,
+    bot_user_id: int | str | None = None,
+    max_chars: int = REPLY_QUOTE_MAX_CHARS,
+) -> str:
+    """把「使用者這則訊息正在回覆哪一則訊息」整理成 LLM 看得懂的引用區塊。
+
+    只依賴 ``message.reference.resolved`` 是不夠的：重啟後或回覆舊訊息時它會是
+    ``None``，導致雪莉看不到被引用的內容，只能對「所以誰再買」這類追問瞎猜。
+    本函式會在 resolved 失效時主動補抓，並明確告訴模型「現在這句話是在針對那則
+    訊息」，讓回覆聚焦在同一個話題上。
+
+    Args:
+        message: 觸發的 Discord 訊息。
+        bot_user_id: 雪莉自己的 ID，用來標示「被引用的是妳自己說過的話」。
+        max_chars: 引用內容的字數上限。
+
+    Returns:
+        str: 可直接塞進 Prompt 的引用區塊；這則訊息不是回覆時回傳空字串。
+    """
+    reference = getattr(message, "reference", None)
+    if reference is None:
+        return ""
+
+    ref_msg = await resolve_reply_reference(message)
+    if ref_msg is None:
+        if getattr(reference, "message_id", None) is None:
+            return ""
+        return (
+            "【對方這句是回覆某一則訊息】\n"
+            "- 但雪莉讀不到被引用的原訊息（可能已被刪除或權限不足）。\n"
+            "→ 請依現有對話脈絡回應；若真的無法判斷對方在指哪一則，就直接反問，不要憑空編造。"
+        )
+
+    author = getattr(ref_msg, "author", None)
+    author_id = getattr(author, "id", None)
+    is_self = bool(
+        bot_user_id is not None
+        and author_id is not None
+        and str(author_id) == str(bot_user_id)
+    )
+    name = str(
+        getattr(author, "display_name", "") or getattr(author, "name", "") or "群友"
+    )
+    who = "雪莉妳自己" if is_self else name
+
+    content = _quoted_message_text(ref_msg)
+    if len(content) > max_chars:
+        content = content[:max_chars] + "……（原訊息過長，已截斷）"
+    if not content:
+        content = "（原訊息沒有可讀的文字內容）"
+
+    lines = [
+        "【使用者這句話是「回覆」下面這則訊息】",
+        f"- 原訊息作者：{who}",
+        f"- 原訊息內容：「{content}」",
+    ]
+    created_at = getattr(ref_msg, "created_at", None)
+    if created_at is not None:
+        try:
+            lines.append(f"- 原訊息時間：{created_at.astimezone().strftime('%Y-%m-%d %H:%M')}")
+        except Exception:
+            pass
+    if is_self:
+        lines.append("→ 對方是在針對妳自己剛才說過的話追問、吐槽或補充，請延續那個話題回答。")
+    else:
+        lines.append(
+            "→ 對方是在針對上面那則訊息追問、吐槽或補充，請把兩者當成同一個話題回答，不要另開新話題。"
+        )
+    return "\n".join(lines)
+
 
 async def fetch_context_script(
     channel: Any,
@@ -306,9 +523,11 @@ async def fetch_context_script(
             else:
                 return ""
 
-        # 分辨出功能模組產生的回覆，展示中立佔位符而不是內容
+        # 保留「雪莉剛剛做了什麼」的簡短線索，而不是整段抹除。
+        # 這樣她才能回答「你剛剛播什麼歌」，同時避免長篇罐頭訊息吃掉 context。
         if is_self and _TOOL_REPLY_REGEX.search(content):
-            content = "（妳執行了一個功能指令，細節已略去）"
+            short = re.sub(r"\s+", " ", content).strip()
+            content = f"（妳剛才執行了功能：{short[:60]}）"
         elif len(content) > 300:
             content = content[:300] + " ...(過長截斷)"
 
@@ -459,7 +678,7 @@ async def _summarize_context(bot: Any, raw_context: str) -> str:
     try:
         from handlers.bot_brain import InferenceTask
 
-        model = getattr(settings, "CONTEXT_COMPRESS_MODEL", "") or getattr(settings, "PRIMARY_MODEL", "")
+        model = settings.PRIMARY_MODEL
         sys_prompt = (
             "你是一個中立、客觀的對話摘要工具。「不要」扮演任何角色或性格。\n"
             "請把以下群組聊天內容，濃縮成一段精簡的繁體中文『話題摘要』。\n"
@@ -475,7 +694,7 @@ async def _summarize_context(bot: Any, raw_context: str) -> str:
                 done.set_result(reply.strip())
 
         task = InferenceTask(
-            priority=20,
+            priority=settings.priority_for(settings.Priority.TOOL_BACKGROUND),
             system_prompt=sys_prompt,
             user_prompt=f"對話：\n{raw_context[:3000]}\n\n請輸出濃縮摘要：",
             callback=_on_reply,
@@ -526,7 +745,8 @@ async def fetch_recent_script(channel: Any, limit: int) -> str:
                 continue
 
         if is_self and _TOOL_REPLY_REGEX.search(content):
-            content = "（妳執行了一個功能指令，細節已略去）"
+            short = re.sub(r"\s+", " ", content).strip()
+            content = f"（妳剛才執行了功能：{short[:60]}）"
         elif len(content) > 300:
             content = content[:300] + " ...(過長截斷)"
 
@@ -666,6 +886,7 @@ def format_thinking_steps_block(
     thought_ms: int | None = None,
     tool_steps: list[Any] | None = None,
     generation_ms: int | None = None,
+    generation_chars: int | None = None,
 ) -> str:
     """建構精美步驟化思考推演 Markdown 區塊 (方案 A 模式)。
 
@@ -679,6 +900,7 @@ def format_thinking_steps_block(
         thought_ms: 心智思考推演耗時（毫秒，可選）。
         tool_steps: 工具調用或執行步驟紀錄列表（可選）。
         generation_ms: 最終對話生成耗時（毫秒，可選）。
+        generation_chars: 生成對話總字元數（可選）。
 
     Returns:
         str: Markdown 引用格式之思考與步驟區塊。
@@ -709,6 +931,12 @@ def format_thinking_steps_block(
 
                 if stype == "plan":
                     steps.append(f"> {num_emoji} 📋 **意圖拆解 [Plan]**：{dur_str}{clean_text}")
+                elif stype in ("context", "intent"):
+                    steps.append(f"> {num_emoji} 📋 **對話語境與意圖 [Context & Intent]**：{dur_str}{clean_text}")
+                elif stype == "memory":
+                    steps.append(f"> {num_emoji} 🧠 **長期記憶檢索 [Memory]**：{dur_str}{clean_text}")
+                elif stype == "vision":
+                    steps.append(f"> {num_emoji} 👁️ **多模態視覺感知 [Vision]**：{dur_str}{clean_text}")
                 elif stype in ("action", "obs"):
                     steps.append(f"> {num_emoji} 🛠️ **工具與觀測 [Action & Obs]**：{dur_str}{clean_text}")
                 elif stype == "persona":
@@ -733,7 +961,11 @@ def format_thinking_steps_block(
 
         # 4. 生成回覆 (Generation)
         if generation_ms is not None:
-            steps.append(f"> {num_emojis[min(step_idx - 1, 7)]} ✨ **生成回覆 [Generation]**：`{generation_ms} ms`")
+            speed_str = ""
+            if generation_chars and generation_chars > 0 and generation_ms > 0:
+                speed = generation_chars / (generation_ms / 1000.0)
+                speed_str = f" (共 {generation_chars} 字 • {speed:.1f} 字/秒)"
+            steps.append(f"> {num_emojis[min(step_idx - 1, 7)]} ✨ **生成回覆 [Generation]**：`{generation_ms} ms`{speed_str}")
         else:
             steps.append(f"> {num_emojis[min(step_idx - 1, 7)]} ✨ **完成輸出 [Done]**：已生成回覆")
 
@@ -814,6 +1046,13 @@ async def simulate_typing_and_send(
 
     if not final_reply or not final_reply.strip():
         final_reply = "（盯——你這是在說甚麼難懂的話呢！）"
+
+    # R22：所有一般聊天出口共用同一道人設守門；偵測到客服腔／AI 宣告時
+    # 以安全短句降級，並將案例寫入 eval_runner 回歸集。
+    final_reply = sanitize_reply(
+        final_reply,
+        user_input=prompt or user_prompt,
+    )
 
     delay = settings.TYPING_BASE_DELAY + (len(final_reply) / 50) * settings.TYPING_DELAY_PER_50_CHARS
     try:

@@ -8,7 +8,7 @@ from discord.ext import commands, tasks
 
 import settings
 from handlers.memory.storage import (
-    load_user_memory, save_single_user_memory, delete_user_memory,
+    load_user_memory, save_single_user_memory,
     UserProfile, UserMemoryStore, UserFact,
     sanitize_aliases, sanitize_and_merge_facts,
     deduplicate_facts,
@@ -49,9 +49,12 @@ class MemoryManager(commands.Cog):
         )
 
     async def cog_load(self) -> None:
-        """Cog 載入時確保定時 Flush 迴圈已啟動。"""
+        """Cog 載入時確保定時 Flush 迴圈已啟動，並背景補算缺失的記憶向量。"""
         if not self._flush_loop.is_running():
             self._flush_loop.start()
+        from handlers.memory import embeddings
+
+        embeddings.schedule_embedding_refresh()
 
     async def cog_unload(self) -> None:
         """Cog 卸載或關機時，強制落盤好感度與聊天記錄。"""
@@ -72,6 +75,11 @@ class MemoryManager(commands.Cog):
         except Exception as exc:
             logger.warning("MemoryManager: 背景落盤異常: %s", exc)
 
+        # R15：每分鐘檢查一次是否有新事實缺少向量，交由背景佇列補算。
+        from handlers.memory import embeddings
+
+        embeddings.schedule_embedding_refresh()
+
     # ==========================
     # 🔄 記憶庫重載（供 NightlyDigest 完成後同步 RAM）
     # ==========================
@@ -82,6 +90,9 @@ class MemoryManager(commands.Cog):
         防止白天的即時萃取使用開機時的舊副本覆蓋掉深夜整合的成果。
         """
         self._store = load_user_memory(settings.USER_MEMORY_PATH)
+        from handlers.memory import embeddings
+
+        embeddings.schedule_embedding_refresh()
         logger.info(
             "MemoryManager: [記憶庫重載完畢] - 現共有 %d 個靈魂印記已同步。",
             len(self._store),
@@ -199,13 +210,18 @@ class MemoryManager(commands.Cog):
             else:
                 await interaction.response.send_message(f"🧠 **雪莉對你的記憶特徵：**\n\n{snippet}", ephemeral=True)
         elif action == "clear_all":
-            if uid_str in self._store:
-                self._store.pop(uid_str, None)
-                delete_user_memory(user_id)
-                await interaction.response.send_message("已成功清除雪莉對你的所有長期記憶特徵！", ephemeral=True)
-            else:
-                delete_user_memory(user_id)
-                await interaction.response.send_message("查無你的長期記憶紀錄，已確保清除乾淨。", ephemeral=True)
+            from handlers.memory.storage import purge_user_data, format_forget_result
+
+            # 同步丟棄 RAM 狀態（線上 store／工作緩衝區／每日計數），防止
+            # 清除後再由殘留緩衝內容重新抽取，導致已刪記憶復活。
+            self._store.pop(uid_str, None)
+            self._working_memory_buffers.pop(user_id, None)
+            self._daily_first_conversation.pop(user_id, None)
+
+            # R6：交易級清除管線（facts/profiles＋relations＋chat_messages＋
+            # JSON/歸檔檔案＋稽核）；全數成功才回覆「已清除」，否則回報部分失敗。
+            results = await purge_user_data(user_id, relations=getattr(self, "relations", None))
+            await interaction.response.send_message(format_forget_result(results), ephemeral=True)
 
     # ==========================
     # 不斷聆聽頻道廢水（背景吸收者 Listener）
@@ -285,10 +301,10 @@ class MemoryManager(commands.Cog):
             "   - preference: 明確熱愛的遊戲/動漫/技術/食物，以及特定角色扮演情境偏好（如兄妹/主僕 RP）、性癖或情色互動喜好\n"
             "   - habit: 穩固生活作息/口頭禪/反覆出現的行為\n"
             "   - social: 與其他人（群友、家人、朋友）的關係，或他正在進行的長期項目\n"
-            "   - rule: 【嚴格限定】他對雪莉（橘雪莉）的明確溝通硬規則（如『叫我OO』『不要用模糊詞』『說話要直接』『禁止某稱呼』）。注意：個人性癖、情境愛好或角色扮演偏好一律歸入 preference，絕對不是 rule！\n"
+            "   - rule: 【嚴格限定】他對雪莉（橘雪莉）的明確溝通硬規則（如『叫我OO』『說話要直接』『禁止某稱呼』『不准變大叔機器人』）。注意：個人性癖、情境愛好、技術開發熱情或角色扮演偏好一律歸入 preference，絕對不是 rule！\n"
             "7. 每條 fact 必須附上 importance（1~5整數）：\n"
             "   1=短暫狀態  2=一般偏好  3=穩固習慣  4=重要特質  5=核心身份或最高規則\n"
-            "8. 【合併與去重原則】：請參照既有屬性，若有相同話題或情境（如同一遊戲或按摩/角色設定），請整合成一條完整精練的事實，勿拆散為破碎多條！\n\n"
+            "8. 【合併與去重原則】：請參照既有屬性，若有相同話題或情境（如同一遊戲或按摩/角色設定），請整合成一條完整精練的事實，勿拆散為破碎多條！嚴禁在 preference 事實句尾重複黏貼『並要求其人格穩定』等寄生贅句。\n\n"
             "請只返回 JSON 格式，不可有任何其他文字：\n"
             '```json\n'
             '{"aliases": ["真實的綽號或自稱(若無則空陣列)"],\n'
@@ -302,11 +318,17 @@ class MemoryManager(commands.Cog):
         )
 
         async def _save_extracted(reply: str) -> None:
+            if not reply or not reply.strip():
+                logger.debug("[靈魂知識拓源] 任務被放棄或推論結果為空，跳過記憶萃取更新。")
+                return
+
             try:
                 raw = reply.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
                 match = re.search(r"\{.*\}", raw, re.DOTALL)
-                if match:
-                    raw = match.group(0)
+                if not match:
+                    logger.debug("[靈魂知識拓源] 回應未包含合法 JSON 區塊，跳過更新: %s", raw[:80])
+                    return
+                raw = match.group(0)
                 parsed = json.loads(raw)
 
                 # ✅ [修復 Lost-Update 競態] 在 callback 執行時才讀取最新狀態，
@@ -344,6 +366,6 @@ class MemoryManager(commands.Cog):
             system_prompt=prompt,
             user_prompt=author.display_name,
             callback=_save_extracted,
-            model=getattr(settings, "MEMORY_EXTRACT_MODEL", settings.PRIMARY_MODEL),
+            model=settings.PRIMARY_MODEL,
             task_id=f"memory-sync-{author.id}",
         ))

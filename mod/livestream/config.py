@@ -29,8 +29,18 @@ VIDEO_DIR.mkdir(parents=True, exist_ok=True)
 # ---------------------------------------------------------------------------
 # 串流伺服器網路與連接埠設定
 # ---------------------------------------------------------------------------
-HOST: str = os.getenv("LIVESTREAM_HOST", "0.0.0.0")
+# R2（報告 §5.3.9）：預設僅監聽 loopback，不再預設 0.0.0.0 對外開放；
+# 如需區網／外部存取請顯式設定 LIVESTREAM_HOST。
+DEFAULT_HOST: str = "127.0.0.1"
+HOST: str = os.getenv("LIVESTREAM_HOST", DEFAULT_HOST)
 PORT: int = int(os.getenv("LIVESTREAM_PORT", "8764"))
+
+# ---------------------------------------------------------------------------
+# 簡易存取權杖（R2；報告 §5.4.2）
+# ---------------------------------------------------------------------------
+# 設定後，8764 專用服務的頁面與 /api/* 皆需 X-Livestream-Token 標頭或 ?token= 查詢參數；
+# 未設定時維持既有行為（依賴 loopback 綁定邊界）。
+ACCESS_TOKEN: str = os.getenv("LIVESTREAM_ACCESS_TOKEN", "").strip()
 
 # ---------------------------------------------------------------------------
 # HTTPS 與 SSL 憑證設定
@@ -38,7 +48,8 @@ PORT: int = int(os.getenv("LIVESTREAM_PORT", "8764"))
 HTTPS: bool = os.getenv("LIVESTREAM_HTTPS", "true").lower() in ("true", "1", "yes")
 SSL_CERT: str | None = os.getenv("LIVESTREAM_SSL_CERT", None)
 SSL_KEY: str | None = os.getenv("LIVESTREAM_SSL_KEY", None)
-RADMIN_IP: str | None = os.getenv("WEB_UI_RADMIN_IP", "26.108.83.196")
+# R2（報告 §5.3.9）：不再硬編特定管理員 IP；如需憑證 SAN 納入固定 IP，請以 WEB_UI_RADMIN_IP 覆寫。
+RADMIN_IP: str | None = os.getenv("WEB_UI_RADMIN_IP") or None
 
 # ---------------------------------------------------------------------------
 # 瀏覽器與播放行為設定
@@ -58,3 +69,12 @@ SUPPORTED_VIDEO_EXTENSIONS: tuple[str, ...] = (
     ".flv",
     ".wmv",
 )
+
+# ---------------------------------------------------------------------------
+# 直播即時聊天室與 Discord 頻道連動設定
+# ---------------------------------------------------------------------------
+DISCORD_CHAT_CHANNEL_ID: int = int(
+    os.getenv("LIVESTREAM_CHAT_CHANNEL_ID", "1519967448982487201")
+)
+MAX_CHAT_HISTORY: int = int(os.getenv("LIVESTREAM_MAX_CHAT_HISTORY", "100"))
+

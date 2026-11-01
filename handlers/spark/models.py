@@ -19,14 +19,16 @@ class TriggerType(str, Enum):
     SCHEDULE = "schedule"
     RSS = "rss"
     WEATHER = "weather"
+    WEB_MONITOR = "web_monitor"
 
 
 class ActionType(str, Enum):
     """推播觸發後執行之動作類型。"""
 
     NOTIFY = "notify"                  # 純文字/Embed 訊息通知
-    CORE_TOOL = "core_tool"            # 調用核心工具 (如 PIXIV, STOCK, WEATHER, DRAW)
+    CORE_TOOL = "core_tool"            # 調用核心工具 (如 PIXIV, STOCK, WEATHER, DRAW, SEARCH)
     MOD_DEEP_SEARCH = "mod_deep_search"  # 調用特權模組: 深度探究自主研究
+    AGENT_PROMPT = "agent_prompt"      # 調用雪莉整合式 Agent 複合多工具工作流
 
 
 @dataclass(frozen=True)
@@ -37,7 +39,7 @@ class Trigger:
         trigger_id: 觸發器唯一識別碼 (UUID 字串)。
         user_id: 建立者 Discord 使用者 ID。
         channel_id: 推播目標 Discord 頻道 ID。
-        trigger_type: 觸發器類型 ("price" | "schedule" | "rss" | "weather")。
+        trigger_type: 觸發器類型 ("price" | "schedule" | "rss" | "weather" | "web_monitor")。
         condition: 類型專屬之條件參數字典。
         message: 自訂推播附加訊息或模板。
         is_active: 是否處於啟用狀態。
@@ -45,6 +47,10 @@ class Trigger:
         created_at: 建立時間戳記 (ISO 8601 字串)。
         last_triggered_at: 上次成功觸發時間戳記 (ISO 8601 字串)。
         extra_data: 額外擴充與狀態儲存欄位。
+            - last_output_summary: 上次排程觸發時的成果摘要 (供跨輪增量記憶)。
+            - last_output_at: 上次成果回寫時間 (ISO 8601 字串)。
+            - run_count: 累計觸發次數 (配合 max_runs 達成指定次數後自動停用)。
+            - last_content_hash: web_monitor 上次檢索到的內容指紋，防止相同新聞重複觸發。
         action: 觸發時執行的動作定義 (action_type, target, payload)。
     """
 

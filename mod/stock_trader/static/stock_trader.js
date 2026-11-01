@@ -18,6 +18,17 @@
     return { 'Content-Type': 'application/json' };
   }
 
+  // R5：統一轉義工具——伺服器資料入 innerHTML 前一律先轉義（報告 §5.4.1 政策）
+  function _escHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   function _showToast(msg, type) {
     if (window.SherryUI && typeof window.SherryUI.showToast === 'function') {
       window.SherryUI.showToast(msg, type);
@@ -121,7 +132,7 @@
               const sign = h.unrealized_pnl >= 0 ? '+' : '';
               html += `
                 <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
-                  <td style="padding: 10px; font-weight:700; color:#00e5ff;">${h.ticker}</td>
+                  <td style="padding: 10px; font-weight:700; color:#00e5ff;">${_escHtml(h.ticker)}</td>
                   <td style="padding: 10px;">${h.shares.toFixed(4)}</td>
                   <td style="padding: 10px;">$${h.avg_cost.toFixed(2)}</td>
                   <td style="padding: 10px;">$${h.current_price.toFixed(2)}</td>
@@ -150,15 +161,15 @@
               const pnlStr = t.action === 'SELL' ? `${t.realized_pnl >= 0 ? '+' : ''}$${t.realized_pnl.toFixed(2)}` : '-';
               html += `
                 <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
-                  <td style="padding: 8px; color:var(--text-muted); font-size:0.8rem;">${t.timestamp}</td>
-                  <td style="padding: 8px; font-weight:700;">${t.ticker}</td>
-                  <td style="padding: 8px;"><span style="background:rgba(255,255,255,0.08); color:${actColor}; padding:2px 8px; border-radius:4px; font-weight:700; font-size:0.78rem;">${t.action}</span></td>
+                  <td style="padding: 8px; color:var(--text-muted); font-size:0.8rem;">${_escHtml(t.timestamp)}</td>
+                  <td style="padding: 8px; font-weight:700;">${_escHtml(t.ticker)}</td>
+                  <td style="padding: 8px;"><span style="background:rgba(255,255,255,0.08); color:${actColor}; padding:2px 8px; border-radius:4px; font-weight:700; font-size:0.78rem;">${_escHtml(t.action)}</span></td>
                   <td style="padding: 8px;">${t.shares.toFixed(4)}</td>
                   <td style="padding: 8px;">$${t.execution_price.toFixed(2)}</td>
                   <td style="padding: 8px; color:var(--text-muted);">$${t.fee.toFixed(2)}</td>
                   <td style="padding: 8px;">$${t.total_amount.toFixed(2)}</td>
                   <td style="padding: 8px; color:${pnlColor}; font-weight:600;">${pnlStr}</td>
-                  <td style="padding: 8px; color:var(--text-muted); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${t.reason}">${t.reason}</td>
+                  <td style="padding: 8px; color:var(--text-muted); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${_escHtml(t.reason)}">${_escHtml(t.reason)}</td>
                 </tr>
               `;
             });
@@ -181,10 +192,10 @@
               html += `
                 <div style="margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px dashed rgba(255,255,255,0.1);">
                   <div style="font-weight: 700; color: #00e5ff; margin-bottom: 4px; display: flex; justify-content: space-between;">
-                    <span>⏱️ [${th.timestamp}] (${th.trigger_type})</span>
+                    <span>⏱️ [${_escHtml(th.timestamp)}] (${_escHtml(th.trigger_type)})</span>
                   </div>
-                  <div style="color: #bbb; margin-bottom: 6px; white-space: pre-wrap;">${th.thought_process}</div>
-                  <div style="color: #00e5ff; font-weight: 600;">🎯 決策結論: ${th.decision_summary}</div>
+                  <div style="color: #bbb; margin-bottom: 6px; white-space: pre-wrap;">${_escHtml(th.thought_process)}</div>
+                  <div style="color: #00e5ff; font-weight: 600;">🎯 決策結論: ${_escHtml(th.decision_summary)}</div>
                 </div>
               `;
             });
@@ -212,7 +223,7 @@
               const macdSign = (t.macd_hist || 0) >= 0 ? '+' : '';
               html += `
                 <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
-                  <td style="padding: 8px; font-weight:700; color:#00e5ff;">${t.ticker}</td>
+                  <td style="padding: 8px; font-weight:700; color:#00e5ff;">${_escHtml(t.ticker)}</td>
                   <td style="padding: 8px; font-weight:600;">$${t.close.toFixed(2)}</td>
                   <td style="padding: 8px; color:${dayColor}; font-weight:600;">${daySign}${t.day_pct.toFixed(2)}%</td>
                   <td style="padding: 8px; color:${monColor}; font-weight:600;">${monSign}${t.mon_pct.toFixed(2)}%</td>

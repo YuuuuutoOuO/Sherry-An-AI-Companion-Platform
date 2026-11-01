@@ -18,22 +18,54 @@ from handlers.social.persona import build_dynamic_persona
 logger = logging.getLogger(__name__)
 
 class InterjectState:
-    __slots__ = ("cooldown_until", "consecutive_count", "eval_counter", "is_evaluating")
+    __slots__ = (
+        "cooldown_until",
+        "consecutive_count",
+        "eval_counter",
+        "is_evaluating",
+        "cooldown_seconds",
+        "config_synced_at",
+        "last_action_at",
+    )
+
     def __init__(self) -> None:
         self.cooldown_until: float = 0.0
         self.consecutive_count: int = 0
         self.eval_counter: int = 0
         self.is_evaluating: bool = False
+        # 冷卻秒數以 care 設定為準；尚未同步前先沿用全域預設值。
+        self.cooldown_seconds: float = float(getattr(settings, "INTERJECT_COOLDOWN_SECONDS", 20))
+        self.config_synced_at: float = 0.0
+        self.last_action_at: float = 0.0
+
     def is_cooling_down(self) -> bool:
         return time.monotonic() < self.cooldown_until
-    def reset_cooldown(self) -> None:
-        self.cooldown_until = time.monotonic() + settings.INTERJECT_COOLDOWN_SECONDS
+
+    def sync_config(self, cooldown_seconds: float | None = None) -> None:
+        """從 WebUI／care 設定同步冷卻秒數（呼叫端負責節流）。"""
+        if cooldown_seconds is not None:
+            try:
+                self.cooldown_seconds = max(0.0, float(cooldown_seconds))
+            except (TypeError, ValueError):
+                pass
+        self.config_synced_at = time.monotonic()
+
+    def reset_cooldown(self, cooldown_seconds: float | None = None) -> None:
+        if cooldown_seconds is not None:
+            self.sync_config(cooldown_seconds)
+        self.cooldown_until = time.monotonic() + self.cooldown_seconds
         self.consecutive_count = 0
+
     def can_interject(self) -> bool:
+        # 冷卻期間一律不准插話（冷卻設定必須真的生效）。
         if self.is_cooling_down():
-            return self.consecutive_count < settings.INTERJECT_MAX_CONSECUTIVE
-        self.consecutive_count = 0
-        return True
+            return False
+        # 距上次插話已久，允許重新計算連續次數。
+        stale_after = max(self.cooldown_seconds * 3, 60.0)
+        if self.last_action_at and time.monotonic() - self.last_action_at >= stale_after:
+            self.consecutive_count = 0
+        return self.consecutive_count < int(getattr(settings, "INTERJECT_MAX_CONSECUTIVE", 2))
+
 
 async def maybe_interject(bot: commands.Bot, channel: discord.TextChannel | discord.Thread | Any, state: InterjectState) -> None:
     try:
@@ -79,7 +111,7 @@ async def maybe_interject(bot: commands.Bot, channel: discord.TextChannel | disc
             system_prompt=score_system_prompt,
             user_prompt=conversation_snapshot,
             callback=_on_score_result,
-            model=settings.CLASSIFIER_MODEL,
+            model=settings.LIGHT_MODEL,
             task_id=f"interject-score-{channel.id}-{int(time.monotonic())}",
         )
         await brain.enqueue_task(score_task)
@@ -88,6 +120,15 @@ async def maybe_interject(bot: commands.Bot, channel: discord.TextChannel | disc
             raw_result = await asyncio.wait_for(score_future, timeout=settings.INTERJECT_SCORE_TIMEOUT)
         except asyncio.TimeoutError:
             setattr(score_task, "is_cancelled", True)
+            return
+
+        # 評分只是「要不要插話」的門檻判斷，拿不到分數時安全地不插話即可，
+        # 不該因上游模型輸出問題讓整段流程丟出例外。
+        if not raw_result or not raw_result.strip():
+            logger.info(
+                "social_chat: 插話評分 task=%s 收到空回應（上游推論失敗或被安全過濾），本次略過插話。",
+                getattr(score_task, "task_id", "?"),
+            )
             return
 
         score: int = 0
@@ -106,6 +147,13 @@ async def maybe_interject(bot: commands.Bot, channel: discord.TextChannel | disc
             num_match = re.search(r"\b([1-9]|10)\b", raw_result)
             if num_match:
                 score = int(num_match.group(1))
+            else:
+                # 完全無法判讀分數時不插話，避免亂猜分數導致誤判
+                logger.info(
+                    "social_chat: 插話評分 task=%s 無法判讀分數，本次略過插話。",
+                    getattr(score_task, "task_id", "?"),
+                )
+                return
 
         will_act = score >= settings.INTERJECT_SCORE_THRESHOLD and state.can_interject()
 
@@ -198,6 +246,7 @@ async def maybe_interject(bot: commands.Bot, channel: discord.TextChannel | disc
         if not state.is_cooling_down():
             state.reset_cooldown()
         state.consecutive_count += 1
+        state.last_action_at = time.monotonic()
         await simulate_typing_and_send_to_channel(
             channel,
             reply,

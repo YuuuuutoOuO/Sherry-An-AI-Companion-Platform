@@ -1,0 +1,954 @@
+<!-- 賽博群友與自我記憶主控台 -->
+<div class="view hidden" id="view-care">
+    <!-- 頂部標題與全域操作 (flex-shrink: 0 防止長頁面擠壓高度) -->
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 12px; flex-wrap: wrap; flex-shrink: 0;">
+        <div>
+            <h2 style="margin: 0; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+                🐟 賽博群友 ＆ 自我記憶主控台
+            </h2>
+            <p style="margin: 6px 0 0; color: #94a3b8; font-size: 0.9rem;">
+                整合大肥魚風格賽博群友大腦、單一測試頻道雙向熱聊沙盒與雪莉專屬自我記憶。
+            </p>
+        </div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; flex-shrink: 0;">
+            <button id="care-open-surfer" class="btn-primary" style="padding: 8px 16px; border-radius: 8px; background: linear-gradient(135deg, #a855f7, #f472b6); color: white; border: none; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                🖥️ 開啟雪莉上網實況台 (:8765)
+            </button>
+            <button id="care-refresh" class="btn-secondary" style="padding: 8px 16px; border-radius: 8px; cursor: pointer;">
+                🔄 重新整理
+            </button>
+            <button id="care-settle" class="btn-secondary" style="display: none; padding: 8px 16px; border-radius: 8px; cursor: pointer;">
+                ⏳ 結算沉默 (48h)
+            </button>
+        </div>
+    </div>
+
+    <!-- 訪客/未登入提示橫幅 -->
+    <div id="care-guest-notice" style="display: none; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 8px; padding: 12px 16px; margin-bottom: 14px; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+        <div style="display: flex; align-items: center; gap: 10px; color: #fde68a; font-size: 0.9rem;">
+            <span style="font-size: 1.2rem;">🔒</span>
+            <span><strong>當前處於訪客模式</strong>：賽博群友大腦、衝浪設定與記憶庫需要管理員權限才能檢視與變更。</span>
+        </div>
+        <button type="button" class="btn-primary" onclick="openLoginModal()" style="padding: 6px 14px; font-size: 0.85rem; cursor: pointer; border-radius: 6px; background: #f59e0b; color: #111; font-weight: 600; border: none;">
+            🔑 立即登入管理員
+        </button>
+    </div>
+
+    <div id="care-status-message" style="min-height: 20px; margin-bottom: 12px; font-size: 0.9rem; flex-shrink: 0;"></div>
+
+    <!-- 子分頁導覽列 (Sub-Tabs Navigation - 加上 flex-shrink: 0 與 min-height 防止內容過長時被擠壓吃掉) -->
+    <div class="care-subtabs" style="display: flex; gap: 8px; border-bottom: 1px solid rgba(255,255,255,0.1); margin-bottom: 20px; padding-bottom: 4px; position: relative; z-index: 5; flex-shrink: 0; min-height: 46px; flex-wrap: wrap;">
+        <button type="button" id="care-tab-btn-overview" class="care-tab-btn" style="display: none; padding: 10px 20px; background: rgba(30, 41, 59, 0.6); border: 1px solid rgba(255,255,255,0.08); border-bottom: none; border-radius: 8px 8px 0 0; color: #94a3b8; font-weight: 600; cursor: pointer; align-items: center; gap: 8px; transition: all 0.2s ease; white-space: nowrap; flex-shrink: 0;">
+            <span>📊</span> 關懷總覽與灰度
+        </button>
+        <button type="button" id="care-tab-btn-surfer" class="care-tab-btn active" style="padding: 10px 20px; background: rgba(139, 92, 246, 0.25); border: 1px solid #8b5cf6; border-bottom: none; border-radius: 8px 8px 0 0; color: #f8fafc; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: all 0.2s ease; white-space: nowrap; flex-shrink: 0;">
+            <span>🐟</span> 賽博群友大腦 ＆ 衝浪測試頻道
+            <span id="care-tab-channel-badge" style="font-size: 0.72rem; padding: 2px 6px; border-radius: 10px; background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(96, 165, 250, 0.3);">檢查中</span>
+        </button>
+        <button type="button" id="care-tab-btn-self" class="care-tab-btn" style="padding: 10px 20px; background: rgba(30, 41, 59, 0.6); border: 1px solid rgba(255,255,255,0.08); border-bottom: none; border-radius: 8px 8px 0 0; color: #94a3b8; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: all 0.2s ease; white-space: nowrap; flex-shrink: 0;">
+            <span>🧠</span> 雪莉自我記憶庫
+        </button>
+        <button type="button" id="care-tab-btn-social" class="care-tab-btn" style="padding: 10px 20px; background: rgba(30, 41, 59, 0.6); border: 1px solid rgba(255,255,255,0.08); border-bottom: none; border-radius: 8px 8px 0 0; color: #94a3b8; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: all 0.2s ease; white-space: nowrap; flex-shrink: 0;">
+            <span>🎭</span> 沙盒群像 ＆ 決策帳本
+        </button>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- 分頁 1: 關懷總覽與灰度 (已整合進賽博群友大腦，預設隱藏保留向下相容)       -->
+    <!-- ===================================================================== -->
+    <div id="care-panel-overview" class="care-panel" style="display: none; flex-shrink: 0;">
+        <!-- 核心統計指標卡片 -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px;">
+            <div style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 14px;">
+                <div style="color: #94a3b8; font-size: 0.8rem;">已 opt-in 使用者</div>
+                <div id="care-stat-optin" style="font-size: 1.6rem; font-weight: 700; color: #f8fafc;">0</div>
+            </div>
+            <div style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 14px;">
+                <div style="color: #94a3b8; font-size: 0.8rem;">回覆率</div>
+                <div id="care-stat-response" style="font-size: 1.6rem; font-weight: 700; color: #4ade80;">0.0%</div>
+            </div>
+            <div style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 14px;">
+                <div style="color: #94a3b8; font-size: 0.8rem;">沉默率</div>
+                <div id="care-stat-silence" style="font-size: 1.6rem; font-weight: 700; color: #fbbf24;">0.0%</div>
+            </div>
+            <div style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 14px;">
+                <div style="color: #94a3b8; font-size: 0.8rem;">待回饋</div>
+                <div id="care-stat-pending" style="font-size: 1.6rem; font-weight: 700; color: #f8fafc;">0</div>
+            </div>
+            <div style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 14px;">
+                <div style="color: #94a3b8; font-size: 0.8rem;">待回訪話題</div>
+                <div id="care-stat-topics" style="font-size: 1.6rem; font-weight: 700; color: #c4b5fd;">0</div>
+            </div>
+            <div style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 14px;">
+                <div style="color: #94a3b8; font-size: 0.8rem;">額度（每週 / 每日）</div>
+                <div id="care-stat-limits" style="font-size: 1.2rem; font-weight: 700; color: #f8fafc; margin-top: 6px;">—</div>
+                <div style="color: #94a3b8; font-size: 0.75rem; margin-top: 4px;">自適應：<span id="care-stat-adaptive">—</span></div>
+            </div>
+        </div>
+
+        <!-- 伺服器灰度與伺服器回饋並列區塊 -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; margin-bottom: 20px;">
+            <section style="background: rgba(30, 41, 59, 0.55); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 16px;">
+                <h3 style="margin-top: 0; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+                    <span>🎚️</span> 伺服器灰度
+                </h3>
+                <form id="care-rollout-form" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin-bottom: 12px;">
+                    <label style="display: flex; flex-direction: column; gap: 4px; color: #94a3b8; font-size: 0.8rem;">
+                        伺服器 ID
+                        <input id="care-guild-id" type="text" inputmode="numeric" placeholder="123456789012345678" style="padding: 8px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc; width: 170px;" />
+                    </label>
+                    <label style="display: flex; flex-direction: column; gap: 4px; color: #94a3b8; font-size: 0.8rem;">
+                        灰度 %
+                        <input id="care-rollout-percent" type="number" min="0" max="100" value="100" style="padding: 8px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc; width: 90px;" />
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 6px; color: #cbd5e1; font-size: 0.85rem; padding-bottom: 8px;">
+                        <input id="care-rollout-enabled" type="checkbox" checked /> 開啟
+                    </label>
+                    <button type="submit" class="btn-primary" style="padding: 8px 14px; border-radius: 6px; background: #8b5cf6; color: white; border: none; font-weight: 600; cursor: pointer;">儲存</button>
+                </form>
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem; color: #cbd5e1;">
+                        <thead>
+                            <tr style="color: #94a3b8; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.08);">
+                                <th style="padding: 8px;">Guild</th>
+                                <th style="padding: 8px;">狀態</th>
+                                <th style="padding: 8px;">比例</th>
+                                <th style="padding: 8px;">更新時間</th>
+                            </tr>
+                        </thead>
+                        <tbody id="care-rollout-list"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section style="background: rgba(30, 41, 59, 0.55); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 16px;">
+                <h3 style="margin-top: 0; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+                    <span>📊</span> 各伺服器回饋
+                </h3>
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem; color: #cbd5e1;">
+                        <thead>
+                            <tr style="color: #94a3b8; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.08);">
+                                <th style="padding: 8px;">Guild</th>
+                                <th style="padding: 8px;">核准</th>
+                                <th style="padding: 8px;">回覆</th>
+                                <th style="padding: 8px;">沉默</th>
+                                <th style="padding: 8px;">沉默率</th>
+                            </tr>
+                        </thead>
+                        <tbody id="care-guild-feedback"></tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+
+        <!-- 最近關懷稽核紀錄 -->
+        <section style="background: rgba(30, 41, 59, 0.55); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px; flex-wrap: wrap;">
+                <h3 style="margin: 0; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+                    <span>🧾</span> 最近關懷稽核
+                </h3>
+                <button id="care-load-actions" class="btn-secondary" style="padding: 6px 12px; border-radius: 6px; cursor: pointer;">載入最新 30 筆</button>
+            </div>
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.82rem; color: #cbd5e1; min-width: 780px;">
+                    <thead>
+                        <tr style="color: #94a3b8; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.08);">
+                            <th style="padding: 8px;">時間</th>
+                            <th style="padding: 8px;">使用者</th>
+                            <th style="padding: 8px;">來源</th>
+                            <th style="padding: 8px;">狀態</th>
+                            <th style="padding: 8px;">話題</th>
+                            <th style="padding: 8px;">原因</th>
+                        </tr>
+                    </thead>
+                    <tbody id="care-actions-body"></tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- 分頁 2: 網活仔衝浪與測試頻道沙盒 (Surfer & Channel)                     -->
+    <!-- ===================================================================== -->
+    <div id="care-panel-surfer" class="care-panel" style="display: block; flex-shrink: 0;">
+        <!-- 📍 賽博群友與測試頻道沙盒狀態看板 (Hero Banner Card) -->
+        <section style="background: linear-gradient(135deg, rgba(30, 41, 59, 0.85), rgba(15, 23, 42, 0.95)); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 8px 24px rgba(0,0,0,0.25);">
+            <div>
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap;">
+                    <span style="font-size: 1.4rem;">🐟</span>
+                    <h3 style="margin: 0; color: #f8fafc; font-size: 1.25rem;">賽博群友大腦 ＆ 測試頻道狀態</h3>
+                    <span id="care-channel-status-pill" style="padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; background: rgba(148, 163, 184, 0.2); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.3);">
+                        讀取中...
+                    </span>
+                    <span id="care-chat-window-pill" style="padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3);">
+                        👀 潛水窺屏中
+                    </span>
+                    <span id="care-cyber-rice-pill" style="padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3);">
+                        🍚 賽博白飯 0 碗
+                    </span>
+                    <span id="care-cyber-model-pill" style="padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.35);">
+                        🧠 主力模型: —
+                    </span>
+                    <span id="care-cyber-phase-pill" style="padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; background: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.3);">
+                        ⚙️ 引擎: —
+                    </span>
+                    <span id="care-cyber-queue-pill" style="padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; background: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.3);">
+                        📥 緩衝: 0
+                    </span>
+                </div>
+                <p style="margin: 0; color: #94a3b8; font-size: 0.88rem; max-width: 800px; line-height: 1.5;">
+                    強制安全沙盒：雪莉主動冒泡發文、雙向陪聊與窺屏對線<strong>僅限於指定測試頻道</strong>，具備活人性情（傲嬌、摸魚、吃 Token 白飯、分段短句連發），絕不外溢干擾其他頻道。
+                </p>
+            </div>
+
+            <!-- 頻道具體資訊徽章網格 -->
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-top: 18px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.08);">
+                <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 12px;">
+                    <div style="color: #94a3b8; font-size: 0.78rem; margin-bottom: 4px;">當前綁定頻道名稱</div>
+                    <div id="care-channel-name-val" style="font-size: 1.15rem; font-weight: 700; color: #38bdf8; word-break: break-all;">
+                        —
+                    </div>
+                </div>
+                <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 12px;">
+                    <div style="color: #94a3b8; font-size: 0.78rem; margin-bottom: 4px;">所屬 Discord 伺服器</div>
+                    <div id="care-guild-name-val" style="font-size: 1.15rem; font-weight: 700; color: #f8fafc; word-break: break-all;">
+                        —
+                    </div>
+                </div>
+                <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 12px;">
+                    <div style="color: #94a3b8; font-size: 0.78rem; margin-bottom: 4px;">頻道 Snowflake ID</div>
+                    <div id="care-channel-id-val" style="font-size: 1.15rem; font-weight: 700; color: #a78bfa; font-family: monospace;">
+                        —
+                    </div>
+                </div>
+                <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 12px;">
+                    <div style="color: #94a3b8; font-size: 0.78rem; margin-bottom: 4px;">設定生效來源</div>
+                    <div id="care-channel-source-val" style="font-size: 0.95rem; font-weight: 600; color: #cbd5e1; margin-top: 2px;">
+                        —
+                    </div>
+                </div>
+            </div>
+
+            <!-- 🧠 雪莉即時心智需求指標 (隨冷場時間遞增加速：無聊爆表主動冒泡) -->
+            <div style="margin-top: 18px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.08);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-weight: 700; color: #f8fafc; font-size: 0.95rem;">🧠 雪莉心智狀態池 (Mind Dynamics)</span>
+                        <span id="care-mind-active-badge" style="padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(74, 222, 128, 0.4);">
+                            ☀️ 活躍中可發言
+                        </span>
+                    </div>
+                    <div style="font-size: 0.8rem; color: #94a3b8;">
+                        💭 最新自言自語：<span id="care-mind-thought-preview" style="color: #cbd5e1; font-style: italic;">今天群裡不知道大家都在忙什麼呢…</span>
+                    </div>
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px;">
+                    <!-- 寂寞無聊度 (Boredom Level) -->
+                    <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 12px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <span style="font-size: 0.82rem; color: #f472b6; font-weight: 600;">🥱 寂寞無聊度</span>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <button id="care-mind-tick-btn" class="btn-secondary" title="手動為雪莉注入無聊度" style="padding: 2px 8px; border-radius: 6px; font-size: 0.74rem; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3);">
+                                    <span>🔥</span> 推進無聊累積 (+25%)
+                                </button>
+                                <span id="care-mind-boredom-val" style="font-size: 0.85rem; font-weight: 700; color: #f472b6;">28%</span>
+                            </div>
+                            <span id="care-mind-social-val" style="display: none;">72%</span>
+                        </div>
+                        <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; position: relative;">
+                            <div id="care-mind-boredom-bar" style="height: 100%; width: 28%; background: linear-gradient(90deg, #ec4899, #f43f5e); border-radius: 4px; transition: width 0.4s ease;"></div>
+                            <div id="care-mind-social-bar" style="display: none;"></div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; font-size: 0.72rem; color: #64748b; margin-top: 4px;">
+                            <span>觸發線: ≧80%</span>
+                            <span>冷場遞增加速 ➔ 冒泡</span>
+                        </div>
+                    </div>
+
+                    <!-- 探索好奇欲 (Curiosity Level) -->
+                    <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 12px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <span style="font-size: 0.82rem; color: #38bdf8; font-weight: 600;">🔍 探索好奇欲</span>
+                            <span id="care-mind-curiosity-val" style="font-size: 0.85rem; font-weight: 700; color: #38bdf8;">32%</span>
+                        </div>
+                        <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; position: relative;">
+                            <div id="care-mind-curiosity-bar" style="height: 100%; width: 32%; background: linear-gradient(90deg, #0284c7, #38bdf8); border-radius: 4px; transition: width 0.4s ease;"></div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; font-size: 0.72rem; color: #64748b; margin-top: 4px;">
+                            <span>觸發線: ≧75%</span>
+                            <span>自發思考/口語吃瓜</span>
+                        </div>
+                    </div>
+
+                    <!-- 作息活力值 -->
+                    <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 12px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <span style="font-size: 0.82rem; color: #eab308; font-weight: 600;">⚡ 作息活力值</span>
+                            <span id="care-mind-energy-val" style="font-size: 0.85rem; font-weight: 700; color: #eab308;">88%</span>
+                        </div>
+                        <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; position: relative;">
+                            <div id="care-mind-energy-bar" style="height: 100%; width: 88%; background: linear-gradient(90deg, #ca8a04, #facc15); border-radius: 4px; transition: width 0.4s ease;"></div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; font-size: 0.72rem; color: #64748b; margin-top: 4px;">
+                            <span>靜音休眠: 20%</span>
+                            <span id="care-mind-hours-tip">時段: 09:00 ~ 23:00</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 🎮 模組二：現場動作與即時互動 (Live Actions & Interactive Controls) -->
+        <section style="background: rgba(30, 41, 59, 0.65); border: 1px solid rgba(139, 92, 246, 0.35); border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 16px rgba(0,0,0,0.2);">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
+                <div>
+                    <h3 style="margin: 0; color: #f8fafc; display: flex; align-items: center; gap: 8px; font-size: 1.15rem;">
+                        <span>🎮</span> 現場整活動作控制台
+                    </h3>
+                    <p style="margin: 4px 0 0; color: #94a3b8; font-size: 0.85rem;">
+                        立即手動喚醒雪莉在測試沙盒頻道進行主動發文、自發思考、窺屏對線或摸魚吐槽。
+                    </p>
+                </div>
+                <!-- Dry-run 模擬模式切換開關（預設取消勾選，直接真實發送 Discord） -->
+                <label style="display: flex; align-items: center; gap: 8px; background: rgba(15, 23, 42, 0.7); padding: 8px 14px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.12); cursor: pointer; user-select: none;">
+                    <input id="care-trigger-dryrun-chk" type="checkbox" style="width: 16px; height: 16px; cursor: pointer; accent-color: #8b5cf6;" />
+                    <span style="font-weight: 600; color: #f8fafc; font-size: 0.88rem;">🧪 Dry-run 預覽模式</span>
+                    <span style="font-size: 0.78rem; color: #94a3b8;">（勾選時僅產生思考與氣泡預覽，不外發至 Discord）</span>
+                </label>
+            </div>
+
+            <!-- 賽博群友 6 大動態模式風格按鈕 -->
+            <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
+                <button id="care-trigger-auto" class="btn-primary" style="padding: 10px 18px; border-radius: 8px; background: linear-gradient(135deg, #a855f7, #6366f1); color: white; border: none; font-weight: 600; font-size: 0.9rem; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                    <span>🎲</span> 智能冒泡 (Auto)
+                </button>
+                <button id="care-trigger-mind" class="btn-secondary" style="padding: 10px 16px; border-radius: 8px; font-size: 0.9rem; cursor: pointer; display: flex; align-items: center; gap: 6px; background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3);">
+                    <span>💭</span> 自發思考
+                </button>
+                <button id="care-trigger-lurk" class="btn-secondary" style="padding: 10px 16px; border-radius: 8px; font-size: 0.9rem; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                    <span>👀</span> 窺屏接話
+                </button>
+                <button id="care-trigger-vibe" class="btn-secondary" style="padding: 10px 16px; border-radius: 8px; font-size: 0.9rem; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                    <span>🍚</span> 摸魚日常
+                </button>
+                <button id="care-trigger-poke" class="btn-secondary" style="padding: 10px 16px; border-radius: 8px; font-size: 0.9rem; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                    <span>💗</span> 傲嬌戳人
+                </button>
+                <button id="care-trigger-gossip" class="btn-secondary" style="padding: 10px 16px; border-radius: 8px; font-size: 0.9rem; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                    <span>🍉</span> 口語吃瓜
+                </button>
+            </div>
+
+            <!-- 向下相容 DOM ID（隱藏不冗餘顯示） -->
+            <div style="display: none;">
+                <button id="care-surfer-trigger-dry"></button>
+                <button id="care-surfer-trigger-now"></button>
+            </div>
+
+            <!-- 現場執行即時預覽回饋卡片 (Execution Result Feedback Box) -->
+            <div id="care-trigger-result-box" style="display: none; margin-top: 16px; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(139, 92, 246, 0.4); border-radius: 10px; padding: 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 8px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span id="care-result-mode-badge" style="padding: 3px 10px; border-radius: 14px; font-size: 0.78rem; font-weight: 700; background: rgba(139, 92, 246, 0.25); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4);">
+                            模式
+                        </span>
+                        <span id="care-result-dryrun-badge" style="padding: 3px 8px; border-radius: 14px; font-size: 0.75rem; font-weight: 600; background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3);">
+                            預覽
+                        </span>
+                    </div>
+                    <span id="care-result-time" style="color: #64748b; font-size: 0.78rem;">剛剛</span>
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <div style="font-size: 0.8rem; color: #94a3b8; margin-bottom: 4px;">💭 雪莉內心 OS：</div>
+                    <div id="care-result-thought" style="color: #e2e8f0; font-style: italic; font-size: 0.9rem; background: rgba(30, 41, 59, 0.5); padding: 8px 12px; border-radius: 6px; border-left: 3px solid #8b5cf6;">
+                        —
+                    </div>
+                </div>
+                <div>
+                    <div style="font-size: 0.8rem; color: #94a3b8; margin-bottom: 6px;">💬 生成之分段氣泡發言：</div>
+                    <div id="care-result-bubbles" style="display: flex; flex-direction: column; gap: 6px;">
+                        <!-- bubbles rendered here -->
+                    </div>
+                </div>
+                <div id="care-result-status-msg" style="margin-top: 10px; font-size: 0.82rem; color: #4ade80;"></div>
+            </div>
+        </section>
+
+        <!-- ⚙️ 模組三：One Brain, Two Lanes 架構設定 -->
+        <section style="background: rgba(30, 41, 59, 0.55); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 20px; margin-bottom: 20px;">
+            <div style="margin-bottom: 16px;">
+                <h3 style="margin: 0; color: #f8fafc; display: flex; align-items: center; gap: 8px; font-size: 1.15rem;">
+                    <span>🧠</span> One Brain, Two Lanes
+                </h3>
+                <p style="margin: 4px 0 0; color: #94a3b8; font-size: 0.85rem;">
+                    被動 @雪莉（完整工具）與自主 Cyber（唯讀工具＋動態 context＋共用記憶）共用同一個大腦。
+                    舊版定時巡航／漸進巡檢參數已收進下方回退區。
+                </p>
+            </div>
+
+            <div id="care-cyber-v2-panel" style="background: linear-gradient(135deg, rgba(56,189,248,0.08), rgba(168,85,247,0.08)); border: 1px solid rgba(56,189,248,0.25); border-radius: 10px; padding: 18px; margin-bottom: 18px;">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px;">
+                    <div>
+                        <h3 style="margin:0; color:#f8fafc; font-size:1.1rem;">🧠 One Brain, Two Lanes（v2 架構）</h3>
+                        <p style="margin:4px 0 0; color:#94a3b8; font-size:0.84rem;">被動 @雪莉 與自主 Cyber 共用同一個大腦、記憶與輸出管線。</p>
+                    </div>
+                    <button type="button" id="care-cyber-v2-save-btn" style="padding:10px 18px; border-radius:8px; background:#0ea5e9; color:white; border:none; font-weight:700; cursor:pointer;">儲存 v2 設定</button>
+                </div>
+
+                <!-- 🧠 雪莉的此刻：L2 自主決策 -->
+                <div id="care-autonomy-card" style="background:rgba(15,23,42,0.62); border:1px solid rgba(168,85,247,0.28); border-radius:10px; padding:14px 16px; margin-bottom:14px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="font-weight:700; color:#f8fafc; font-size:0.95rem;">🧠 雪莉的此刻</span>
+                            <span id="care-autonomy-act-pill" style="padding:3px 10px; border-radius:20px; font-size:0.78rem; font-weight:700; background:rgba(148,163,184,0.15); color:#94a3b8; border:1px solid rgba(148,163,184,0.3);">💤 還沒有決定</span>
+                        </div>
+                        <span style="color:#64748b; font-size:0.76rem;">她可以自己決定說／安靜／晚點說</span>
+                    </div>
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:10px; margin-top:12px;">
+                        <div>
+                            <div style="color:#94a3b8; font-size:0.76rem;">說話動機</div>
+                            <div id="care-autonomy-motivation" style="color:#e2e8f0; font-size:0.88rem; font-weight:600; margin-top:3px;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:#94a3b8; font-size:0.76rem;">下次考慮</div>
+                            <div id="care-autonomy-next" style="color:#e2e8f0; font-size:0.88rem; font-weight:600; margin-top:3px;">—</div>
+                        </div>
+                        <div>
+                            <div style="color:#94a3b8; font-size:0.76rem;">今天主動</div>
+                            <div id="care-autonomy-count" style="color:#e2e8f0; font-size:0.88rem; font-weight:600; margin-top:3px;">0 / 12</div>
+                        </div>
+                        <div>
+                            <div style="color:#94a3b8; font-size:0.76rem;">上次決定</div>
+                            <div id="care-autonomy-last" style="color:#e2e8f0; font-size:0.88rem; font-weight:600; margin-top:3px;">—</div>
+                        </div>
+                    </div>
+                    <div id="care-autonomy-note" style="display:none; margin-top:10px; padding:8px 10px; border-radius:6px; background:rgba(251,191,36,0.1); color:#fbbf24; font-size:0.8rem;"></div>
+                    <div id="care-autonomy-thought-row" style="display:none; margin-top:10px;">
+                        <div style="color:#94a3b8; font-size:0.76rem;">內心戲（不會發出去）</div>
+                        <div id="care-autonomy-thought" style="color:#c4b5fd; font-size:0.88rem; font-style:italic; margin-top:3px;">—</div>
+                    </div>
+                </div>
+
+                <details id="care-autonomy-history-wrap" style="margin-bottom:14px;">
+                    <summary style="cursor:pointer; color:#94a3b8; font-size:0.84rem;">📜 最近 20 次自主決定</summary>
+                    <div style="overflow-x:auto; margin-top:10px;">
+                        <table style="width:100%; border-collapse:collapse; font-size:0.78rem; color:#cbd5e1;">
+                            <thead>
+                                <tr style="color:#94a3b8; text-align:left;">
+                                    <th style="padding:6px 8px; border-bottom:1px solid rgba(255,255,255,0.08);">時間</th>
+                                    <th style="padding:6px 8px; border-bottom:1px solid rgba(255,255,255,0.08);">決定</th>
+                                    <th style="padding:6px 8px; border-bottom:1px solid rgba(255,255,255,0.08);">動機</th>
+                                    <th style="padding:6px 8px; border-bottom:1px solid rgba(255,255,255,0.08);">內心戲</th>
+                                    <th style="padding:6px 8px; border-bottom:1px solid rgba(255,255,255,0.08);">下次</th>
+                                </tr>
+                            </thead>
+                            <tbody id="care-autonomy-history-body">
+                                <tr><td colspan="5" style="padding:8px; color:#64748b;">還沒有紀錄</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </details>
+
+                <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px;">
+                    <label style="display:flex; flex-direction:column; gap:6px; color:#94a3b8; font-size:0.84rem;">
+                        <span style="color:#f8fafc; font-weight:600;">引擎模式</span>
+                        <select id="cyber-v2-engine-mode" style="padding:9px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.12); color:#f8fafc;">
+                            <option value="off">off：完全關閉</option>
+                            <option value="shadow">shadow：只觀察不發送</option>
+                            <option value="live">live：正式接管</option>
+                        </select>
+                    </label>
+                    <label style="display:flex; flex-direction:column; gap:6px; color:#94a3b8; font-size:0.84rem;">
+                        <span style="color:#f8fafc; font-weight:600;">@雪莉 接管範圍</span>
+                        <select id="cyber-v2-mention-scope" style="padding:9px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.12); color:#f8fafc;">
+                            <option value="sandbox">僅 sandbox 頻道</option>
+                            <option value="all">所有頻道</option>
+                        </select>
+                    </label>
+                    <label style="display:flex; flex-direction:column; gap:6px; color:#94a3b8; font-size:0.84rem;">
+                        <span style="color:#f8fafc; font-weight:600;">熱聊窗口（秒）</span>
+                        <input id="cyber-v2-window" type="number" min="30" max="3600" value="300" style="padding:9px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.12); color:#f8fafc;" />
+                    </label>
+                    <label style="display:flex; flex-direction:column; gap:6px; color:#94a3b8; font-size:0.84rem;">
+                        <span style="color:#f8fafc; font-weight:600;">追話寬限（秒）</span>
+                        <input id="cyber-v2-followup-window" type="number" min="60" max="7200" value="900" style="padding:9px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.12); color:#f8fafc;" />
+                    </label>
+                    <label style="display:flex; flex-direction:column; gap:6px; color:#94a3b8; font-size:0.84rem;">
+                        <span style="color:#f8fafc; font-weight:600;">連續訊息等待（秒）</span>
+                        <input id="cyber-v2-debounce" type="number" min="0" max="60" value="10" style="padding:9px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.12); color:#f8fafc;" />
+                    </label>
+                    <label style="display:flex; flex-direction:column; gap:6px; color:#94a3b8; font-size:0.84rem;">
+                        <span style="color:#f8fafc; font-weight:600;">@ 等待（秒）</span>
+                        <input id="cyber-v2-mention-debounce" type="number" min="0" max="30" value="2" style="padding:9px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.12); color:#f8fafc;" />
+                    </label>
+                    <label style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:0.86rem; cursor:pointer; padding-top:22px;">
+                        <input id="cyber-v2-scoring-enabled" type="checkbox" checked style="width:16px;height:16px;" />
+                        <span>啟用接話評分機制</span>
+                    </label>
+                    <label style="display:flex; flex-direction:column; gap:6px; color:#94a3b8; font-size:0.84rem;">
+                        <span style="color:#f8fafc; font-weight:600;">接話門檻（0-10）</span>
+                        <input id="cyber-v2-score-threshold" type="number" min="0" max="10" value="6" style="padding:9px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.12); color:#f8fafc;" />
+                    </label>
+                    <label style="display:flex; flex-direction:column; gap:6px; color:#94a3b8; font-size:0.84rem;">
+                        <span style="color:#f8fafc; font-weight:600;">安靜開話題（秒）</span>
+                        <input id="cyber-v2-idle-proactive" type="number" min="300" max="86400" value="1800" style="padding:9px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.12); color:#f8fafc;" />
+                    </label>
+                    <label style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:0.86rem; cursor:pointer; padding-top:22px;">
+                        <input id="cyber-v2-autonomy-enabled" type="checkbox" checked style="width:16px;height:16px;" />
+                        <span>啟用自主判斷（可選安靜）</span>
+                    </label>
+                    <label style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:0.86rem; cursor:pointer; padding-top:22px;">
+                        <input id="cyber-v2-autonomy-thought" type="checkbox" checked style="width:16px;height:16px;" />
+                        <span>顯示內心戲</span>
+                    </label>
+                    <label style="display:flex; flex-direction:column; gap:6px; color:#94a3b8; font-size:0.84rem;">
+                        <span style="color:#f8fafc; font-weight:600;">每小時主動上限</span>
+                        <input id="cyber-v2-autonomy-hourly" type="number" min="0" max="12" value="2" style="padding:9px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.12); color:#f8fafc;" />
+                    </label>
+                    <label style="display:flex; flex-direction:column; gap:6px; color:#94a3b8; font-size:0.84rem;">
+                        <span style="color:#f8fafc; font-weight:600;">每日主動上限</span>
+                        <input id="cyber-v2-autonomy-daily" type="number" min="0" max="48" value="12" style="padding:9px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.12); color:#f8fafc;" />
+                    </label>
+                    <label style="display:flex; flex-direction:column; gap:6px; color:#94a3b8; font-size:0.84rem;">
+                        <span style="color:#f8fafc; font-weight:600;">最長等待（分）</span>
+                        <input id="cyber-v2-autonomy-wait-max" type="number" min="30" max="180" value="90" style="padding:9px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.12); color:#f8fafc;" />
+                    </label>
+                    <label style="display:flex; flex-direction:column; gap:6px; color:#94a3b8; font-size:0.84rem;">
+                        <span style="color:#f8fafc; font-weight:600;">推理強度（僅 Gemini 後端）</span>
+                        <select id="cyber-v2-reasoning-effort" style="padding:9px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.12); color:#f8fafc;">
+                            <option value="low">low：最快（短對話建議）</option>
+                            <option value="medium">medium：平衡</option>
+                            <option value="high">high：最慢但最仔細</option>
+                        </select>
+                        <span style="color:#64748b; font-size:0.76rem;">地端模型（LMS／Ollama／vLLM／FreeToken）不受此項影響。</span>
+                    </label>
+                    <label style="display:flex; flex-direction:column; gap:6px; color:#94a3b8; font-size:0.84rem;">
+                        <span style="color:#f8fafc; font-weight:600;">工具迴圈上限（輪）</span>
+                        <input id="cyber-v2-tool-rounds" type="number" min="0" max="5" value="3" style="padding:9px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.12); color:#f8fafc;" />
+                    </label>
+                    <label style="display:flex; flex-direction:column; gap:6px; color:#94a3b8; font-size:0.84rem;">
+                        <span style="color:#f8fafc; font-weight:600;">氣泡上限（1–8）</span>
+                        <input id="cyber-v2-max-bubbles" type="number" min="1" max="8" value="2" style="padding:9px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.12); color:#f8fafc;" />
+                        <span style="color:#64748b; font-size:0.76rem;">最多拆成幾則訊息；內容太短時不一定會用滿。</span>
+                    </label>
+                </div>
+
+                <div style="display:flex; flex-wrap:wrap; gap:14px; margin-top:14px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.08);">
+                    <label style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:0.88rem; cursor:pointer;"><input id="cyber-v2-gateway" type="checkbox" style="width:16px;height:16px;" /><span>啟用 TurnGateway 單一入口</span></label>
+                    <label style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:0.88rem; cursor:pointer;"><input id="cyber-v2-owns-mentions" type="checkbox" style="width:16px;height:16px;" /><span>Gateway 接管 @雪莉</span></label>
+                    <label style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:0.88rem; cursor:pointer;"><input id="cyber-v2-autonomous" type="checkbox" checked style="width:16px;height:16px;" /><span>啟用自主接話</span></label>
+                    <label style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:0.88rem; cursor:pointer;"><input id="cyber-v2-tools-enabled" type="checkbox" checked style="width:16px;height:16px;" /><span>啟用工具</span></label>
+                    <label style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:0.88rem; cursor:pointer;"><input id="cyber-v2-sanitize" type="checkbox" checked style="width:16px;height:16px;" /><span>去 AI 味／工具痕跡清洗</span></label>
+                </div>
+
+                <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; margin-top:14px;">
+                    <label style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:0.86rem; cursor:pointer;"><input id="cyber-v2-dynamic-context" type="checkbox" checked style="width:16px;height:16px;" /><span>動態 context（時間／未回覆）</span></label>
+                    <label style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:0.86rem; cursor:pointer;"><input id="cyber-v2-identity-tags" type="checkbox" checked style="width:16px;height:16px;" /><span>身份標籤（名稱＋ID）</span></label>
+                    <label style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:0.86rem; cursor:pointer;"><input id="cyber-v2-memory-context" type="checkbox" checked style="width:16px;height:16px;" /><span>共用記憶上下文</span></label>
+                    <label style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:0.86rem; cursor:pointer;"><input id="cyber-v2-schedule-context" type="checkbox" checked style="width:16px;height:16px;" /><span>排程 context（預留）</span></label>
+                </div>
+
+                <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; margin-top:14px;">
+                    <label style="display:flex; flex-direction:column; gap:5px; color:#94a3b8; font-size:0.82rem;">每小時上限<input id="cyber-v2-hourly" type="number" min="0" max="100" value="8" style="padding:8px;border-radius:6px;background:#0f172a;border:1px solid rgba(255,255,255,.12);color:#f8fafc;" /></label>
+                    <label style="display:flex; flex-direction:column; gap:5px; color:#94a3b8; font-size:0.82rem;">每日上限<input id="cyber-v2-daily" type="number" min="0" max="500" value="120" style="padding:8px;border-radius:6px;background:#0f172a;border:1px solid rgba(255,255,255,.12);color:#f8fafc;" /></label>
+                    <label style="display:flex; flex-direction:column; gap:5px; color:#94a3b8; font-size:0.82rem;">主動冷卻（秒）<input id="cyber-v2-cooldown" type="number" min="0" max="3600" value="120" style="padding:8px;border-radius:6px;background:#0f172a;border:1px solid rgba(255,255,255,.12);color:#f8fafc;" /></label>
+                    <label style="display:flex; flex-direction:column; gap:5px; color:#94a3b8; font-size:0.82rem;">活躍開始（時）<input id="cyber-v2-active-start" type="number" min="0" max="23" value="9" style="padding:8px;border-radius:6px;background:#0f172a;border:1px solid rgba(255,255,255,.12);color:#f8fafc;" /></label>
+                    <label style="display:flex; flex-direction:column; gap:5px; color:#94a3b8; font-size:0.82rem;">活躍結束（時）<input id="cyber-v2-active-end" type="number" min="0" max="23" value="4" style="padding:8px;border-radius:6px;background:#0f172a;border:1px solid rgba(255,255,255,.12);color:#f8fafc;" /></label>
+                    <label style="display:flex; flex-direction:column; gap:5px; color:#94a3b8; font-size:0.82rem;">心智節奏<select id="cyber-v2-mind-pace" style="padding:8px;border-radius:6px;background:#0f172a;border:1px solid rgba(255,255,255,.12);color:#f8fafc;"><option value="fast">fast</option><option value="normal" selected>normal</option><option value="chill">chill</option></select></label>
+                </div>
+
+                <div style="display:flex; flex-wrap:wrap; gap:14px; margin-top:14px;">
+                    <label style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:0.86rem;"><input id="cyber-v2-tool-search" type="checkbox" checked style="width:16px;height:16px;" /><span>SEARCH</span></label>
+                    <label style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:0.86rem;"><input id="cyber-v2-tool-stock" type="checkbox" checked style="width:16px;height:16px;" /><span>STOCK</span></label>
+                    <label style="display:flex; align-items:center; gap:8px; color:#cbd5e1; font-size:0.86rem;"><input id="cyber-v2-tool-summary" type="checkbox" checked style="width:16px;height:16px;" /><span>SUMMARY</span></label>
+                </div>
+                <p id="care-cyber-v2-msg" style="margin:10px 0 0; color:#64748b; font-size:0.78rem;">v2 設定會寫入 data/cyber_ui.json；engine_mode 儲存後即時套用。</p>
+            </div>
+
+            <details style="margin-bottom:16px;">
+                <summary style="cursor:pointer; color:#64748b; font-size:0.84rem;">舊版參數（僅回退用，v2 架構不建議修改）</summary>
+                <div style="margin-top:12px;">
+            <form id="care-surfer-form" onsubmit="event.preventDefault(); return false;" style="display: flex; flex-direction: column; gap: 16px;">
+                <!-- Cardlet A: 頻道綁定與主控開關 (Channel & Master Switches) -->
+                <div style="background: rgba(15, 23, 42, 0.45); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 14px;">
+                    <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; color: #38bdf8; font-size: 0.92rem; margin-bottom: 12px;">
+                        <span>📋</span> Cardlet A: 頻道綁定與主控開關
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; margin-bottom: 12px;">
+                        <label style="display: flex; flex-direction: column; gap: 6px; color: #94a3b8; font-size: 0.85rem;">
+                            <span style="font-weight: 600; color: #f8fafc; display: flex; align-items: center; gap: 6px;">
+                                <span>📋</span> 從可用伺服器頻道快速選擇 (推薦)
+                            </span>
+                            <select id="care-surfer-channel-select" style="padding: 10px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.15); color: #f8fafc; font-size: 0.9rem;">
+                                <option value="">載入伺服器頻道列表中...</option>
+                            </select>
+                            <span style="font-size: 0.75rem; color: #64748b;">自動掃描機器人目前加入的所有伺服器之文字頻道。</span>
+                        </label>
+
+                        <label style="display: flex; flex-direction: column; gap: 6px; color: #94a3b8; font-size: 0.85rem;">
+                            <span style="font-weight: 600; color: #f8fafc; display: flex; align-items: center; gap: 6px;">
+                                <span>✍️</span> 或手動輸入頻道 ID (Channel ID)
+                            </span>
+                            <input id="care-surfer-channel" type="text" inputmode="numeric" placeholder="例如: 123456789012345678" style="padding: 10px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.15); color: #f8fafc; font-size: 0.9rem; font-family: monospace;" />
+                            <span style="font-size: 0.75rem; color: #64748b;">輸入 0 或留空將停用 Discord 實體發文，僅記錄自我記憶。</span>
+                        </label>
+                    </div>
+
+                    <div style="display: flex; flex-wrap: wrap; gap: 16px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.05);">
+                        <label style="display: flex; align-items: center; gap: 8px; color: #cbd5e1; font-size: 0.9rem; cursor: pointer;">
+                            <input id="care-surfer-enabled" type="checkbox" style="width: 16px; height: 16px; cursor: pointer;" />
+                            <span>啟用定時衝浪主動開話題</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px; color: #cbd5e1; font-size: 0.9rem; cursor: pointer;">
+                            <input id="care-surfer-chat-reply" type="checkbox" checked style="width: 16px; height: 16px; cursor: pointer;" />
+                            <span>開啟雙向陪聊與窺屏接話 (Interject)</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Cardlet B: 社交人格與互動標註 (Social Persona & Tag Behavior) -->
+                <div style="background: rgba(15, 23, 42, 0.45); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 14px;">
+                    <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; color: #c084fc; font-size: 0.92rem; margin-bottom: 12px;">
+                        <span>🎭</span> Cardlet B: 社交人格與互動標註
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-bottom: 12px;">
+                        <label style="display: flex; flex-direction: column; gap: 6px; color: #94a3b8; font-size: 0.85rem;">
+                            主動冒泡風格 (Behavior Mode)
+                            <select id="care-surfer-behavior-mode" style="padding: 9px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc;">
+                                <option value="balanced">均衡大肥魚模式 (Auto)</option>
+                                <option value="lurk_chat">窺屏接話王 (熱聊插話)</option>
+                                <option value="daily_vibe">摸魚日常系 (吃白飯碎碎念)</option>
+                                <option value="care_poke">傲嬌關懷系 (戳群友回訪)</option>
+                                <option value="surf_gossip">吃瓜八卦系 (口語分享情報)</option>
+                            </select>
+                        </label>
+
+                        <label style="display: flex; flex-direction: column; gap: 6px; color: #94a3b8; font-size: 0.85rem;">
+                            @Tag 模式
+                            <select id="care-surfer-tag-mode" style="padding: 9px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc;">
+                                <option value="interest_match">興趣記憶匹配優先 (推薦)</option>
+                                <option value="active_random">活躍群友隨機分享</option>
+                                <option value="none">純發文不 @Tag 任何人</option>
+                            </select>
+                        </label>
+
+                        <label style="display: flex; flex-direction: column; gap: 6px; color: #94a3b8; font-size: 0.85rem;">
+                            吃瓜分享附網址模式
+                            <select id="care-surfer-url-mode" style="padding: 9px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc;">
+                                <option value="never">純口語吃瓜 (不貼網址)</option>
+                                <option value="rare">偶爾附網址 (25%機率)</option>
+                                <option value="always">總是附帶原文網址</option>
+                            </select>
+                        </label>
+                    </div>
+
+                    <div style="display: flex; flex-wrap: wrap; gap: 16px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.05);">
+                        <label style="display: flex; align-items: center; gap: 8px; color: #cbd5e1; font-size: 0.9rem; cursor: pointer;">
+                            <input id="care-surfer-multi-msg" type="checkbox" checked style="width: 16px; height: 16px; cursor: pointer;" />
+                            <span>分段短句連發 (1~3句)</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px; color: #cbd5e1; font-size: 0.9rem; cursor: pointer;">
+                            <input id="care-surfer-emoji" type="checkbox" checked style="width: 16px; height: 16px; cursor: pointer;" />
+                            <span>自動按 Emoji 表情</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Cardlet C: 節奏、時段與退避限制 (Rhythm, Silence/Backoff & Limits) -->
+                <div style="background: rgba(15, 23, 42, 0.45); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 14px;">
+                    <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; color: #fbbf24; font-size: 0.92rem; margin-bottom: 12px;">
+                        <span>⏱️</span> Cardlet C: 節奏、時段與退避限制
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-bottom: 14px;">
+                        <label style="display: flex; flex-direction: column; gap: 6px; color: #94a3b8; font-size: 0.85rem;">
+                            <span style="font-weight: 600; color: #f8fafc;">⚙️ 心智累積節奏</span>
+                            <select id="care-surfer-mind-pace" style="padding: 9px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc;">
+                                <option value="fast">🐰 話匣子模式 (冷場 10~15 分累積爆表)</option>
+                                <option value="normal" selected>🦊 活人日常模式 (冷場 25~35 分累積爆表 - 預設)</option>
+                                <option value="chill">🐢 悠閒佛系模式 (冷場 60~90 分累積爆表)</option>
+                            </select>
+                        </label>
+
+                        <label style="display: flex; flex-direction: column; gap: 6px; color: #94a3b8; font-size: 0.85rem;">
+                            <span style="font-weight: 600; color: #f8fafc;">🌞 主動講話開始時段 (UTC+8)</span>
+                            <select id="care-surfer-active-start" style="padding: 9px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc;">
+                                <option value="0">00:00 (午夜 12 點)</option>
+                                <option value="1">01:00 (凌晨 1 點)</option>
+                                <option value="2">02:00 (凌晨 2 點)</option>
+                                <option value="3">03:00 (凌晨 3 點)</option>
+                                <option value="4">04:00 (凌晨 4 點)</option>
+                                <option value="5">05:00 (清晨 5 點)</option>
+                                <option value="6">06:00 (早晨 6 點)</option>
+                                <option value="7">07:00 (早上 7 點)</option>
+                                <option value="8">08:00 (早上 8 點)</option>
+                                <option value="9" selected>09:00 (早上 9 點 - 預設)</option>
+                                <option value="10">10:00 (上午 10 點)</option>
+                                <option value="11">11:00 (上午 11 點)</option>
+                                <option value="12">12:00 (中午 12 點)</option>
+                                <option value="13">13:00 (下午 1 點)</option>
+                                <option value="14">14:00 (下午 2 點)</option>
+                                <option value="15">15:00 (下午 3 點)</option>
+                                <option value="16">16:00 (下午 4 點)</option>
+                                <option value="17">17:00 (傍晚 5 點)</option>
+                                <option value="18">18:00 (晚上 6 點)</option>
+                                <option value="19">19:00 (晚上 7 點)</option>
+                                <option value="20">20:00 (晚上 8 點)</option>
+                                <option value="21">21:00 (晚上 9 點)</option>
+                                <option value="22">22:00 (晚上 10 點)</option>
+                                <option value="23">23:00 (晚上 11 點)</option>
+                            </select>
+                        </label>
+
+                        <label style="display: flex; flex-direction: column; gap: 6px; color: #94a3b8; font-size: 0.85rem;">
+                            <span style="font-weight: 600; color: #f8fafc;">🌙 主動講話結束時段 (UTC+8)</span>
+                            <select id="care-surfer-active-end" style="padding: 9px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc;">
+                                <option value="0">00:00 (午夜 12 點)</option>
+                                <option value="1">01:00 (凌晨 1 點)</option>
+                                <option value="2">02:00 (凌晨 2 點)</option>
+                                <option value="3">03:00 (凌晨 3 點)</option>
+                                <option value="4">04:00 (凌晨 4 點)</option>
+                                <option value="5">05:00 (清晨 5 點)</option>
+                                <option value="6">06:00 (早晨 6 點)</option>
+                                <option value="7">07:00 (早上 7 點)</option>
+                                <option value="8">08:00 (早上 8 點)</option>
+                                <option value="9">09:00 (早上 9 點)</option>
+                                <option value="10">10:00 (上午 10 點)</option>
+                                <option value="11">11:00 (上午 11 點)</option>
+                                <option value="12">12:00 (中午 12 點)</option>
+                                <option value="13">13:00 (下午 1 點)</option>
+                                <option value="14">14:00 (下午 2 點)</option>
+                                <option value="15">15:00 (下午 3 點)</option>
+                                <option value="16">16:00 (下午 4 點)</option>
+                                <option value="17">17:00 (傍晚 5 點)</option>
+                                <option value="18">18:00 (晚上 6 點)</option>
+                                <option value="19">19:00 (晚上 7 點)</option>
+                                <option value="20">20:00 (晚上 8 點)</option>
+                                <option value="21">21:00 (晚上 9 點)</option>
+                                <option value="22">22:00 (晚上 10 點)</option>
+                                <option value="23" selected>23:00 (晚上 11 點 - 預設)</option>
+                            </select>
+                        </label>
+
+                        <label style="display: flex; flex-direction: column; gap: 6px; color: #94a3b8; font-size: 0.85rem;">
+                            定時巡航間隔 (分鐘)
+                            <input id="care-surfer-interval" type="number" min="5" max="1440" value="120" style="padding: 9px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc;" />
+                        </label>
+
+                        <label style="display: flex; flex-direction: column; gap: 6px; color: #94a3b8; font-size: 0.85rem;">
+                            窺屏幾句評估一次
+                            <input id="care-surfer-interject-threshold" type="number" min="1" max="50" value="6" style="padding: 9px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc;" />
+                        </label>
+
+                        <label style="display: flex; flex-direction: column; gap: 6px; color: #94a3b8; font-size: 0.85rem;">
+                            插話門檻分 (1~10)
+                            <input id="care-surfer-interject-score" type="number" min="1" max="10" value="7" style="padding: 9px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc;" />
+                        </label>
+
+                        <label style="display: flex; flex-direction: column; gap: 6px; color: #94a3b8; font-size: 0.85rem;">
+                            對話延續上限 (秒)
+                            <input id="care-surfer-active-window" type="number" min="30" max="3600" value="180" style="padding: 9px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc;" />
+                        </label>
+
+                        <label style="display: flex; flex-direction: column; gap: 6px; color: #94a3b8; font-size: 0.85rem;">
+                            主動插話冷卻 (秒)
+                            <input id="care-surfer-proactive-cooldown" type="number" min="0" max="3600" value="120" style="padding: 9px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc;" />
+                        </label>
+
+                        <label style="display: flex; flex-direction: column; gap: 6px; color: #94a3b8; font-size: 0.85rem;">
+                            每小時發言上限 (0 = 不限)
+                            <input id="care-surfer-max-hourly" type="number" min="0" max="100" value="8" style="padding: 9px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc;" />
+                        </label>
+
+                        <label style="display: flex; flex-direction: column; gap: 6px; color: #94a3b8; font-size: 0.85rem;">
+                            每日發言上限 (0 = 不限)
+                            <input id="care-surfer-max-daily" type="number" min="0" max="500" value="60" style="padding: 9px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc;" />
+                        </label>
+                    </div>
+
+                    <div style="display: flex; flex-direction: column; gap: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.05);">
+                        <label style="display: flex; align-items: center; gap: 8px; color: #cbd5e1; font-size: 0.9rem; cursor: pointer;">
+                            <input id="care-surfer-followup-enabled" type="checkbox" checked style="width: 16px; height: 16px; cursor: pointer;" />
+                            <span>啟用自主發言後漸進退避巡視 (依序間隔 1→3→5→7→10 分鐘)</span>
+                        </label>
+                        <label style="display: flex; flex-direction: column; gap: 6px; color: #94a3b8; font-size: 0.85rem;">
+                            自主發言後漸進巡檢階梯（分鐘，以逗號分隔）
+                            <input id="care-surfer-followup-intervals" type="text" placeholder="1, 3, 5, 7, 10" value="1, 3, 5, 7, 10" style="padding: 9px; border-radius: 6px; background: #0f172a; border: 1px solid rgba(255,255,255,0.1); color: #f8fafc;" />
+                        </label>
+                        <div style="color: #94a3b8; font-size: 0.8rem; line-height: 1.5; padding: 6px 10px; background: rgba(15, 23, 42, 0.5); border-left: 3px solid #38bdf8; border-radius: 4px;">
+                            💡 <strong>機制說明</strong>：此階梯<strong>僅用於巡檢群友是否有新回覆</strong>（若無人理會，雪莉將嚴格保持安靜，絕不自言自語洗版）；主動開啟全新話題或分享新聞由上方的「定時巡航間隔」（預設 120 分鐘）控制。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 儲存操作列 -->
+                <div style="display: flex; justify-content: flex-end; padding-top: 8px;">
+                    <button type="button" id="care-surfer-save-btn" class="btn-primary" style="padding: 11px 24px; border-radius: 8px; background: #3b82f6; color: white; border: none; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 0.95rem;">
+                        <span>💾</span> 儲存賽博群友設定
+                    </button>
+                </div>
+            </form>
+                </div>
+            </details>
+        </section>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- 分頁 3: 雪莉自我專屬記憶庫 (Self-Memory)                               -->
+    <!-- ===================================================================== -->
+    <div id="care-panel-self" class="care-panel" style="display: none; flex-shrink: 0;">
+        <section style="background: rgba(30, 41, 59, 0.55); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; gap: 8px; flex-wrap: wrap;">
+                <div>
+                    <h3 style="margin: 0; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+                        <span>🧠</span> 雪莉專屬自我記憶庫 (Self-Memory)
+                    </h3>
+                    <p style="margin: 4px 0 0; color: #94a3b8; font-size: 0.85rem;">
+                        雪莉自己的獨立記憶（<code>data/self_memory.db</code>）：包含衝浪閱讀觀點、生活小劇場、每日日記與近期延伸興趣。
+                    </p>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <button id="care-self-tab-reading" class="btn-secondary" style="padding: 7px 16px; border-radius: 6px; cursor: pointer; font-weight: 600;">
+                        📰 衝浪閱讀觀點
+                    </button>
+                    <button id="care-self-tab-episodes" class="btn-secondary" style="padding: 7px 16px; border-radius: 6px; cursor: pointer;">
+                        💭 日記與心境想法
+                    </button>
+                    <button id="care-self-refresh" class="btn-secondary" style="padding: 7px 14px; border-radius: 6px; cursor: pointer;">
+                        🔄 重新載入
+                    </button>
+                </div>
+            </div>
+
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.82rem; color: #cbd5e1; min-width: 780px;">
+                    <thead>
+                        <tr id="care-self-table-head" style="color: #94a3b8; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.08);">
+                            <th style="padding: 8px;">時間</th>
+                            <th style="padding: 8px;">文章標題 / 分類</th>
+                            <th style="padding: 8px;">來源 / 標籤</th>
+                            <th style="padding: 8px;">雪莉個人觀點與吐槽 / 內容</th>
+                            <th style="padding: 8px;">被 Tag 群友</th>
+                            <th style="padding: 8px;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="care-self-table-body"></tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- 分頁 4: 沙盒群像 ＆ 決策帳本 (Social Core)                             -->
+    <!-- ===================================================================== -->
+    <div id="care-panel-social" class="care-panel" style="display: none; flex-shrink: 0;">
+        <!-- 正式群保護 banner -->
+        <section style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(15, 23, 42, 0.9)); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+                <div>
+                    <h3 style="margin: 0; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+                        <span>🛡️</span> 正式群永久 SOLO 保護
+                    </h3>
+                    <p style="margin: 6px 0 0; color: #94a3b8; font-size: 0.85rem;">
+                        正式群只允許雪莉本人發言；Webhook NPC 僅能在明確設為
+                        <code>SANDBOX_GROUP</code> 的沙盒頻道啟用。此規則由 <code>SpeakerRouter</code> 硬性阻擋，非只靠 UI 隱藏。
+                    </p>
+                </div>
+                <span id="care-social-sandbox-badge" style="font-size: 0.78rem; padding: 4px 10px; border-radius: 10px; background: rgba(239, 68, 68, 0.18); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.35);">沙盒總開關：檢查中</span>
+            </div>
+        </section>
+
+        <!-- 操作列 -->
+        <section style="background: rgba(30, 41, 59, 0.55); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 16px; margin-bottom: 16px;">
+            <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
+                <label style="display: flex; flex-direction: column; gap: 4px; font-size: 0.82rem; color: #94a3b8;">
+                    沙盒頻道 ID
+                    <input id="care-social-channel-id" type="text" inputmode="numeric" placeholder="例如 1234567890" style="padding: 7px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); background: rgba(15, 23, 42, 0.8); color: #f8fafc; min-width: 200px;">
+                </label>
+                <button id="care-social-refresh" class="btn-secondary" style="padding: 8px 16px; border-radius: 6px; cursor: pointer;">🔄 載入沙盒狀態</button>
+                <button id="care-social-enable" class="btn-primary" style="padding: 8px 16px; border-radius: 6px; cursor: pointer; background: linear-gradient(135deg, #8b5cf6, #6366f1); color: white; border: none; font-weight: 600;">🎭 設為沙盒群像</button>
+                <button id="care-social-disable" class="btn-secondary" style="padding: 8px 16px; border-radius: 6px; cursor: pointer;">🔒 降回 SOLO</button>
+                <button id="care-social-kill" class="btn-secondary" style="padding: 8px 16px; border-radius: 6px; cursor: pointer; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.5); color: #fca5a5; font-weight: 600;">⛔ Kill Switch</button>
+            </div>
+            <div id="care-social-mode-summary" style="margin-top: 10px; font-size: 0.85rem; color: #cbd5e1;"></div>
+        </section>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 16px; margin-bottom: 16px;">
+            <!-- Roster -->
+            <section style="background: rgba(30, 41, 59, 0.55); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 16px;">
+                <h3 style="margin: 0 0 10px; color: #f8fafc; font-size: 1.05rem;">🎭 可發言身分 (Roster)</h3>
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 0.82rem; color: #cbd5e1;">
+                        <thead>
+                            <tr style="color: #94a3b8; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.08);">
+                                <th style="padding: 6px;">Key</th>
+                                <th style="padding: 6px;">顯示名稱</th>
+                                <th style="padding: 6px;">SOUL</th>
+                                <th style="padding: 6px;">角色</th>
+                                <th style="padding: 6px;">狀態</th>
+                                <th style="padding: 6px;">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="care-social-roster-body"></tbody>
+                    </table>
+                </div>
+                <div style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed rgba(255,255,255,0.1);">
+                    <h4 style="margin: 0 0 8px; color: #e2e8f0; font-size: 0.9rem;">➕ 新增沙盒 NPC</h4>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px;">
+                        <input id="care-npc-key" type="text" placeholder="persona_key（小寫英數）" style="padding: 6px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); background: rgba(15, 23, 42, 0.8); color: #f8fafc;">
+                        <input id="care-npc-name" type="text" placeholder="顯示名稱" style="padding: 6px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); background: rgba(15, 23, 42, 0.8); color: #f8fafc;">
+                        <select id="care-npc-soul" style="padding: 6px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); background: rgba(15, 23, 42, 0.8); color: #f8fafc;">
+                            <option value="">（載入中…）</option>
+                        </select>
+                        <input id="care-npc-style" type="text" placeholder="說話風格（可留空）" style="padding: 6px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); background: rgba(15, 23, 42, 0.8); color: #f8fafc;">
+                    </div>
+                    <button id="care-npc-add" class="btn-secondary" style="margin-top: 8px; padding: 7px 14px; border-radius: 6px; cursor: pointer;">加入 NPC</button>
+                    <p style="margin: 8px 0 0; color: #94a3b8; font-size: 0.75rem;">
+                        SOUL 檔必須放在 <code>file/soul/sandbox/</code> 底下，且不可包含路徑分隔符號。
+                    </p>
+                </div>
+            </section>
+
+            <!-- Scene Inspector -->
+            <section style="background: rgba(30, 41, 59, 0.55); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 16px;">
+                <h3 style="margin: 0 0 10px; color: #f8fafc; font-size: 1.05rem;">🎬 Scene Inspector</h3>
+                <div id="care-social-scene-summary" style="font-size: 0.85rem; color: #cbd5e1; margin-bottom: 10px;">尚未載入。</div>
+                <div id="care-social-scene-turns" style="max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; font-size: 0.82rem;"></div>
+            </section>
+        </div>
+
+        <!-- 決策帳本 -->
+        <section style="background: rgba(30, 41, 59, 0.55); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px;">
+                <h3 style="margin: 0; color: #f8fafc; font-size: 1.05rem;">📜 決策帳本（她為什麼說話／為什麼沉默）</h3>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <select id="care-social-decision-action" style="padding: 6px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); background: rgba(15, 23, 42, 0.8); color: #f8fafc; font-size: 0.82rem;">
+                        <option value="">全部動作</option>
+                        <option value="SPEAK">SPEAK</option>
+                        <option value="REACT">REACT</option>
+                        <option value="SILENT">SILENT</option>
+                    </select>
+                    <button id="care-social-decisions-refresh" class="btn-secondary" style="padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.82rem;">🔄 更新</button>
+                </div>
+            </div>
+            <div id="care-social-stats" style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px;"></div>
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.8rem; color: #cbd5e1; min-width: 860px;">
+                    <thead>
+                        <tr style="color: #94a3b8; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.08);">
+                            <th style="padding: 7px;">時間</th>
+                            <th style="padding: 7px;">頻道</th>
+                            <th style="padding: 7px;">模式</th>
+                            <th style="padding: 7px;">觸發</th>
+                            <th style="padding: 7px;">身分</th>
+                            <th style="padding: 7px;">動作</th>
+                            <th style="padding: 7px;">分數</th>
+                            <th style="padding: 7px;">原因</th>
+                        </tr>
+                    </thead>
+                    <tbody id="care-social-decisions-body"></tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+</div>

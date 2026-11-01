@@ -43,13 +43,32 @@ def normalize_ticker(ticker: str) -> str:
 class StockClient:
     """股票與加密貨幣即時報價查詢客戶端。"""
 
-    def __init__(self, timeout_sec: int = DEFAULT_TIMEOUT_SEC) -> None:
+    def __init__(
+        self,
+        timeout_sec: int = DEFAULT_TIMEOUT_SEC,
+        session: aiohttp.ClientSession | None = None,
+    ) -> None:
         """初始化客戶端。
 
         Args:
             timeout_sec: 網路請求超時秒數。
+            session: 可選的外部共用 aiohttp.ClientSession。
         """
         self._timeout = aiohttp.ClientTimeout(total=timeout_sec)
+        self._session = session
+        self._own_session = session is None
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """取得或建立 persistent ClientSession。"""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(timeout=self._timeout)
+            self._own_session = True
+        return self._session
+
+    async def close(self) -> None:
+        """關閉底層自行維護之 ClientSession。"""
+        if self._own_session and self._session and not self._session.closed:
+            await self._session.close()
 
     async def get_price(self, ticker: str) -> float | None:
         """取得標的物即時現價。
@@ -82,19 +101,19 @@ class StockClient:
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1m&range=1d"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         try:
-            async with aiohttp.ClientSession(timeout=self._timeout) as session:
-                async with session.get(url, headers=headers) as resp:
-                    if resp.status != 200:
-                        return None
-                    data: dict[str, Any] = await resp.json()
-                    chart = data.get("chart", {})
-                    results = chart.get("result")
-                    if not results:
-                        return None
-                    meta = results[0].get("meta", {})
-                    regular_price = meta.get("regularMarketPrice")
-                    if regular_price is not None:
-                        return float(regular_price)
+            session = await self._get_session()
+            async with session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    return None
+                data: dict[str, Any] = await resp.json()
+                chart = data.get("chart", {})
+                results = chart.get("result")
+                if not results:
+                    return None
+                meta = results[0].get("meta", {})
+                regular_price = meta.get("regularMarketPrice")
+                if regular_price is not None:
+                    return float(regular_price)
         except Exception as exc:
             logger.debug("[StockClient] Yahoo API 查詢失敗 (%s): %s", ticker, exc)
         return None
@@ -103,11 +122,11 @@ class StockClient:
         """透過 Binance 公開 API 查詢加密貨幣現價。"""
         url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
         try:
-            async with aiohttp.ClientSession(timeout=self._timeout) as session:
-                async with session.get(url) as resp:
-                    if resp.status == 200:
-                        data: dict[str, Any] = await resp.json()
-                        return float(data["price"])
+            session = await self._get_session()
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    data: dict[str, Any] = await resp.json()
+                    return float(data["price"])
         except Exception as exc:
             logger.debug("[StockClient] Binance API 查詢失敗 (%s): %s", symbol, exc)
         return None

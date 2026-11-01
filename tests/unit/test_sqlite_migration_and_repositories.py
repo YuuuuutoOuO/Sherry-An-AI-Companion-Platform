@@ -351,7 +351,7 @@ class TestAdminAuditManager:
     def test_audit_manager_fresh_db(self, tmp_path: Path) -> None:
         db_file = tmp_path / "chat_history.db"
         jsonl_file = tmp_path / "admin_audit.jsonl"
-        from mod.audit_manager import AdminAuditManager
+        from mod.audit_manager import AdminAuditManager, mask_session_id
 
         mgr = AdminAuditManager(log_path=jsonl_file, db_path=db_file)
         login_rec = mgr.record_login(
@@ -360,7 +360,8 @@ class TestAdminAuditManager:
             ip="127.0.0.1",
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         )
-        assert login_rec["session_id"] == "sess-12345"
+        masked_sess = mask_session_id("sess-12345")
+        assert login_rec["session_id"] == masked_sess
         assert login_rec["status"] == "active"
 
         mgr.record_action("sess-12345", "修改系統設定", "更新 API Token")
@@ -368,7 +369,7 @@ class TestAdminAuditManager:
 
         history = mgr.get_audit_history(limit=10)
         assert len(history) >= 1
-        sess_rec = next((r for r in history if r.get("session_id") == "sess-12345"), None)
+        sess_rec = next((r for r in history if r.get("session_id") == masked_sess), None)
         assert sess_rec is not None
         assert sess_rec["status"] == "logged_out"
         assert len(sess_rec.get("actions", [])) == 1
@@ -390,7 +391,7 @@ class TestAdminAuditManager:
                 )
             """)
 
-        from mod.audit_manager import AdminAuditManager
+        from mod.audit_manager import AdminAuditManager, mask_session_id
 
         mgr = AdminAuditManager(log_path=jsonl_file, db_path=db_file)
         mgr.record_login(
@@ -402,9 +403,11 @@ class TestAdminAuditManager:
         mgr.record_action("legacy-sess-001", "系統操作", "重啟機器人")
         mgr.record_logout("legacy-sess-001")
 
+        masked_legacy = mask_session_id("legacy-sess-001")
         history = mgr.get_audit_history(limit=10)
         assert len(history) == 1
-        assert history[0]["session_id"] == "legacy-sess-001"
+        assert history[0]["session_id"] == masked_legacy
         assert history[0]["status"] == "logged_out"
         assert len(history[0]["actions"]) == 1
+
 

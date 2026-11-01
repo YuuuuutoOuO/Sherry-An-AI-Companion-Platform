@@ -4,6 +4,7 @@ root_packages =
     core
     handlers
     mod
+    web_ui
 include_external_packages = True
 
 [importlinter:contract:1]
@@ -15,12 +16,20 @@ forbidden_modules =
     sqlite3
     requests
     aiohttp
+    discord
 allow_indirect_imports = True
+
 ignore_imports =
     mod.clients.* -> *
     mod.*.clients.* -> *
     mod.*.repositories.* -> *
     mod.*.repository -> *
+    mod.*.cog -> *
+    mod.*.ui -> *
+    mod.*.views -> *
+    mod.*.reports.* -> *
+    mod.dnd.world_sim -> discord
+    mod.market_plugin.utils -> discord
     mod.feed_sentinel.fetcher -> *
     mod.market_plugin.data_fetcher -> *
 
@@ -33,6 +42,7 @@ forbidden_modules =
     app
     handlers
     mod
+    web_ui
 
 [importlinter:contract:3]
 name = Handlers must not import the application layer
@@ -41,3 +51,59 @@ source_modules =
     handlers
 forbidden_modules =
     app
+
+[importlinter:contract:4]
+name = Lower layers must not import the Web UI
+type = forbidden
+source_modules =
+    app
+    core
+    handlers
+    mod
+forbidden_modules =
+    web_ui
+
+ignore_imports =
+    mod.livestream.cog -> web_ui.server
+    mod.livestream.web -> web_ui.server
+    mod.painter.web -> web_ui.server
+
+[importlinter:contract:5]
+name = Handlers must not import mod plugins directly
+type = forbidden
+source_modules =
+    handlers
+forbidden_modules =
+    mod
+
+ignore_imports =
+    handlers.executor.cog -> mod.dnd.views
+    handlers.executor.cog -> mod.livestream.ui
+    handlers.executor.cog -> mod.market_plugin.ui
+    handlers.social.tools.search_tools -> mod.deep_search.repositories.search_client
+    handlers.social.tools.draw_tool -> mod.clients
+    handlers.social.tools.image_tool -> mod.clients
+    handlers.spark.clients.web_monitor_client -> mod.deep_search.repositories.search_client
+
+[importlinter:contract:6]
+name = Mod plugins may only use stable handler contracts
+type = forbidden
+source_modules =
+    mod
+forbidden_modules =
+    handlers
+allow_indirect_imports = False
+
+ignore_imports =
+    mod.clients.cloud_inference_client -> handlers.bot_brain.client
+    mod.dnd.cog -> handlers.bot_brain
+    mod.dnd.views -> handlers.bot_brain
+    mod.feed_sentinel.cog -> handlers.bot_brain
+    mod.feed_sentinel.cog -> handlers.social.persona
+    mod.game_center.sherry_ai -> handlers.bot_brain.client
+    mod.painter.cog -> handlers.bot_brain
+    mod.painter.web -> handlers.bot_brain
+    mod.deep_search.repositories.llm_client -> handlers.bot_brain.client
+    mod.livestream.cog -> web_ui.server
+    mod.livestream.web -> web_ui.server
+    mod.painter.web -> web_ui.server

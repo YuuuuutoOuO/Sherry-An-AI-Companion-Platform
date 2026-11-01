@@ -13,7 +13,9 @@ venv/
 *.egg-info/
 dist/
 build/
-models/
+# AI model weights (root only)
+/models/
+!web_ui/static/sherry_live2d/models/
 Deprecated/
 
 # Tool caches

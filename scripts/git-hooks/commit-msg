@@ -1,0 +1,16 @@
+#!/bin/sh
+commit_msg_file="$1"
+first_line=$(head -n 1 "$commit_msg_file")
+
+pattern="^[0-9]{2}\.[0-9]{2}\.[0-9]{2}\.[0-9]{3}-.+"
+
+if ! echo "$first_line" | grep -Eq "$pattern"; then
+    echo "====================================================================="
+    echo "❌ [GIT COMMIT 格式錯誤] Commit message 不符合專案規範！"
+    echo "目前主旨: $first_line"
+    echo ""
+    echo "請使用規範格式: YY.MM.DD.NNN-繁體中文描述"
+    echo "範例: 26.10.01.003-內容過濾放棄不再當作嚴重異常並修正稽核分類"
+    echo "====================================================================="
+    exit 1
+fi

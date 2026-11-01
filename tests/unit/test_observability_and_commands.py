@@ -301,6 +301,10 @@ async def test_web_ui_sqlite_log_viewer(tmp_path: Path, monkeypatch: pytest.Monk
 
     client = app.test_client()
 
+    # R3：日誌端點收斂為管理員專用 —— 以 monkeypatch 模擬已登入管理員
+    import web_ui.server as server_mod
+    monkeypatch.setattr(server_mod, "_is_admin_request", lambda req: True)
+
     # 1. 測試 GET /api/logs/files
     resp_files = await client.get("/api/logs/files")
     assert resp_files.status_code == 200
@@ -319,7 +323,7 @@ async def test_web_ui_sqlite_log_viewer(tmp_path: Path, monkeypatch: pytest.Monk
 
 def test_admin_audit_manager_sqlite(tmp_path: Path) -> None:
     """測試 AdminAuditManager 的 SQLite 寫入與審計歷程讀取。"""
-    from mod.audit_manager import AdminAuditManager
+    from mod.audit_manager import AdminAuditManager, mask_session_id
 
     test_log = tmp_path / "admin_audit.jsonl"
     test_db = tmp_path / "chat_history.db"
@@ -340,7 +344,7 @@ def test_admin_audit_manager_sqlite(tmp_path: Path) -> None:
     # 4. 讀取歷史
     history = mgr.get_audit_history(limit=10)
     assert len(history) >= 1
-    assert history[0]["session_id"] == "sess_123"
+    assert history[0]["session_id"] == mask_session_id("sess_123")
     assert history[0]["username"] == "admin"
 
 

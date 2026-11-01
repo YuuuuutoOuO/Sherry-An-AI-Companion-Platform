@@ -51,7 +51,7 @@ def get_default_model() -> str:
         pass
     return os.getenv(
         "DND_MODEL",
-        os.getenv("PRIMARY_MODEL", f"freetoken:{os.getenv('LLM_MODEL_NAME', 'mistralai/Mixtral-8x7B-Instruct-v0.1')}"),
+        os.getenv("PRIMARY_MODEL", "freetoken:mistralai/Mixtral-8x7B-Instruct-v0.1"),
     )
 
 DEFAULT_MODEL: str = get_default_model()

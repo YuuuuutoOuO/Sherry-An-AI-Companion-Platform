@@ -75,7 +75,7 @@ class ParallelStrategy(BaseDispatchStrategy):
         channel_id = message.channel.id
         display_name = message.author.display_name
         user_id = message.author.id
-        planner_model = getattr(settings, "PARALLEL_PLANNER_MODEL", settings.CLASSIFIER_MODEL)
+        planner_model = settings.LIGHT_MODEL
         planner_timeout = getattr(settings, "PARALLEL_STEP_TIMEOUT", 60.0)
 
         # 啟動即時思考推演會話
@@ -101,6 +101,7 @@ class ParallelStrategy(BaseDispatchStrategy):
             model=planner_model,
             temperature=0.1,
             timeout=planner_timeout,
+            user_id=message.author.id,
         )
         plan_latency_ms = max(1, int((time.monotonic() - t_plan_start) * 1000))
 

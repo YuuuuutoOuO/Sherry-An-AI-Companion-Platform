@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 
 import settings
+from handlers.social.tool_specs import TOOL_ALIASES
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,67 @@ def extract_vision_context(user_query: str, visual_context: str = "") -> tuple[s
     return clean_query.strip(), vis
 
 
+def build_retrieved_memory_tail(
+    query_text: str,
+    user_id: int,
+    *,
+    exclude_text: str = "",
+    limit: int | None = None,
+) -> str:
+    """以混合檢索產生 Prompt「動態尾段」的相關記憶。
+
+    R15：此區塊只會出現在動態情境尾端，不更動靜態系統前綴，因此不破壞既有
+    Prompt Cache；與既有 snippet 重複的事實會排除。任何檢索／向量錯誤皆回傳
+    空字串，確保回覆流程不受影響。
+
+    Args:
+        query_text: 當前使用者輸入，用於關鍵字與語意召回。
+        user_id: 發話者 Discord ID。
+        exclude_text: 已注入的記憶片段；內容重複者不再重複注入。
+        limit: 最多注入條數；``None`` 時讀取 ``MEMORY_RETRIEVAL_TAIL_FACTS``。
+
+    Returns:
+        str: 格式化後的動態記憶尾段；無結果時為空字串。
+    """
+    clean = (query_text or "").strip()
+    if not clean or not user_id:
+        return ""
+
+    try:
+        from handlers.memory import embeddings, retrieval
+
+        max_facts = max(
+            1,
+            int(
+                limit
+                if limit is not None
+                else getattr(settings, "MEMORY_RETRIEVAL_TAIL_FACTS", 4)
+            ),
+        )
+        query_vector = embeddings.get_cached_query_embedding(clean)
+        facts = retrieval.search_facts_for_user(
+            user_id,
+            clean,
+            limit=max_facts,
+            query_vector=query_vector,
+        )
+    except Exception as exc:  # noqa: BLE001 - Prompt 組裝不得因檢索失敗中斷
+        logger.debug("[Prompts] 動態記憶尾段檢索失敗，略過: %s", exc)
+        return ""
+
+    lines: list[str] = []
+    seen: set[str] = set()
+    for fact in facts:
+        text = fact.fact.strip()
+        if not text or text in seen or (exclude_text and text in exclude_text):
+            continue
+        seen.add(text)
+        lines.append(f"- {text}")
+    if not lines:
+        return ""
+    return "【🔎 依當前話題即時檢索的相關長期記憶】\n" + "\n".join(lines)
+
+
 def build_user_turn_prompt(
     display_name: str,
     user_query: str,
@@ -110,44 +172,8 @@ def build_user_turn_prompt(
     return f"{context_header}使用者（{display_name}）說：「{query_text}」{obs_part}"
 
 
-#: 兩種模式共用的工具別名映射表
-_TOOL_ALIASES: dict[str, str] = {
-    "PIXIV_SEARCH": "PIXIV",
-    "PIXIV_TOOL": "PIXIV",
-    "FIND_IMAGE": "PIXIV",
-    "SEARCH_IMAGE": "PIXIV",
-    "GET_IMAGE": "PIXIV",
-    "GET_PIC": "PIXIV",
-    "PLAY_MUSIC": "MUSIC",
-    "MUSIC_PLAYER": "MUSIC",
-    "PLAY_SONG": "MUSIC",
-    "SONG": "MUSIC",
-    "SET_ALARM": "SCHEDULE",
-    "SET_REMINDER": "SCHEDULE",
-    "ALARM": "SCHEDULE",
-    "REMINDER": "SCHEDULE",
-    "SCHEDULE_REMINDER": "SCHEDULE",
-    "SPARK": "SCHEDULE",
-    "SPARK_TOOL": "SCHEDULE",
-    "STOCK_ANALYSIS": "STOCK",
-    "STOCK_LOOKUP": "STOCK",
-    "STOCK_QUOTE": "STOCK",
-    "DRAW_IMAGE": "DRAW",
-    "GENERATE_IMAGE": "DRAW",
-    "CREATE_IMAGE": "DRAW",
-    "SEARCH_WEB": "SEARCH",
-    "WEB_SEARCH": "SEARCH",
-    "GOOGLE_SEARCH": "SEARCH",
-    "WEATHER": "SEARCH",
-    "WEATHER_LOOKUP": "SEARCH",
-    "WEATHER_REPORT": "SEARCH",
-    "SYSTEM_STATUS": "SYSTEM_INSPECT",
-    "SYSTEM_MONITOR": "SYSTEM_INSPECT",
-    "SYS_INSPECT": "SYSTEM_INSPECT",
-    "SYS_STATUS": "SYSTEM_INSPECT",
-    "SYS_MONITOR": "SYSTEM_INSPECT",
-    "HARDWARE": "SYSTEM_INSPECT",
-}
+#: 兩種模式共用的工具別名映射表；由 ``tool_specs`` 單一來源衍生。
+_TOOL_ALIASES: dict[str, str] = TOOL_ALIASES
 
 # ---------------------------------------------------------------------------
 # INTEGRATED 模式 Prompt 模板

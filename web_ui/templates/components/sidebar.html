@@ -2,84 +2,124 @@
 <aside class="sidebar">
     <div class="sidebar-brand">
         <div class="sidebar-avatar-wrap">
-            <img src="/static/sherry_avatar.png" alt="Sherry" class="sidebar-avatar-img">
+            <img src="/static/sherry_avatar_cutout.png" alt="Sherry" class="sidebar-avatar-img">
             <span class="sidebar-avatar-dot" title="Sherry AI Active"></span>
         </div>
         <div class="brand-text">
-            <span class="brand-name">Sherry 🔵</span>
-            <span class="brand-sub">名偵探 Console</span>
+            <span class="brand-name">Sherry</span>
+            <span class="brand-sub">Detective Console</span>
         </div>
     </div>
-    <nav class="sidebar-nav">
-        <!-- 1. 獨立總覽按鈕 (連線後第一畫面) -->
-        <button class="nav-btn active" id="nav-dashboard" onclick="switchView('dashboard')">
-            <span class="nav-icon">📊</span>
-            <span>總覽主控台</span>
+
+    <nav class="sidebar-nav" aria-label="主要導覽">
+        <!-- 1. 總覽 -->
+        <div class="nav-section-title"><span>Overview</span></div>
+        <button class="nav-btn active" id="nav-dashboard" onclick="switchView('dashboard')" title="總覽主控台">
+            <span class="nav-icon">
+                <svg class="nav-svg" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-grid"></use></svg>
+            </span>
+            <span class="nav-label">總覽主控台</span>
         </button>
 
-        <!-- 2. 核心功能 -->
-        <div class="nav-section-title">
-            <span>核心功能</span>
-        </div>
-        <button class="nav-btn" id="nav-logs" onclick="switchView('logs')">
-            <span class="nav-icon">📋</span>
-            <span>即時日誌</span>
+        <!-- 2. 監控中心 -->
+        <div class="nav-section-title"><span>Monitor</span></div>
+        <button class="nav-btn" id="nav-logs" onclick="switchView('logs')" title="即時日誌">
+            <span class="nav-icon">
+                <svg class="nav-svg" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-logs"></use></svg>
+            </span>
+            <span class="nav-label">即時日誌</span>
         </button>
-        <button class="nav-btn" id="nav-metrics" onclick="switchView('metrics')">
-            <span class="nav-icon">💻</span>
-            <span>系統資源</span>
+        <button class="nav-btn" id="nav-metrics" onclick="switchView('metrics')" title="系統資源">
+            <span class="nav-icon">
+                <svg class="nav-svg" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-metrics"></use></svg>
+            </span>
+            <span class="nav-label">系統資源</span>
         </button>
-        <button class="nav-btn" id="nav-self-monitoring" onclick="switchView('self-monitoring')">
-            <span class="nav-icon">🛡️</span>
-            <span>延遲稽核</span>
+        <button class="nav-btn" id="nav-self-monitoring" onclick="switchView('self-monitoring')" title="延遲稽核">
+            <span class="nav-icon">
+                <svg class="nav-svg" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-shield"></use></svg>
+            </span>
+            <span class="nav-label">延遲稽核</span>
         </button>
-        <button class="nav-btn" id="nav-tasks" onclick="switchView('tasks')">
-            <span class="nav-icon">⏰</span>
-            <span>任務排程</span>
+        <button class="nav-btn" id="nav-tasks" onclick="switchView('tasks')" title="工作與自癒">
+            <span class="nav-icon">
+                <svg class="nav-svg" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-tasks"></use></svg>
+            </span>
+            <span class="nav-label">工作與自癒</span>
         </button>
-        <button class="nav-btn" id="nav-spark" onclick="switchView('spark')">
-            <span class="nav-icon">📡</span>
-            <span>Spark 條件推播</span>
+        <button class="nav-btn" id="nav-services" onclick="switchView('services')" title="地端 AI 服務">
+            <span class="nav-icon">
+                <svg class="nav-svg" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-services"></use></svg>
+            </span>
+            <span class="nav-label">地端 AI 服務</span>
         </button>
-        <button class="nav-btn" id="nav-chat" onclick="switchView('chat')">
-            <span class="nav-icon">💬</span>
-            <span>雪莉測試室</span>
-        </button>
-        <button class="nav-btn" id="nav-services" onclick="switchView('services')">
-            <span class="nav-icon">📡</span>
-            <span>地端 AI 服務</span>
-        </button>
-        <button class="nav-btn" id="nav-bot-status" onclick="switchView('bot-status')">
-            <span class="nav-icon">🎵</span>
-            <span>語音與音樂監控</span>
-        </button>
-        <button class="nav-btn" id="nav-roast" onclick="switchView('roast')">
-            <span class="nav-icon">🎯</span>
-            <span>吐槽清單</span>
-        </button>
-        <button class="nav-btn admin-only" id="nav-audit" onclick="switchView('audit')">
-            <span class="nav-icon">🛡️</span>
-            <span>管理員審計</span>
-        </button>
-        <button class="nav-btn admin-only" id="nav-mod-manager" onclick="switchView('mod-manager')">
-            <span class="nav-icon">🧩</span>
-            <span>模組管理</span>
-        </button>
-        <button class="nav-btn" id="nav-settings" onclick="switchView('settings')">
-            <span class="nav-icon">⚙️</span>
-            <span>系統設定</span>
+        <button class="nav-btn" id="nav-bot-status" onclick="switchView('bot-status')" title="語音與音樂監控">
+            <span class="nav-icon">
+                <svg class="nav-svg" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-music"></use></svg>
+            </span>
+            <span class="nav-label">語音與音樂</span>
         </button>
 
-        <!-- 3. 模組功能 (由 SherryUI 根據加載的模組被動渲染) -->
-        <div id="sidebar-dynamic-mods-wrap" class="sidebar-dynamic-group">
-            <div class="nav-section-title" id="nav-mod-section-title">
-                <span>模組功能</span>
-            </div>
+        <!-- 3. 雪莉與互動 -->
+        <div class="nav-section-title"><span>Companion</span></div>
+        <button class="nav-btn" id="nav-spark" onclick="switchView('spark')" title="Spark 條件推播">
+            <span class="nav-icon">
+                <svg class="nav-svg" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-spark"></use></svg>
+            </span>
+            <span class="nav-label">Spark 條件推播</span>
+        </button>
+        <button class="nav-btn" id="nav-care" title="賽博群友">
+            <span class="nav-icon">
+                <svg class="nav-svg" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-users"></use></svg>
+            </span>
+            <span class="nav-label">賽博群友</span>
+        </button>
+        <button class="nav-btn" id="nav-chat" onclick="switchView('chat')" title="雪莉測試室">
+            <span class="nav-icon">
+                <svg class="nav-svg" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chat"></use></svg>
+            </span>
+            <span class="nav-label">雪莉測試室</span>
+        </button>
+        <button class="nav-btn" id="nav-roast" onclick="switchView('roast')" title="吐槽清單">
+            <span class="nav-icon">
+                <svg class="nav-svg" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-target"></use></svg>
+            </span>
+            <span class="nav-label">吐槽清單</span>
+        </button>
+
+        <!-- 4. 系統管理 -->
+        <div class="nav-section-title"><span>System</span></div>
+        <button class="nav-btn admin-only" id="nav-audit" onclick="switchView('audit')" title="管理員審計">
+            <span class="nav-icon">
+                <svg class="nav-svg" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-audit"></use></svg>
+            </span>
+            <span class="nav-label">管理員審計</span>
+        </button>
+        <button class="nav-btn admin-only" id="nav-mod-manager" onclick="switchView('mod-manager')" title="模組管理">
+            <span class="nav-icon">
+                <svg class="nav-svg" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-mod"></use></svg>
+            </span>
+            <span class="nav-label">模組管理</span>
+        </button>
+        <button class="nav-btn" id="nav-settings" onclick="switchView('settings')" title="系統設定">
+            <span class="nav-icon">
+                <svg class="nav-svg" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-settings"></use></svg>
+            </span>
+            <span class="nav-label">系統設定</span>
+        </button>
+
+        <!-- 5. 模組功能 (由 SherryUI 根據加載的模組被動渲染) -->
+        <div id="sidebar-dynamic-mods-wrap" class="sidebar-dynamic-group" style="display: none;">
+            <div class="nav-section-title" id="nav-mod-section-title"><span>Modules</span></div>
             <div id="sidebar-dynamic-mods" class="sidebar-dynamic-group"></div>
         </div>
     </nav>
+
     <div class="sidebar-status">
         <div class="status-dot" id="status-dot"></div>
-        <span id="status-text">連線中...</span>
+        <div class="sidebar-status-text">
+            <span class="sidebar-status-label">System Status</span>
+            <span id="status-text">連線中...</span>
+        </div>
     </div>
 </aside>

@@ -17,6 +17,7 @@ from typing import Any, Optional
 
 import discord
 import settings
+from core.concurrency import db_pool, schedule_in_pool
 from core.db import get_db_connection, db_transaction
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,16 @@ def _init_chat_db() -> None:
                     date_str TEXT PRIMARY KEY,
                     processed_at TEXT NOT NULL,
                     stats_json TEXT NOT NULL DEFAULT '{}'
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS world_retry_queue (
+                    date_str TEXT NOT NULL,
+                    server_id TEXT NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '',
+                    queued_at TEXT NOT NULL,
+                    resolved_at TEXT,
+                    PRIMARY KEY (date_str, server_id)
                 )
             """)
         _CHAT_DB_INITIALIZED = True
@@ -134,12 +145,8 @@ def append_chat_log(message: discord.Message) -> None:
                 should_flush = True
 
         if should_flush:
-            try:
-                import asyncio
-                loop = asyncio.get_running_loop()
-                loop.run_in_executor(None, flush_chat_logs)
-            except RuntimeError:
-                flush_chat_logs()
+            # 專用 DB 池：聊天記錄批次落盤不得排擠 WebUI 的預設 executor。
+            schedule_in_pool(db_pool, flush_chat_logs)
     except Exception as exc:
         logger.debug("chat_logger: 加入緩衝失敗: %s", exc)
 
@@ -219,6 +226,41 @@ def read_chat_log(date_str: str, server_id: str = "") -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# R6：使用者資料刪除（GDPR／/forget 管線使用）
+# ---------------------------------------------------------------------------
+
+def soft_delete_chat_messages(user_id: str | int) -> int:
+    """軟刪除指定使用者在 `chat_messages` 的全部對話紀錄。
+
+    - 僅標記（`is_deleted=1` + `deleted_at`），保留軌跡；物理清除由保留
+      政策／`db_manager cleanup_soft_deleted` 於保留期後執行（R7）。
+    - 讀取路徑（`read_chat_log` 等）已內建 `WHERE is_deleted = 0` 過濾。
+    - 寫入失敗時拋出例外（由 `purge_user_data` 記錄為子範圍失敗）。
+
+    Args:
+        user_id: 使用者 Discord ID。
+
+    Returns:
+        int: 本次標記的訊息列數。
+    """
+    _init_chat_db()
+    uid = str(user_id)
+    now_str = datetime.now(_TZ_TW).isoformat()
+    with db_transaction(DB_PATH) as cur:
+        cur.execute(
+            """
+            UPDATE chat_messages
+            SET is_deleted = 1, deleted_at = ?, updated_at = datetime('now', 'localtime')
+            WHERE user_id = ? AND is_deleted = 0
+            """,
+            (now_str, uid),
+        )
+        deleted = cur.rowcount if cur.rowcount is not None and cur.rowcount >= 0 else 0
+    logger.info("chat_logger: 已軟刪除使用者 %s 的對話紀錄 %d 則", uid, deleted)
+    return int(deleted)
+
+
+# ---------------------------------------------------------------------------
 # 處理標記
 # ---------------------------------------------------------------------------
 
@@ -273,6 +315,54 @@ def mark_date_processed(date_str: str, stats: Optional[dict[str, Any]] = None) -
             json.dump(info, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
+
+
+def record_world_retry(date_str: str, server_ids: list[str], reason: str = "") -> None:
+    """記錄世界記憶提煉失敗的伺服器，供日後補跑。
+
+    使用者層級記憶與日期標記已完成，世界階段失敗不會回滾，
+    因此需獨立保存待補跑清單，避免該日世界記憶永久缺失。
+    """
+    now_str = datetime.now(_TZ_TW).isoformat()
+    try:
+        _init_chat_db()
+        with db_transaction(DB_PATH) as cur:
+            cur.executemany("""
+                INSERT OR IGNORE INTO world_retry_queue
+                    (date_str, server_id, reason, queued_at, resolved_at)
+                VALUES (?, ?, ?, ?, NULL)
+            """, [(date_str, str(sid), reason, now_str) for sid in server_ids])
+    except Exception as exc:
+        logger.warning("chat_logger: 寫入 world_retry_queue 失敗: %s", exc)
+
+
+def get_pending_world_retries(limit: int = 20) -> list[tuple[str, str]]:
+    """取出尚未補跑完成的世界記憶 (date_str, server_id)。"""
+    try:
+        _init_chat_db()
+        with db_transaction(DB_PATH) as cur:
+            cur.execute("""
+                SELECT date_str, server_id FROM world_retry_queue
+                WHERE resolved_at IS NULL
+                ORDER BY date_str ASC LIMIT ?
+            """, (limit,))
+            return [(str(r[0]), str(r[1])) for r in cur.fetchall()]
+    except Exception as exc:
+        logger.warning("chat_logger: 讀取 world_retry_queue 失敗: %s", exc)
+        return []
+
+
+def resolve_world_retry(date_str: str, server_id: str) -> None:
+    """標記世界記憶補跑完成。"""
+    try:
+        _init_chat_db()
+        with db_transaction(DB_PATH) as cur:
+            cur.execute("""
+                UPDATE world_retry_queue SET resolved_at = ?
+                WHERE date_str = ? AND server_id = ?
+            """, (datetime.now(_TZ_TW).isoformat(), date_str, server_id))
+    except Exception as exc:
+        logger.warning("chat_logger: 更新 world_retry_queue 失敗: %s", exc)
 
 
 def get_yesterday_str() -> str:

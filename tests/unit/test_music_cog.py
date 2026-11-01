@@ -1,4 +1,5 @@
 import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 from discord.ext import commands
@@ -316,6 +317,39 @@ def test_music_handler_on_voice_state_update_leave() -> None:
     asyncio.run(_run())
 
 
+def test_music_handler_on_voice_state_update_unexpected_disconnect_triggers_auto_heal() -> None:
+    """測試當有正在播放的音樂時非預期斷開語音，不直接呼叫 stop_player，而是觸發自癒重連任務。"""
+    async def _run() -> None:
+        bot = MagicMock(spec=commands.Bot)
+        bot.user.id = 123456
+        handler = MusicHandler(bot)
+        handler.stop_player = AsyncMock()
+        handler._handle_unexpected_voice_disconnect = AsyncMock()
+
+        member = MagicMock(spec=discord.Member)
+        member.id = 123456
+        member.guild.id = 4444
+
+        before = MagicMock(spec=discord.VoiceState)
+        before.channel = MagicMock()
+
+        after = MagicMock(spec=discord.VoiceState)
+        after.channel = None
+
+        # 設定有正在播放的歌曲
+        handler.current_song[4444] = {"title": "10小時放鬆音樂", "duration": 36000}
+
+        # Act
+        await handler.on_voice_state_update(member, before, after)
+        await asyncio.sleep(0.01)
+
+        # Assert: 絕不應直接呼叫 stop_player，而是應轉交 _handle_unexpected_voice_disconnect
+        handler.stop_player.assert_not_called()
+        handler._handle_unexpected_voice_disconnect.assert_called_once()
+
+    asyncio.run(_run())
+
+
 def test_cleanup_guild_source_kills_ffmpeg_process() -> None:
     """測試 _cleanup_guild_source 正確終止未結束的 FFmpeg 進程並關閉管道。"""
     bot = MagicMock(spec=commands.Bot)
@@ -458,6 +492,349 @@ def test_after_playback_native_crash_and_circuit_breaker() -> None:
         assert guild_id not in handler.current_sources
 
     asyncio.run(_run())
+
+
+def test_parse_time_to_seconds_and_url_timestamp() -> None:
+    """測試時間軸字串與 URL 時間戳解析。"""
+    # 絕對時間
+    assert MusicHandler.parse_time_to_seconds("20:00") == 1200
+    assert MusicHandler.parse_time_to_seconds("01:20:30") == 4830
+    assert MusicHandler.parse_time_to_seconds("1200") == 1200
+    assert MusicHandler.parse_time_to_seconds("20m") == 1200
+    assert MusicHandler.parse_time_to_seconds("20分") == 1200
+    assert MusicHandler.parse_time_to_seconds("20分鐘") == 1200
+    assert MusicHandler.parse_time_to_seconds("1小時20分30秒") == 4830
+    assert MusicHandler.parse_time_to_seconds("90s") == 90
+    assert MusicHandler.parse_time_to_seconds("invalid_time") is None
+
+    # 相對時間
+    assert MusicHandler.parse_time_to_seconds("+30", current_elapsed=100) == 130
+    assert MusicHandler.parse_time_to_seconds("+30s", current_elapsed=100) == 130
+    assert MusicHandler.parse_time_to_seconds("-15s", current_elapsed=100) == 85
+    assert MusicHandler.parse_time_to_seconds("+1:00", current_elapsed=100) == 160
+    assert MusicHandler.parse_time_to_seconds("-30s", current_elapsed=10) == 0
+
+    # URL 時間戳
+    assert MusicHandler.extract_url_timestamp("https://www.youtube.com/watch?v=mock&t=1200s") == 1200
+    assert MusicHandler.extract_url_timestamp("https://youtu.be/mock?t=20m") == 1200
+    assert MusicHandler.extract_url_timestamp("https://youtu.be/mock?start=300") == 300
+    assert MusicHandler.extract_url_timestamp("https://youtu.be/mock?t=1h20m30s") == 4830
+    assert MusicHandler.extract_url_timestamp("https://youtu.be/mock") == 0
+
+
+def test_seek_to_updates_timeline_and_ffmpeg_options() -> None:
+    """測試 seek_to 正確建立 -ss 參數音訊來源並更新時間軸。"""
+    async def _run() -> None:
+        bot = MagicMock(spec=commands.Bot)
+        handler = MusicHandler(bot)
+        guild_id = 4321
+
+        guild = MagicMock(spec=discord.Guild)
+        guild.id = guild_id
+        vc = MagicMock(spec=discord.VoiceClient)
+        vc.is_connected.return_value = True
+        vc.is_playing.return_value = True
+        vc.is_paused.return_value = False
+        guild.voice_client = vc
+        bot.get_guild.return_value = guild
+
+        handler.current_song[guild_id] = {
+            "title": "Seekable Song",
+            "url": "https://example.com/audio",
+            "duration": 3600,
+            "stream_url": "https://stream.example.com/audio.opus",
+        }
+        handler.current_message[guild_id] = MagicMock()
+        handler.current_message[guild_id].edit = AsyncMock()
+
+        with patch("handlers.music.cog.discord.FFmpegPCMAudio") as mock_ffmpeg:
+            with patch("handlers.music.cog.discord.PCMVolumeTransformer"):
+                with patch("asyncio.sleep", new=AsyncMock()):
+                    success = await handler.seek_to(guild, None, target_seconds=1200)
+                    assert success is True
+                    assert handler.playback_accumulated_time[guild_id] == 1200.0
+                    assert handler._is_seeking.get(guild_id) is True
+
+                    # 驗證 FFmpegPCMAudio 接收到 -ss 1200
+                    kwargs = mock_ffmpeg.call_args.kwargs
+                    assert "-ss 1200" in kwargs["before_options"]
+                    vc.play.assert_called_once()
+
+    asyncio.run(_run())
+
+
+def test_premature_eof_auto_resumes_from_breakpoint() -> None:
+    """測試長歌曲在半途斷流時，after_playback 自動記錄斷點並排回首位原地續播。"""
+    async def _run() -> None:
+        bot = MagicMock(spec=commands.Bot)
+        bot.loop = MagicMock()
+        handler = MusicHandler(bot)
+        guild_id = 9876
+
+        guild = MagicMock(spec=discord.Guild)
+        guild.id = guild_id
+        vc = MagicMock(spec=discord.VoiceClient)
+        vc.is_connected.return_value = True
+        guild.voice_client = vc
+        bot.get_guild.return_value = guild
+
+        text_channel = MagicMock(spec=discord.TextChannel)
+        text_channel.send = AsyncMock()
+
+        song = {
+            "title": "1 Hour Long Music",
+            "url": "https://example.com/song",
+            "duration": 3600,
+        }
+        handler.current_song[guild_id] = song
+        # 模擬已播到 20 分鐘 (1200 秒)
+        handler.playback_start_time[guild_id] = time.time() - 1200
+        handler.playback_accumulated_time[guild_id] = 0.0
+
+        after_fn = handler._create_after_playback(guild, text_channel, song)
+
+        with patch.object(handler, "_play_next"):
+            # 觸發正常結束（無錯誤），但時間僅播到 1200s (距結尾還有 2400s)
+            after_fn(error=None)
+
+            # 驗證歌曲被自動帶入 start_offset=1200 並放回佇列首位
+            assert len(handler.queues[guild_id]) == 1
+            requeued_song = handler.queues[guild_id][0]
+            assert requeued_song["title"] == "1 Hour Long Music"
+            assert requeued_song["start_offset"] == 1200
+
+            # 驗證斷點記憶庫成功儲存
+            cp = handler.last_checkpoints.get(guild_id)
+            assert cp is not None
+            assert cp["offset_seconds"] == 1200.0
+
+    asyncio.run(_run())
+
+
+def test_resume_from_checkpoint_flow() -> None:
+    """測試 resume_from_checkpoint 成功讀取斷點並接續播放。"""
+    async def _run() -> None:
+        bot = MagicMock(spec=commands.Bot)
+        handler = MusicHandler(bot)
+        guild_id = 6543
+
+        v_channel = MagicMock(spec=discord.VoiceChannel)
+        v_channel.id = 1111
+        v_channel.members = [MagicMock(bot=False)]
+        vc_mock = MagicMock(spec=discord.VoiceClient)
+        vc_mock.is_connected.return_value = True
+        vc_mock.is_playing.return_value = False
+        vc_mock.is_paused.return_value = False
+        v_channel.connect = AsyncMock(return_value=vc_mock)
+
+        guild = MagicMock(spec=discord.Guild)
+        guild.id = guild_id
+        guild.voice_client = None
+        guild.voice_channels = [v_channel]
+        guild.get_channel = MagicMock(return_value=v_channel)
+
+        text_channel = MagicMock(spec=discord.TextChannel)
+
+        # 預先設置斷點
+        handler.last_checkpoints[guild_id] = {
+            "song": {"title": "Interrupted Track", "url": "https://example.com/track", "duration": 3000},
+            "offset_seconds": 1200.0,
+            "voice_channel_id": 1111,
+            "text_channel_id": 2222,
+        }
+
+        with patch.object(handler, "_play_next") as mock_play:
+            cp = await handler.resume_from_checkpoint(guild, text_channel)
+            assert cp is not None
+            assert len(handler.queues[guild_id]) == 1
+            assert handler.queues[guild_id][0]["start_offset"] == 1200
+            mock_play.assert_called_once()
+
+    asyncio.run(_run())
+
+
+def test_shutdown_guard_preserves_music_snapshot() -> None:
+    """測試關機旗標開啟時，離開語音頻道不會清空狀態與抹除快照。"""
+    async def _run() -> None:
+        bot = MagicMock(spec=commands.Bot)
+        bot.user.id = 999
+        handler = MusicHandler(bot)
+        handler.stop_player = AsyncMock()
+        guild_id = 5555
+
+        member = MagicMock(spec=discord.Member)
+        member.id = 999
+        member.guild.id = guild_id
+
+        before = MagicMock(spec=discord.VoiceState)
+        before.channel = MagicMock()
+        after = MagicMock(spec=discord.VoiceState)
+        after.channel = None
+
+        # 啟用關機防護鎖定
+        handler._is_shutting_down = True
+
+        await handler.on_voice_state_update(member, before, after)
+
+        # 驗證 stop_player 未被呼叫，保全了快照
+        handler.stop_player.assert_not_called()
+
+    asyncio.run(_run())
+
+
+def test_seek_to_preserves_paused_state() -> None:
+    """測試在暫停狀態下執行 seek_to，跳轉完成後仍維持暫停狀態。"""
+    async def _run() -> None:
+        bot = MagicMock(spec=commands.Bot)
+        handler = MusicHandler(bot)
+        guild_id = 7788
+
+        guild = MagicMock(spec=discord.Guild)
+        guild.id = guild_id
+        vc = MagicMock(spec=discord.VoiceClient)
+        vc.is_connected.return_value = True
+        vc.is_playing.return_value = False
+        vc.is_paused.return_value = True
+        guild.voice_client = vc
+        bot.get_guild.return_value = guild
+
+        handler.current_song[guild_id] = {
+            "title": "Paused Song",
+            "url": "https://example.com/audio",
+            "duration": 3600,
+            "stream_url": "https://stream.example.com/audio.opus",
+        }
+        handler.is_paused[guild_id] = True
+
+        with patch("handlers.music.cog.discord.FFmpegPCMAudio"):
+            with patch("handlers.music.cog.discord.PCMVolumeTransformer"):
+                with patch("asyncio.sleep", new=AsyncMock()):
+                    success = await handler.seek_to(guild, None, target_seconds=600)
+                    assert success is True
+                    vc.pause.assert_called_once()
+                    assert handler.is_paused[guild_id] is True
+
+    asyncio.run(_run())
+
+
+def test_parse_time_to_seconds_rejects_dirty_leftover() -> None:
+    """測試 parse_time_to_seconds 嚴格過濾髒資料字串。"""
+    assert MusicHandler.parse_time_to_seconds("20m_foo") is None
+    assert MusicHandler.parse_time_to_seconds("1小時xyz") is None
+    assert MusicHandler.parse_time_to_seconds("20:00") == 1200
+    assert MusicHandler.parse_time_to_seconds("00:00") == 0
+
+
+def test_music_ui_seek_buttons_execution() -> None:
+    """測試 UI 快轉/倒退按鈕執行時不會拋出 TypeError (delete_after)。"""
+    async def _run() -> None:
+        from handlers.music.ui import MusicControlView
+        view = MusicControlView()
+        interaction = MagicMock(spec=discord.Interaction)
+        interaction.guild_id = 9999
+        interaction.guild = MagicMock(spec=discord.Guild)
+        interaction.channel = MagicMock(spec=discord.TextChannel)
+        interaction.user = MagicMock()
+        interaction.user.mention = "@User"
+        interaction.response = AsyncMock()
+        interaction.followup = AsyncMock()
+
+        mock_cog = MagicMock(spec=MusicHandler)
+        mock_cog.current_song = {9999: {"title": "Test", "duration": 300}}
+        mock_cog.get_elapsed_time.return_value = 60
+        mock_cog.format_duration.return_value = "00:30"
+        mock_cog.seek_to = AsyncMock(return_value=True)
+
+        interaction.client.get_cog.return_value = mock_cog
+
+        seek_rewind = [item for item in view.children if getattr(item, "custom_id", None) == "seek_rewind_btn"][0]
+        seek_forward = [item for item in view.children if getattr(item, "custom_id", None) == "seek_forward_btn"][0]
+
+        # 測試倒退按鈕
+        await seek_rewind.callback(interaction)
+        interaction.followup.send.assert_called_with(
+            "⏪ @User 倒退了 30 秒 (至 00:30)！",
+            ephemeral=True,
+        )
+
+        # 測試快轉按鈕
+        interaction.followup.send.reset_mock()
+        mock_cog.format_duration.return_value = "01:30"
+        await seek_forward.callback(interaction)
+        interaction.followup.send.assert_called_with(
+            "⏩ @User 快轉了 30 秒 (至 01:30)！",
+            ephemeral=True,
+        )
+
+    asyncio.run(_run())
+
+
+def test_headless_play_preserves_query_offset() -> None:
+    """測試 headless_play 能正確從使用者輸入的網址參數中提取 offset。"""
+    async def _run() -> None:
+        bot = MagicMock(spec=commands.Bot)
+        handler = MusicHandler(bot)
+        guild_id = 8888
+        mock_guild = MagicMock(spec=discord.Guild)
+        mock_guild.id = guild_id
+        mock_guild.voice_client = None
+
+        text_channel = MagicMock(spec=discord.TextChannel)
+        text_channel.guild = mock_guild
+        text_channel.send = AsyncMock()
+
+        voice_channel = MagicMock(spec=discord.VoiceChannel)
+        mock_vc = MagicMock(spec=discord.VoiceClient)
+        mock_vc.is_connected.return_value = True
+        mock_vc.is_playing.return_value = False
+        voice_channel.connect = AsyncMock(return_value=mock_vc)
+
+        raw_query = "https://www.youtube.com/watch?v=mock_video&t=150s"
+        mock_info = {
+            "title": "Mock Video",
+            "webpage_url": "https://www.youtube.com/watch?v=mock_video",  # yt-dlp 常返回去參數網址
+            "duration": 600,
+            "thumbnail": "https://thumb.url",
+            "extractor": "youtube",
+        }
+
+        with patch("handlers.music.cog.ytdl_client.extract_info", return_value=mock_info):
+            with patch.object(handler, "_play_next"):
+                await handler.headless_play(text_channel, voice_channel, raw_query)
+                assert guild_id in handler.queues
+                queued = handler.queues[guild_id][-1]
+                assert queued["start_offset"] == 150
+
+    asyncio.run(_run())
+
+
+def test_premature_eof_max_retries() -> None:
+    """測試異常中斷超過 3 次時停止重試，避免造成死迴圈。"""
+    bot = MagicMock(spec=commands.Bot)
+    bot.loop = MagicMock()
+    handler = MusicHandler(bot)
+    guild_id = 7777
+
+    guild = MagicMock(spec=discord.Guild)
+    guild.id = guild_id
+    text_ch = MagicMock(spec=discord.TextChannel)
+
+    song = {
+        "title": "Endless Crash",
+        "duration": 1800,
+        "eof_retries": 3,  # 已達到 3 次上限
+    }
+
+    handler.playback_start_time[guild_id] = time.time() - 100
+    handler.playback_accumulated_time[guild_id] = 0
+
+    after_fn = handler._create_after_playback(guild, text_ch, song)
+    after_fn(error=None)
+
+    # 應不會再把 song 塞回佇列首位重試
+    assert handler.queues.get(guild_id, []) == []
+
+
 
 
 

@@ -97,6 +97,40 @@ def test_admin_cog_memory_command_world() -> None:
     asyncio.run(_run())
 
 
+def test_admin_cog_memory_command_self() -> None:
+    """測試 /memory self 指令正常取得雪莉的自我記憶庫 (Embed)。"""
+    async def _run() -> None:
+        bot = MagicMock()
+        cog = AdminCog(bot)
+
+        interaction = MagicMock(spec=discord.Interaction)
+        interaction.channel_id = 12345
+        interaction.response = MagicMock()
+        interaction.response.defer = AsyncMock()
+        interaction.followup = MagicMock()
+        interaction.followup.send = AsyncMock()
+
+        action = app_commands.Choice(name="雪莉自我記憶", value="self")
+        mock_episodes = [{"topic": "測試想法", "content": "今天在群組摸魚很開心", "emotional_tone": "得意"}]
+        mock_actions = [{"verb": "賽博群友", "summary": "熱聊對線", "detail": {"thought": "有趣話題"}, "created_at": 1700000000}]
+        mock_readings = [{"title": "AI 發展報告", "opinion": "這篇分析還算精準", "source": "科技網"}]
+
+        callback = cast(Any, cog.memory_command.callback)
+        with patch("handlers.memory.self_memory.list_self_episodes", return_value=mock_episodes), \
+             patch("handlers.memory.self_memory.list_self_actions", return_value=mock_actions), \
+             patch("handlers.memory.self_memory.list_reading_logs", return_value=mock_readings):
+            await callback(cog, interaction, action=action)
+
+        assert interaction.followup.send.called
+        _, kwargs = interaction.followup.send.call_args
+        embed = kwargs.get("embed")
+        assert embed is not None
+        assert "雪莉自我記憶庫" in embed.title
+        assert kwargs.get("ephemeral") is True
+
+    asyncio.run(_run())
+
+
 def test_admin_cog_stats_command() -> None:
     """測試 /stats 狀態儀表板指令正常生成 Embed。"""
     async def _run() -> None:
@@ -225,21 +259,24 @@ def test_memory_clear_super_admin_permission() -> None:
             assert kwargs["ephemeral"] is True
             assert "777888" in mem_mgr._store
 
-        # 2. 最高管理員執行清除 -> 成功並持久化至磁碟
+        # 2. 最高管理員執行清除 -> 走 R6 交易級清除管線（軟刪 API）
         auth_interaction = MagicMock(spec=discord.Interaction)
         auth_interaction.user.id = 111222
         auth_interaction.response = MagicMock()
         auth_interaction.response.send_message = AsyncMock()
 
         with patch.object(settings, "ADMIN_USER_IDS", [111222]), \
-             patch("handlers.memory.storage.save_user_memory") as mock_save:
+             patch(
+                 "handlers.memory.storage.purge_user_data",
+                 new=AsyncMock(return_value={"ok": True, "scopes": {}}),
+             ) as mock_purge:
             await callback(cog, auth_interaction, action=action, user=target_user)
 
             auth_interaction.response.send_message.assert_called_once()
             args, _ = auth_interaction.response.send_message.call_args
             assert "已成功清除" in args[0]
             assert "777888" not in mem_mgr._store
-            mock_save.assert_called_once()
+            mock_purge.assert_awaited_once()
 
     asyncio.run(_run())
 
@@ -269,12 +306,15 @@ def test_memory_control_view_button_author_validation() -> None:
         mem_mgr._store = {"12345": {"facts": ["喜歡吃拉麵"]}}
         self_interaction.client.get_cog = MagicMock(return_value=mem_mgr)
 
-        with patch("handlers.memory.storage.save_user_memory") as mock_save:
+        with patch(
+            "handlers.memory.storage.purge_user_data",
+            new=AsyncMock(return_value={"ok": True, "scopes": {}}),
+        ) as mock_purge:
             await view.incorrect_button.callback(self_interaction)
             self_interaction.response.send_message.assert_called_once()
             assert "把錯亂的記憶刪除囉" in self_interaction.response.send_message.call_args[0][0]
             assert "12345" not in mem_mgr._store
-            mock_save.assert_called_once()
+            mock_purge.assert_awaited_once()
 
 
     asyncio.run(_run())

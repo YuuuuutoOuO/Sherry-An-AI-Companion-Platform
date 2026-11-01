@@ -221,6 +221,8 @@ def log_world_event(
             importance=max(1, min(5, importance)),
             server_id=server_id,
         )
+        # R7：寫入同步清快取（報告 §5.2.5），避免摘要持續供應過期內容
+        clear_world_memory_cache()
         return event_id
     except Exception as exc:
         logger.warning("world_memory: 寫入事件失敗: %s", exc)
@@ -262,12 +264,12 @@ def read_world_events(date_str: str, server_id: str = "") -> list[dict[str, Any]
         conn = get_db_connection(_WORLD_DB_PATH)
         if server_id:
             rows = conn.execute(
-                "SELECT * FROM world_events WHERE date_str = ? AND server_id = ? ORDER BY ts ASC",
+                "SELECT * FROM world_events WHERE date_str = ? AND server_id = ? AND is_deleted = 0 ORDER BY ts ASC",
                 (date_str, server_id),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM world_events WHERE date_str = ? ORDER BY ts ASC",
+                "SELECT * FROM world_events WHERE date_str = ? AND is_deleted = 0 ORDER BY ts ASC",
                 (date_str,),
             ).fetchall()
         conn.close()
@@ -296,12 +298,12 @@ def read_recent_events(days: int = 1, server_id: str = "") -> list[dict[str, Any
         conn = get_db_connection(_WORLD_DB_PATH)
         if server_id:
             rows = conn.execute(
-                "SELECT * FROM world_events WHERE server_id = ? AND date_str >= ? AND date_str <= ? ORDER BY ts ASC",
+                "SELECT * FROM world_events WHERE server_id = ? AND date_str >= ? AND date_str <= ? AND is_deleted = 0 ORDER BY ts ASC",
                 (server_id, cutoff_date, today_date),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM world_events WHERE date_str >= ? AND date_str <= ? ORDER BY ts ASC",
+                "SELECT * FROM world_events WHERE date_str >= ? AND date_str <= ? AND is_deleted = 0 ORDER BY ts ASC",
                 (cutoff_date, today_date),
             ).fetchall()
         conn.close()
@@ -392,6 +394,7 @@ def _load_compressed_memory(days: int, min_importance: int, server_id: str = "")
                 """
                 SELECT * FROM world_summary
                 WHERE server_id = ?
+                  AND is_deleted = 0
                   AND REPLACE(SUBSTR(ts, 1, 19), 'T', ' ') >= ?
                   AND REPLACE(SUBSTR(ts, 1, 19), 'T', ' ') <= ?
                   AND importance >= ?
@@ -403,7 +406,8 @@ def _load_compressed_memory(days: int, min_importance: int, server_id: str = "")
             rows = conn.execute(
                 """
                 SELECT * FROM world_summary
-                WHERE REPLACE(SUBSTR(ts, 1, 19), 'T', ' ') >= ?
+                WHERE is_deleted = 0
+                  AND REPLACE(SUBSTR(ts, 1, 19), 'T', ' ') >= ?
                   AND REPLACE(SUBSTR(ts, 1, 19), 'T', ' ') <= ?
                   AND importance >= ?
                 ORDER BY ts DESC
@@ -471,42 +475,99 @@ def compress_daily_events(date_str: str, server_id: str = "") -> int:
         except sqlite3.Error:
             pass
 
-    # 保留最近 90 天的摘要
+    # 保留最近 90 天的摘要（R7：改為軟刪除保留軌跡；物理清理由保留治理清運執行）
     cutoff = datetime.now(_TZ_TW) - timedelta(days=90)
     cutoff_str = cutoff.isoformat()
+    purged = 0
     try:
         with db_transaction(_WORLD_DB_PATH) as cur:
-            cur.execute("DELETE FROM world_summary WHERE ts < ?", (cutoff_str,))
+            cur.execute(
+                """
+                UPDATE world_summary
+                SET is_deleted = 1, deleted_at = ?, updated_at = datetime('now', 'localtime')
+                WHERE ts < ? AND is_deleted = 0
+                """,
+                (datetime.now(_TZ_TW).strftime("%Y-%m-%d %H:%M:%S"), cutoff_str),
+            )
+            purged = int(cur.rowcount or 0)
     except sqlite3.Error as exc:
         logger.warning("world_memory: 清理舊摘要失敗: %s", exc)
 
-    if added:
+    if added or purged:
         clear_world_memory_cache()
     return added
 
 
 def cleanup_old_logs(days: int = 30) -> int:
-    """清理超過指定天數的原始世界事件。
+    """清理超過指定天數的原始世界事件（R7：軟刪除保留軌跡）。
 
     Args:
-        days: 欲保留的天數（預設 30 天，超過此天數的原始記錄將被刪除）。
+        days: 欲保留的天數（預設 30 天，超過此天數的原始記錄將被軟刪除）。
 
     Returns:
-        int: 實際刪除的記錄筆數。
+        int: 實際軟刪除的記錄筆數。
     """
     cutoff = (datetime.now(_TZ_TW) - timedelta(days=days)).isoformat()
+    now_str = datetime.now(_TZ_TW).strftime("%Y-%m-%d %H:%M:%S")
     removed = 0
     try:
-        conn = get_db_connection(_WORLD_DB_PATH)
-        cur = conn.cursor()
-        cur.execute("DELETE FROM world_events WHERE ts < ?", (cutoff,))
-        removed = cur.rowcount if cur.rowcount is not None and cur.rowcount > 0 else 0
-        conn.commit()
-        conn.close()
-        return removed
+        with db_transaction(_WORLD_DB_PATH) as cur:
+            cur.execute(
+                """
+                UPDATE world_events
+                SET is_deleted = 1, deleted_at = ?, updated_at = ?
+                WHERE ts < ? AND is_deleted = 0
+                """,
+                (now_str, now_str, cutoff),
+            )
+            removed = int(cur.rowcount or 0)
     except sqlite3.Error as exc:
         logger.warning("world_memory: 清理原始事件失敗: %s", exc)
         return removed
+
+    if removed:
+        clear_world_memory_cache()
+        logger.info("world_memory: 已軟刪除 %d 筆超過 %d 天的原始事件", removed, days)
+    return removed
+
+
+def soft_delete_event(event_id: str, server_id: str = "") -> bool:
+    """R7：軟刪除單一世界事件（報告 §5.2.5）。
+
+    保留 `deleted_at` 軌跡；事件清單、近期事件與 LLM 摘要（含 60 秒快取）
+    立即失效，且於重啟後不會自任何歷史檔案復活。
+
+    Args:
+        event_id: 事件唯一識別碼。
+        server_id: 伺服器識別碼（選填，提供時僅刪除該伺服器的事件）。
+
+    Returns:
+        bool: 是否有事件被軟刪除（冪等：已刪除者回傳 False）。
+    """
+    now_str = datetime.now(_TZ_TW).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with db_transaction(_WORLD_DB_PATH) as cur:
+            if server_id:
+                cur.execute(
+                    "UPDATE world_events SET is_deleted = 1, deleted_at = ?, updated_at = ? "
+                    "WHERE event_id = ? AND server_id = ? AND is_deleted = 0",
+                    (now_str, now_str, str(event_id), str(server_id)),
+                )
+            else:
+                cur.execute(
+                    "UPDATE world_events SET is_deleted = 1, deleted_at = ?, updated_at = ? "
+                    "WHERE event_id = ? AND is_deleted = 0",
+                    (now_str, now_str, str(event_id)),
+                )
+            affected = int(cur.rowcount or 0)
+    except sqlite3.Error as exc:
+        logger.warning("world_memory: 軟刪除事件 %s 失敗: %s", event_id, exc)
+        return False
+
+    if affected:
+        clear_world_memory_cache()
+        logger.info("world_memory: 已軟刪除事件 %s", event_id)
+    return affected > 0
 
 
 # 確保資料表存在並執行一次性舊檔種入（模組載入時安全執行）

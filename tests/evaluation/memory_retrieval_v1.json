@@ -1,0 +1,216 @@
+{
+  "version": 1,
+  "description": "R14 長期記憶關鍵字檢索評測集：CJK trigram／短詞 LIKE／使用者隔離／軟刪硬過濾。",
+  "now": "2026-10-20T00:00:00+00:00",
+  "users": [
+    {"user_id": "u_alice", "profile_deleted": false},
+    {"user_id": "u_bob", "profile_deleted": false},
+    {"user_id": "u_carol", "profile_deleted": true},
+    {"user_id": "u_dave", "profile_deleted": false}
+  ],
+  "facts": [
+    {
+      "key": "alice_tea",
+      "user_id": "u_alice",
+      "fact": "喜歡喝紅茶，尤其是伯爵紅茶",
+      "category": "preference",
+      "importance": 4,
+      "updated_at": "2026-10-18T09:00:00+00:00"
+    },
+    {
+      "key": "alice_cat",
+      "user_id": "u_alice",
+      "fact": "養了一隻叫小雪的白色貓咪",
+      "category": "identity",
+      "importance": 5,
+      "updated_at": "2026-09-01T09:00:00+00:00"
+    },
+    {
+      "key": "alice_job",
+      "user_id": "u_alice",
+      "fact": "在台北的軟體公司當後端工程師",
+      "category": "identity",
+      "importance": 4,
+      "updated_at": "2026-08-15T09:00:00+00:00"
+    },
+    {
+      "key": "alice_hobby",
+      "user_id": "u_alice",
+      "fact": "週末喜歡爬山",
+      "category": "habit",
+      "importance": 3,
+      "updated_at": "2026-07-01T09:00:00+00:00"
+    },
+    {
+      "key": "alice_python",
+      "user_id": "u_alice",
+      "fact": "最近在學 Python 的非同步程式設計",
+      "category": "habit",
+      "importance": 3,
+      "updated_at": "2026-10-10T09:00:00+00:00"
+    },
+    {
+      "key": "alice_rule",
+      "user_id": "u_alice",
+      "fact": "稱呼雪莉為「小助手」",
+      "category": "rule",
+      "importance": 5,
+      "updated_at": "2026-10-19T09:00:00+00:00"
+    },
+    {
+      "key": "alice_deleted_address",
+      "user_id": "u_alice",
+      "fact": "舊地址是台北市信義區松高路 77 號",
+      "category": "identity",
+      "importance": 5,
+      "updated_at": "2026-10-01T09:00:00+00:00",
+      "is_deleted": true,
+      "deleted_at": "2026-10-05T09:00:00+00:00"
+    },
+    {
+      "key": "bob_coffee",
+      "user_id": "u_bob",
+      "fact": "喜歡喝黑咖啡",
+      "category": "preference",
+      "importance": 3,
+      "updated_at": "2026-10-12T09:00:00+00:00"
+    },
+    {
+      "key": "bob_physics",
+      "user_id": "u_bob",
+      "fact": "在學校教物理",
+      "category": "identity",
+      "importance": 4,
+      "updated_at": "2026-06-01T09:00:00+00:00"
+    },
+    {
+      "key": "bob_deleted_ex",
+      "user_id": "u_bob",
+      "fact": "前任的名字是阿明",
+      "category": "identity",
+      "importance": 5,
+      "updated_at": "2026-05-01T09:00:00+00:00",
+      "is_deleted": true,
+      "deleted_at": "2026-09-01T09:00:00+00:00"
+    },
+    {
+      "key": "carol_kaohsiung",
+      "user_id": "u_carol",
+      "fact": "住在高雄",
+      "category": "identity",
+      "importance": 4,
+      "updated_at": "2026-10-11T09:00:00+00:00"
+    },
+    {
+      "key": "dave_dog",
+      "user_id": "u_dave",
+      "fact": "養了一隻黃金獵犬叫阿金",
+      "category": "identity",
+      "importance": 4,
+      "updated_at": "2026-10-14T09:00:00+00:00"
+    }
+  ],
+  "cases": [
+    {
+      "id": "c01-cjk-like-2char",
+      "query": "紅茶",
+      "user_id": "u_alice",
+      "expected": ["alice_tea"],
+      "note": "2 字 CJK 低於 trigram 下限，走 LIKE 降級。"
+    },
+    {
+      "id": "c02-cjk-trigram",
+      "query": "白色貓咪",
+      "user_id": "u_alice",
+      "expected": ["alice_cat"],
+      "note": "4 字 CJK 子字串，走 FTS5 trigram。"
+    },
+    {
+      "id": "c03-ascii-fts",
+      "query": "Python",
+      "user_id": "u_alice",
+      "expected": ["alice_python"],
+      "note": "ASCII 詞彙。"
+    },
+    {
+      "id": "c04-multi-term",
+      "query": "貓咪 工程師",
+      "user_id": "u_alice",
+      "expected": ["alice_cat", "alice_job"],
+      "note": "多關鍵字 OR 召回。"
+    },
+    {
+      "id": "c05-deleted-fact",
+      "query": "信義區",
+      "user_id": "u_alice",
+      "expected": [],
+      "forbidden": ["alice_deleted_address"],
+      "note": "事實已軟刪，必須 0 召回。"
+    },
+    {
+      "id": "c06-deleted-profile",
+      "query": "高雄",
+      "user_id": "u_carol",
+      "expected": [],
+      "forbidden": ["carol_kaohsiung"],
+      "note": "使用者 Profile 已軟刪，其事實必須 0 召回。"
+    },
+    {
+      "id": "c07-user-scoping",
+      "query": "喜歡",
+      "user_id": "u_bob",
+      "expected": ["bob_coffee"],
+      "forbidden": ["alice_tea"],
+      "note": "只回傳指定使用者，且不得跨使用者召回。"
+    },
+    {
+      "id": "c08-no-hit",
+      "query": "量子力學",
+      "user_id": "u_alice",
+      "expected": [],
+      "note": "無關查詢應回傳空清單。"
+    },
+    {
+      "id": "c09-cjk-like-2char",
+      "query": "爬山",
+      "user_id": "u_alice",
+      "expected": ["alice_hobby"]
+    },
+    {
+      "id": "c10-ranking",
+      "query": "台北 工程師",
+      "user_id": "u_alice",
+      "expected": ["alice_job"],
+      "expect_top1": "alice_job",
+      "note": "已刪地址雖含台北，仍不得召回。"
+    },
+    {
+      "id": "c11-deleted-fact",
+      "query": "阿明",
+      "user_id": "u_bob",
+      "expected": [],
+      "forbidden": ["bob_deleted_ex"]
+    },
+    {
+      "id": "c12-cjk-like-1char",
+      "query": "貓",
+      "user_id": "u_alice",
+      "expected": ["alice_cat"],
+      "note": "1 字 CJK 走 LIKE。"
+    },
+    {
+      "id": "c13-user-scoping",
+      "query": "黃金獵犬",
+      "user_id": "u_alice",
+      "expected": [],
+      "forbidden": ["dave_dog"],
+      "note": "其他使用者事實不得召回。"
+    }
+  ],
+  "thresholds": {
+    "min_keyword_recall": 0.9,
+    "max_false_positive_rate": 0.1,
+    "max_deleted_recall": 0.0,
+    "max_p95_latency_ms": 300.0
+  }
+}

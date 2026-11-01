@@ -4,11 +4,10 @@
    Dedicated to Sherry 🔵 — 15-year-old Anime Detective Bot
    ========================================================= */
 
-/* ── Google Fonts ────────────────────────────────────────── */
-@import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-
 /* ── CSS Custom Properties ──────────────────────────────── */
 :root {
+  --font-sans:            'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans TC', 'Microsoft JhengHei', sans-serif;
+  --font-mono:            'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, 'Courier New', monospace;
   /* Detective Midnight Blue & White Core Palette */
   --sherry-blue:          #38bdf8;
   --sherry-blue-bright:   #60a5fa;
@@ -84,7 +83,7 @@
 
 html, body {
   height: 100%;
-  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-sans);
   background: var(--bg-deep);
   color: var(--text-primary);
   font-size: 14px;
@@ -2311,6 +2310,62 @@ html, body {
 /* =========================================================
    ADMIN AUDIT LOGS VIEW
    ========================================================= */
+/* =========================================================
+   ADMIN AUDIT & USER CONNECTION LOGS VIEW
+   ========================================================= */
+.audit-tabs-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  padding-bottom: 12px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.audit-tabs-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.audit-tab-btn,
+.filter-tab {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-secondary, #94a3b8);
+  padding: 6px 14px;
+  border-radius: var(--radius-sm, 8px);
+  font-size: 0.84rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--duration, 0.2s) cubic-bezier(0.4, 0, 0.2, 1);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+  outline: none;
+  user-select: none;
+}
+
+.audit-tab-btn:hover,
+.filter-tab:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary, #ffffff);
+  border-color: rgba(0, 229, 255, 0.35);
+  transform: translateY(-1px);
+}
+
+.audit-tab-btn.active,
+.filter-tab.active {
+  background: linear-gradient(135deg, rgba(0, 229, 255, 0.2) 0%, rgba(2, 132, 199, 0.3) 100%);
+  border: 1px solid var(--sherry-blue, #00e5ff);
+  color: #ffffff;
+  font-weight: 700;
+  box-shadow: 0 0 12px rgba(0, 229, 255, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
 .audit-container {
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -2364,6 +2419,63 @@ html, body {
   padding: 2px 8px;
   border-radius: 4px;
   font-size: 0.78rem;
+}
+
+.badge-status-online {
+  color: #00ffaa;
+  background: rgba(0, 255, 170, 0.12);
+  border: 1px solid rgba(0, 255, 170, 0.3);
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 0.8rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.badge-status-idle {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 0.8rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.badge-status-offline {
+  color: var(--text-muted);
+  background: rgba(148, 163, 184, 0.1);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.visitor-badge {
+  background: rgba(56, 189, 248, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: #7dd3fc;
+  padding: 2px 8px;
+  border-radius: 8px;
+  font-family: monospace;
+  font-size: 0.82rem;
+}
+
+.path-code {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #cbd5e1;
+  font-family: monospace;
+  font-size: 0.8rem;
 }
 
 .device-text { color: var(--text-muted); font-size: 0.85rem; }

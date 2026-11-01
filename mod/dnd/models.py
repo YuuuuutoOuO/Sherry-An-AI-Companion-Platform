@@ -148,14 +148,6 @@ class Inventory:
     silver: int = 0
     copper: int = 0
 
-    def total_copper(self) -> int:
-        """Calculate total value in copper.
-
-        Returns:
-            Total copper value.
-        """
-        return self.gold * 100 + self.silver * 10 + self.copper
-
 
 @dataclass
 class Character:
@@ -218,30 +210,6 @@ class Quest:
     status: QuestStatus = QuestStatus.ACTIVE
     deadline_tick: int = 0
     progress: str = "剛接取"
-
-
-@dataclass
-class Npc:
-    """Non-Player Character entity.
-
-    Attributes:
-        npc_id: Unique NPC ID.
-        name: Name.
-        location_id: Current location.
-        appearance: Visual description.
-        personality: Traits and disposition.
-        background: Origin story.
-        schedule: Daily routine map (e.g. {"08:00": "Work", "18:00": "Tavern"}).
-        affinity: Player affinity map {user_id_str: score}.
-    """
-    npc_id: str
-    name: str
-    location_id: str
-    appearance: str
-    personality: str
-    background: str
-    schedule: dict[str, str] = field(default_factory=dict)
-    affinity: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass

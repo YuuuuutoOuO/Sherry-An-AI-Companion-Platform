@@ -1,0 +1,159 @@
+{
+  "version": 2,
+  "description": "R15 長期記憶混合檢索評測集：語意召回、關鍵字＋向量融合、使用者隔離與軟刪硬過濾。",
+  "now": "2026-10-20T00:00:00+00:00",
+  "users": [
+    {"user_id": "u_alice", "profile_deleted": false},
+    {"user_id": "u_bob", "profile_deleted": false},
+    {"user_id": "u_carol", "profile_deleted": true}
+  ],
+  "facts": [
+    {
+      "key": "alice_tea",
+      "user_id": "u_alice",
+      "fact": "喜歡喝紅茶，尤其是伯爵紅茶",
+      "category": "preference",
+      "importance": 4,
+      "updated_at": "2026-10-18T09:00:00+00:00",
+      "embedding": [1.0, 0.0, 0.0, 0.0, 0.0]
+    },
+    {
+      "key": "alice_hike",
+      "user_id": "u_alice",
+      "fact": "週末去爬山",
+      "category": "habit",
+      "importance": 3,
+      "updated_at": "2026-09-10T09:00:00+00:00",
+      "embedding": [0.0, 1.0, 0.0, 0.0, 0.0]
+    },
+    {
+      "key": "alice_python",
+      "user_id": "u_alice",
+      "fact": "最近在學 Python 的非同步程式設計",
+      "category": "habit",
+      "importance": 3,
+      "updated_at": "2026-10-10T09:00:00+00:00",
+      "embedding": [0.0, 0.0, 1.0, 0.0, 0.0]
+    },
+    {
+      "key": "alice_cat",
+      "user_id": "u_alice",
+      "fact": "養了一隻叫小雪的白色貓咪",
+      "category": "identity",
+      "importance": 5,
+      "updated_at": "2026-08-01T09:00:00+00:00",
+      "embedding": [0.0, 0.0, 0.0, 1.0, 0.0]
+    },
+    {
+      "key": "alice_deleted_address",
+      "user_id": "u_alice",
+      "fact": "舊地址是台北市信義區松高路 77 號",
+      "category": "identity",
+      "importance": 5,
+      "updated_at": "2026-07-01T09:00:00+00:00",
+      "is_deleted": true,
+      "deleted_at": "2026-08-01T09:00:00+00:00",
+      "embedding": [0.0, 0.0, 0.0, 0.0, 1.0]
+    },
+    {
+      "key": "bob_coffee",
+      "user_id": "u_bob",
+      "fact": "喜歡喝黑咖啡",
+      "category": "preference",
+      "importance": 3,
+      "updated_at": "2026-10-12T09:00:00+00:00",
+      "embedding": [1.0, 0.0, 0.0, 0.0, 0.0]
+    },
+    {
+      "key": "bob_physics",
+      "user_id": "u_bob",
+      "fact": "在學校教物理",
+      "category": "identity",
+      "importance": 4,
+      "updated_at": "2026-06-01T09:00:00+00:00",
+      "embedding": [0.0, 0.0, 1.0, 0.0, 0.0]
+    },
+    {
+      "key": "carol_kaohsiung",
+      "user_id": "u_carol",
+      "fact": "住在高雄",
+      "category": "identity",
+      "importance": 4,
+      "updated_at": "2026-10-11T09:00:00+00:00",
+      "embedding": [0.0, 1.0, 0.0, 0.0, 0.0]
+    }
+  ],
+  "cases": [
+    {
+      "id": "v2-semantic-tea",
+      "query": "想喝點熱的飲料",
+      "user_id": "u_alice",
+      "query_vector": [0.95, 0.05, 0.0, 0.0, 0.0],
+      "expected": ["alice_tea"],
+      "note": "無關鍵字重疊，僅靠語意召回。"
+    },
+    {
+      "id": "v2-semantic-hike",
+      "query": "週末的戶外活動",
+      "user_id": "u_alice",
+      "query_vector": [0.05, 0.95, 0.0, 0.0, 0.0],
+      "expected": ["alice_hike"]
+    },
+    {
+      "id": "v2-semantic-python",
+      "query": "程式開發學習",
+      "user_id": "u_alice",
+      "query_vector": [0.0, 0.05, 0.95, 0.0, 0.0],
+      "expected": ["alice_python"]
+    },
+    {
+      "id": "v2-fusion-both",
+      "query": "喝茶 爬山",
+      "user_id": "u_alice",
+      "query_vector": [0.7, 0.7, 0.0, 0.0, 0.0],
+      "expected": ["alice_tea", "alice_hike"],
+      "note": "關鍵字命中爬山，語意同時補回紅茶。"
+    },
+    {
+      "id": "v2-deleted-semantic",
+      "query": "以前住哪裡",
+      "user_id": "u_alice",
+      "query_vector": [0.0, 0.0, 0.0, 0.0, 1.0],
+      "expected": [],
+      "forbidden": ["alice_deleted_address"],
+      "note": "已刪事實即使語意高度相似也不得召回。"
+    },
+    {
+      "id": "v2-deleted-profile",
+      "query": "南部城市",
+      "user_id": "u_carol",
+      "query_vector": [0.0, 1.0, 0.0, 0.0, 0.0],
+      "expected": [],
+      "forbidden": ["carol_kaohsiung"],
+      "note": "Profile 已軟刪，其事實不得召回。"
+    },
+    {
+      "id": "v2-user-scoping",
+      "query": "飲料",
+      "user_id": "u_bob",
+      "query_vector": [1.0, 0.0, 0.0, 0.0, 0.0],
+      "expected": ["bob_coffee"],
+      "forbidden": ["alice_tea"],
+      "note": "語意候選同樣必須遵守使用者隔離。"
+    },
+    {
+      "id": "v2-no-hit",
+      "query": "宇宙飛船",
+      "user_id": "u_alice",
+      "query_vector": [0.0, 0.0, 0.0, -1.0, 0.0],
+      "expected": [],
+      "note": "低相似度不得誤召。"
+    }
+  ],
+  "thresholds": {
+    "min_keyword_recall": 0.9,
+    "max_false_positive_rate": 0.1,
+    "max_deleted_recall": 0.0,
+    "max_p95_latency_ms": 300.0
+  }
+}

@@ -7,6 +7,6 @@
 
 from __future__ import annotations
 
-from .cog import SparkActionRunner, SparkChannelContext
+from .cog import SparkActionRunner, SparkChannelContext, SparkFollowUpView
 
-__all__ = ["SparkActionRunner", "SparkChannelContext"]
+__all__ = ["SparkActionRunner", "SparkChannelContext", "SparkFollowUpView"]

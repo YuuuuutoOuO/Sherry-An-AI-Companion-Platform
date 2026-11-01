@@ -14,6 +14,8 @@ tools/db_manager.py
   python tools/db_manager.py migrate    # 自動備份並安全補齊缺漏欄位 (包含軟刪除欄位)
   python tools/db_manager.py stats      # 顯示全系統資料表筆數與軟刪除統計
   python tools/db_manager.py cleanup    # 物理清理超過 N 天 (預設 30 天) 的軟刪除資料
+  python tools/db_manager.py backup     # 加密備份全資料庫並自動輪替保留 N 份 (R7)
+  python tools/db_manager.py restore    # 還原（解密）指定備份目錄 (R7)
   python tools/db_manager.py vacuum     # 執行全資料庫 VACUUM 空間整理與重組
 """
 
@@ -23,6 +25,7 @@ import argparse
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 import shutil
 import sqlite3
@@ -38,6 +41,11 @@ if hasattr(sys.stderr, "reconfigure"):
 BASE_DIR: Path = Path(__file__).resolve().parent.parent
 DATA_DIR: Path = BASE_DIR / "data"
 BACKUP_DIR: Path = DATA_DIR / "backups"
+
+# R7：備份加密與輪替（報告 §5.5.1）
+BACKUP_KEY_ENV: str = "SHERRY_BACKUP_KEY"  # Fernet 金鑰（base64）環境變數
+BACKUP_KEY_FILENAME: str = "backup.key"  # 未提供環境變數時自動產生之金鑰檔（存於 BACKUP_DIR）
+MAX_BACKUPS: int = 5  # 備份輪替保留份數
 
 _TZ_TW = timezone(timedelta(hours=8))
 
@@ -318,6 +326,27 @@ CANONICAL_TABLES: tuple[TableDef, ...] = (
         ),
     ),
     TableDef(
+        db_relative_path="schedules.db",
+        table_name="schedule_tasks",
+        description="排程提醒主表（handlers/schedule_storage.py；R7 納入標準軟刪治理）",
+        columns=(
+            ColumnDef("task_id", "TEXT", is_primary_key=True),
+            ColumnDef("user_id", "TEXT", not_null=True),
+            ColumnDef("display_name", "TEXT", not_null=True),
+            ColumnDef("channel_id", "TEXT", not_null=True),
+            ColumnDef("schedule_type", "TEXT", not_null=True),
+            ColumnDef("trigger_time", "INTEGER"),
+            ColumnDef("cron_expr", "TEXT"),
+            ColumnDef("content", "TEXT", not_null=True),
+            ColumnDef("is_active", "INTEGER", default="1", not_null=True),
+        ) + AUDIT_COLUMNS,
+        indexes=(
+            "CREATE INDEX IF NOT EXISTS idx_sched_user ON schedule_tasks(user_id);",
+            "CREATE INDEX IF NOT EXISTS idx_sched_trigger ON schedule_tasks(trigger_time);",
+            "CREATE INDEX IF NOT EXISTS idx_sched_tasks_deleted ON schedule_tasks(is_deleted);",
+        ),
+    ),
+    TableDef(
         db_relative_path="chat_history.db",
         table_name="roast_rules",
         description="吐槽與自訂互動規則表",
@@ -489,11 +518,85 @@ def get_db_connection(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def backup_all_databases() -> Path:
-    """自動備份目前所有資料庫檔案至 data/backups/。"""
+def _get_backup_key() -> bytes | None:
+    """取得備份加密金鑰（Fernet，base64）。
+
+    優先序：
+      1. 環境變數 `SHERRY_BACKUP_KEY`（正式部署建議以秘密管理器注入）。
+      2. `data/backups/backup.key`（首次使用自動產生，權限盡可能收斂）。
+      3. 若環境缺少 `cryptography` 套件則回傳 None（降級為明文備份並警告）。
+    """
+    env_key = os.environ.get(BACKUP_KEY_ENV, "").strip()
+    if env_key:
+        return env_key.encode("utf-8")
+
+    key_file = BACKUP_DIR / BACKUP_KEY_FILENAME
+    if key_file.exists():
+        try:
+            stored = key_file.read_bytes().strip()
+            if stored:
+                return stored
+        except OSError:
+            return None
+
+    try:
+        from cryptography.fernet import Fernet
+    except ImportError:
+        print("⚠️  [備份] 缺少 cryptography 套件，本次備份將以明文保存（請安裝 cryptography）。")
+        return None
+
+    try:
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        key = Fernet.generate_key()
+        key_file.write_bytes(key)
+        try:
+            os.chmod(key_file, 0o600)
+        except OSError:
+            pass
+        print(f"🔑 [備份] 已產生備份加密金鑰: {key_file}")
+        return key
+    except OSError:
+        return None
+
+
+def _rotate_backups(keep: int = MAX_BACKUPS) -> int:
+    """R7：備份輪替——僅保留最新 N 份 `manual_db_backup_*`（報告 §5.5.1）。"""
+    if keep <= 0:
+        return 0
+    dirs = sorted(BACKUP_DIR.glob("manual_db_backup_*"), reverse=True)
+    removed = 0
+    for old_dir in dirs[keep:]:
+        if not old_dir.is_dir():
+            continue
+        try:
+            shutil.rmtree(old_dir)
+            removed += 1
+        except OSError as exc:
+            print(f"⚠️  [備份] 輪替刪除失敗 ({old_dir}): {exc}")
+    if removed:
+        print(f"♻️  [備份] 輪替完成，移除 {removed} 份過期備份（保留上限 {keep} 份）。")
+    return removed
+
+
+def backup_all_databases(keep: int = MAX_BACKUPS) -> Path:
+    """自動備份目前所有資料庫至 data/backups/（R7：加密＋輪替）。
+
+    備份檔以 Fernet 加密為 `<db>.enc`（不落明文 DB）；完成後自動輪替，
+    僅保留最新 `keep` 份備份。
+    """
     timestamp = datetime.now(_TZ_TW).strftime("%Y%m%d_%H%M%S")
     target_backup_dir = BACKUP_DIR / f"manual_db_backup_{timestamp}"
     target_backup_dir.mkdir(parents=True, exist_ok=True)
+
+    key = _get_backup_key()
+    fernet = None
+    if key is not None:
+        try:
+            from cryptography.fernet import Fernet
+        except ImportError:
+            fernet = None
+        else:
+            fernet = Fernet(key)
 
     copied = 0
     unique_dbs = {t.db_relative_path for t in CANONICAL_TABLES}
@@ -502,7 +605,12 @@ def backup_all_databases() -> Path:
         if src.exists():
             dest = target_backup_dir / rel_path
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest)
+            if fernet is not None:
+                encrypted = fernet.encrypt(src.read_bytes())
+                dest = dest.with_name(dest.name + ".enc")
+                dest.write_bytes(encrypted)
+            else:
+                shutil.copy2(src, dest)
             copied += 1
 
     try:
@@ -510,8 +618,56 @@ def backup_all_databases() -> Path:
     except ValueError:
         rel_display = target_backup_dir
 
-    print(f"🛡️  [備份完成] 已備份 {copied} 個資料庫檔案至: {rel_display}")
+    encrypted_note = "（已加密）" if fernet is not None else "（明文）"
+    print(f"🛡️  [備份完成] 已備份 {copied} 個資料庫檔案至: {rel_display} {encrypted_note}")
+    _rotate_backups(keep=keep)
     return target_backup_dir
+
+
+def restore_backup(
+    backup_dir: Path | str,
+    target_dir: Path | str | None = None,
+    key: bytes | None = None,
+) -> int:
+    """R7：還原（解密）一份備份至目標目錄（報告 §5.5.1）。
+
+    Args:
+        backup_dir: `backup_all_databases` 產生的備份目錄。
+        target_dir: 還原目標（預設 DATA_DIR）。
+        key: 覆寫金鑰（預設走 `SHERRY_BACKUP_KEY` / `backup.key`）。
+
+    Returns:
+        int: 還原的檔案數。
+    """
+    src_dir = Path(backup_dir)
+    dest_root = Path(target_dir) if target_dir is not None else DATA_DIR
+
+    fernet = None
+    enc_files = list(src_dir.rglob("*.enc"))
+    if enc_files:
+        resolved_key = key or _get_backup_key()
+        if resolved_key is None:
+            raise RuntimeError("備份為加密檔但找不到金鑰（SHERRY_BACKUP_KEY 或 backup.key）")
+        from cryptography.fernet import Fernet
+
+        fernet = Fernet(resolved_key)
+
+    restored = 0
+    for src in src_dir.rglob("*"):
+        if not src.is_file():
+            continue
+        rel = src.relative_to(src_dir)
+        if src.suffix == ".enc" and fernet is not None:
+            dest = dest_root / rel.with_suffix("")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(fernet.decrypt(src.read_bytes()))
+            restored += 1
+        elif src.suffix != ".enc":
+            dest = dest_root / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+            restored += 1
+    return restored
 
 
 def check_schema() -> dict[str, list[str]]:
@@ -705,7 +861,8 @@ def cleanup_soft_deleted(days: int = 30) -> int:
         cur = conn.cursor()
         try:
             cur.execute(
-                f"DELETE FROM {t_def.table_name} WHERE is_deleted = 1 AND (deleted_at <= ? OR deleted_at IS NULL);",
+                f"DELETE FROM {t_def.table_name} WHERE is_deleted = 1 "
+                f"AND (deleted_at IS NULL OR REPLACE(SUBSTR(deleted_at, 1, 19), 'T', ' ') <= ?);",
                 (threshold_str,),
             )
             purged = cur.rowcount
@@ -970,6 +1127,24 @@ def main(args: Sequence[str] | None = None) -> int:
         help="保留天數，超過此天數的軟刪除記錄將被永久抹除 (預設: 30)",
     )
 
+    # backup（R7：加密＋輪替）
+    backup_parser = subparsers.add_parser("backup", help="加密備份全資料庫並自動輪替")
+    backup_parser.add_argument(
+        "--keep",
+        type=int,
+        default=MAX_BACKUPS,
+        help=f"備份輪替保留份數 (預設: {MAX_BACKUPS})",
+    )
+
+    # restore（R7：解密還原）
+    restore_parser = subparsers.add_parser("restore", help="還原（解密）指定備份目錄")
+    restore_parser.add_argument("backup_dir", help="備份目錄路徑 (例如 data/backups/manual_db_backup_*)")
+    restore_parser.add_argument(
+        "--target",
+        default=None,
+        help="還原目標目錄 (預設: data/)",
+    )
+
     # vacuum
     subparsers.add_parser("vacuum", help="重組與壓縮所有資料庫檔案")
 
@@ -999,6 +1174,11 @@ def main(args: Sequence[str] | None = None) -> int:
         show_stats()
     elif parsed.command == "cleanup":
         cleanup_soft_deleted(days=parsed.days)
+    elif parsed.command == "backup":
+        backup_all_databases(keep=parsed.keep)
+    elif parsed.command == "restore":
+        restored = restore_backup(parsed.backup_dir, target_dir=parsed.target)
+        print(f"✅ [還原完成] 已還原 {restored} 個檔案至: {parsed.target or DATA_DIR}")
     elif parsed.command == "vacuum":
         vacuum_all()
 

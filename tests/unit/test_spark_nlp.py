@@ -331,7 +331,7 @@ def test_detect_action_fallback_matrix() -> None:
     assert detect_action_from_message_fallback("幫我看0050走勢")["target"] == "STOCK"
 
     # 4. WEATHER
-    assert detect_action_from_message_fallback("查台北天氣")["target"] == "WEATHER"
+    assert detect_action_from_message_fallback("查台北天氣")["target"] == "SEARCH"
 
     # 5. MUSIC
     assert detect_action_from_message_fallback("播一首周杰倫的歌")["target"] == "MUSIC"
@@ -448,4 +448,85 @@ async def test_parse_spark_context_llm_guard_fixes_wrong_mode() -> None:
     # 關鍵：驗證時間模式守衛成功將 once 糾正為 interval！
     assert cand["condition"]["mode"] == "interval"
     assert cand["condition"]["interval_minutes"] == 10
+
+
+@pytest.mark.anyio
+async def test_parse_spark_context_oneshot_search_time() -> None:
+    """測試單次指定時刻（8.30分）自動識別 SEARCH 動作與 force_search。"""
+    cand = await parse_spark_context(
+        context="@雪莉 8.30分跟我說最新CPI的消息",
+        user_id=123,
+        channel_id=456,
+    )
+    assert cand is not None
+    assert cand["trigger_type"] == "schedule"
+    assert cand["condition"]["mode"] == "once"
+    assert "target_time" in cand["condition"]
+    assert cand["action"]["action_type"] == "core_tool"
+    assert cand["action"]["target"] == "SEARCH"
+    assert cand["action"]["payload"].get("force_search") is True
+    assert "CPI" in cand["action"]["payload"]["query"]
+
+
+@pytest.mark.anyio
+async def test_parse_spark_context_weekdays_schedule() -> None:
+    """測試工作日與週期性 days_of_week 抽取。"""
+    cand = await parse_spark_context(
+        context="每個工作日早上9點提醒我開會",
+        user_id=123,
+        channel_id=456,
+    )
+    assert cand is not None
+    assert cand["trigger_type"] == "schedule"
+    assert cand["condition"]["mode"] == "daily_time"
+    assert cand["condition"]["time"] == "09:00"
+    assert cand["condition"]["days_of_week"] == [0, 1, 2, 3, 4]
+
+
+@pytest.mark.anyio
+async def test_parse_spark_context_max_runs_extraction() -> None:
+    """測試 max_runs 次數抽取與自動過濾任務訊息。"""
+    cand = await parse_spark_context(
+        context="每10分鐘提醒我喝水，總共3次",
+        user_id=123,
+        channel_id=456,
+    )
+    assert cand is not None
+    assert cand["trigger_type"] == "schedule"
+    assert cand["condition"]["mode"] == "interval"
+    assert cand["condition"]["interval_minutes"] == 10
+    assert cand["condition"]["max_runs"] == 3
+    assert "喝水" in cand["message"]
+    assert "總共3次" not in cand["message"]
+
+
+@pytest.mark.anyio
+async def test_parse_spark_context_web_monitor_extraction() -> None:
+    """測試 web_monitor 智慧巡檢守門員抽取。"""
+    cand = await parse_spark_context(
+        context="每小時幫我看看有沒有CPI或降息的重大新聞，有的話通知我",
+        user_id=123,
+        channel_id=456,
+    )
+    assert cand is not None
+    assert cand["trigger_type"] == "web_monitor"
+    assert cand["condition"]["interval_minutes"] == 60
+    assert "CPI" in cand["condition"]["query"] or "降息" in cand["condition"]["query"]
+    assert "ai_condition" in cand["condition"]
+
+
+@pytest.mark.anyio
+async def test_parse_spark_context_multi_task_agent_prompt() -> None:
+    """測試複合多任務排程自動標記為 agent_prompt。"""
+    cand = await parse_spark_context(
+        context="每天早上8點查最新CPI消息跟0050股價並跟我說早安",
+        user_id=123,
+        channel_id=456,
+    )
+    assert cand is not None
+    assert cand["trigger_type"] == "schedule"
+    assert cand["condition"]["mode"] == "daily_time"
+    assert cand["action"]["action_type"] == "agent_prompt"
+    assert "prompt" in cand["action"]["payload"]
+
 

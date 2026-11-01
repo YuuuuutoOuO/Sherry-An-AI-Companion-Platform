@@ -80,12 +80,12 @@ def test_world_memory_snippet_cache_and_clear(tmp_path: Path) -> None:
     s1 = wm.get_world_memory_snippet(days=1, min_importance=1, server_id="guild_1")
     assert "事件一" in s1
 
-    # 新增事件二（未清快取前應命中快取）
+    # R7：寫入同步清快取（報告 §5.2.5）——新增事件二後無需手動 clear 即可見
     wm.log_world_event("CHAT", "事件二", location="B", importance=4, server_id="guild_1")
     s2 = wm.get_world_memory_snippet(days=1, min_importance=1, server_id="guild_1")
-    assert "事件二" not in s2  # 命中快取
+    assert "事件二" in s2
 
-    # 清除快取後重新取得
+    # 手動清除快取後仍可重新取得
     wm.clear_world_memory_cache()
     s3 = wm.get_world_memory_snippet(days=1, min_importance=1, server_id="guild_1")
     assert "事件二" in s3

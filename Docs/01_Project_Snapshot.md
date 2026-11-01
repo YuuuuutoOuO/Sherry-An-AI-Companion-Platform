@@ -1,83 +1,73 @@
 # 🎯 專案總覽 (Project Snapshot)
 
-> 最後更新：2026-09-22 14:34
+> 最後更新：2026-09-23 02:00 (V2.0+ 架構校準)
 
 ---
 
 ## 專案基本資訊
 
-- **專案名稱**：橘雪莉 (Shiry) — 泛用型超擬真 Discord AI Agent
-- **核心目標**：打造一個具備高度擴展性、獨立靈魂記憶與特規功能（社群記憶、音樂點唱、防封鎖搜尋、解限搜圖、語音交談、圖片生成、排程提醒）的二次元虛擬智慧實況夥伴。
+- **專案名稱**：橘雪莉 (Sherry) — 泛用型超擬真 Companion & AI Agent 平台
+- **核心目標**：打造具備高度擴展性、獨立靈魂記憶、受控自主性（SPARK 條件觸發、讀空氣、主動插話）與全方位互動特能（社群記憶、音樂串流、防封鎖搜尋、解限搜圖、語音交談、圖片生成、排程提醒、股票追蹤）的二次元虛擬智慧實況夥伴。
 
 ## 技術棧 (Tech Stack)
 
 | 類別 | 技術 |
 |---|---|
-| 語言 | Python 3.10+（`from __future__ import annotations` 後向兼容） |
-| Discord 框架 | `discord.py` (v2.4+)，全採 Cog 模組化，Slash commands & Events |
-| LLM 推理 | `Ollama` Local Inference API（`/api/chat` 非同步 POST） |
+| 語言 | Python 3.10+（`from __future__ import annotations` 後向兼容，支援 3.11/3.12） |
+| 治理與架構 | Layered Architecture (Presentation `handlers/` / Domain `mod/` / Foundation `core/`)，依據 `AGENTS.md` |
+| Discord 框架 | `discord.py` (v2.4+)，全採 Cog 模組化，Slash commands, UI Modals/Views & Events |
+| LLM 推理引擎 | 多後端支援：`Ollama` (Local)、`Gemini` (Google AI Studio)、`Claude` (Anthropic)、`OpenAI` |
 | STT | `faster-whisper` large-v3（CUDA float16, zh） |
-| TTS | `TTS` XTTS-v2（speaker_wav 克隆音色） |
+| TTS | `TTS` XTTS-v2（speaker_wav 克隆音色） / Edge-TTS 備援 |
 | 圖片生成 | Stable Diffusion WebUI API（`/sdapi/v1/txt2img`） |
-| HTTP | `aiohttp`（非同步）、`trafilatura`（高效能網文解析） |
-| 音樂 | `yt-dlp` + `FFmpeg`（LoudNorm -14 LUFS 串流） |
+| 網路 I/O | `aiohttp`（非同步）、`trafilatura`（高效能網文解析） |
+| 音樂串流 | `yt-dlp` + `FFmpeg`（LoudNorm -14 LUFS 串流） |
+| 資料持久化 | SQLite (`PRAGMA user_version` 自動遷移)、JSONL (日誌與審計軌跡)、JSON (快取與設定覆寫) |
 
-## 模型配置
+## 模型配置與調度架構
 
-| 用途 | 模型名稱 |
-|---|---|
-| `PRIMARY_MODEL` / `NOMORAL_MODEL` | `krith/mistral-nemo-instruct-2407-abliterated:IQ4_XS` |
-| `QUICK_MODEL` / `CLASSIFIER_MODEL` / `VIBE_MODEL` | `mannix/llama3.1-8b-abliterated` |
-| LLM 輸入上限 | `num_ctx = 16384` |
-| LLM 輸出上限 | `num_predict = 512` |
-
-## 設計模式
-
-- **模組化 Agent 架構 (Tool-Router Architecture)**：所有功能封裝為 `BaseTool` 子類別
-- **兩階漏斗路由 (Hybrid Regex + LLM Intent Routing)**：Phase 1 正則極速命中 → Phase 2 LLM 動態派任
-- **狀態機互斥鎖 (State Mutex)**：保護 16GB VRAM（`_sd_generating` / `_voice_mode_active`）
-
-## 核心資料流
-
-```text
-用戶文字 @Tag
-  → RateLimiter（5次/30秒防洗頻）
-  → fetch_context_script（最近30則 + 1800秒斷層截斷）
-  → MemoryManager.get_user_memory_snippet（UID長期屬性注入）
-  → VibeManager.get_top_topics_snippet（頻道熱門話題注入）
-  → parse_compound_command（LLM拆解複合指令，priority=0）
-  → 對每個子句：
-      Phase 1: Tool.can_handle_by_regex() 正則極速命中
-      Phase 2: CLASSIFIER_MODEL 動態派任
-  → Tool.execute() → persona.py build_dynamic_persona()
-  → BotBrain.enqueue_task()（asyncio.PriorityQueue）
-  → _inference_worker → callback → Discord 回覆
-```
-
-## Tool Registry 優先順序
-
-```text
-URLSummaryTool → MusicTool → DrawTool → ImageSearchTool → AdvancedSearchTool → ChatTool
-```
-
-## VRAM 互斥法則
-
-| 狀態旗標 | 影響 |
-|---|---|
-| `_voice_mode_active = True` | `DrawTool.execute()` 拒絕執行 |
-| `_sd_generating = True` | `_inference_worker` 暫停所有 LLM 推理 |
-
-## 三層 Prompt 架構
-
-| 層次 | 來源 | 內容 |
+| 用途 | 預設模型 | 說明 |
 |---|---|---|
-| A（靈魂底核） | `file/AI_personality.py` → `settings.CORE_PERSONA` | 常駐角色人設 + 防幻覺鐵則 |
-| B（情境帽） | `social/persona.py` | intent 對應的行為模式 + LOREBOOK Regex 觸發 |
-| C（執行規定） | `tools/*.py` | 字數限制、回覆格式、RAG 防幻覺鐵則 |
+| `PRIMARY_MODEL` | `krith/mistral-nemo-instruct-2407-abliterated:IQ4_XS` / Gemini 1.5 Flash | 核心擬真對話與複雜工具規劃 |
+| `QUICK_MODEL` / `CLASSIFIER` | `mannix/llama3.1-8b-abliterated` | 意圖路由判斷、快速分類與即時摘要 |
+| `VIBE_MODEL` / `SUMMARY` | 輕量化模型 | 頻道氣氛推論與定期世界記憶歸檔 |
+| Context 視窗 | `num_ctx = 16384` | 動態 Token 預算與 Prefix Caching 最優化 |
 
----
+## 系統核心分層架構
 
-> 🔗 詳細的各模組 function 與參數紀錄請參閱：
-> - [module_root.md](./module_root.md)
-> - [module_file.md](./module_file.md)
-> - [module_handlers.md](./module_handlers.md)
+```text
+[Presentation / Gateway]
+  handlers/ (discord_event_handlers.py, admin/, spark/, social/, memory/, music/, voice/)
+  web_ui/ (獨立本地維運儀表板與安全日誌檢視)
+      ↓
+[Core Governance & Runtime Coordination]
+  core/ (db.py, db_migration.py, guard.py, risk_engine.py, autonomy_guard.py, system_state.py)
+      ↓
+[Domain Logic & Business Services]
+  mod/ (audit_manager.py, sys_monitor/, error_logger.py)
+      ↓
+[External Clients & Repositories]
+  mod/clients/ & mod/repositories/ (唯一允許直接調用外部 API / DB 的邊界)
+```
+
+## AI 調度與資料流
+
+```text
+Discord 事件 (Message / Mention / Slash Command)
+  → CoreGuard (頻率限制、工具迴圈熔斷、黑名單過濾)
+  → Context Builder (最近歷史 + 物理隔離消毒 + 關聯長期記憶 + 頻道氛圍)
+  → Dispatch Agent (Integrated / Parallel / ReAct 三模式調度)
+  → Tool Execution (安全沙箱 + <untrusted_external_content> 隔離)
+  → Persona Engine (三層靈魂帽子疊加 + 語氣規範)
+  → Inference Client (多後端容錯與 Streaming Thinking)
+  → Response Delivery & 審計日誌記錄
+```
+
+## 自主性與運維體系 (SPARK & Proactive Behaviors)
+
+1. **SPARK 條件推播引擎**：4 大感測器（股價觸發、排程提醒、RSS 即時訂閱、天氣預報）。
+2. **三級風險決策引擎 (Risk Engine)**：
+   - `LOW`：自動清理、狀態採集（完全自主）。
+   - `MEDIUM`：推播通知、頻寬微調（通知可設定自動化）。
+   - `HIGH`：全域設定更動、高危指令（強制 Discord/Web UI 雙重審核確認）。
+3. **全域安全熔斷**：`GLOBAL_AUTONOMY_KILL_SWITCH` 與時間窗預算上限防失控。

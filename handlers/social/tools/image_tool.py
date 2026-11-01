@@ -122,10 +122,6 @@ class ImageSearchTool(BaseTool):
             except Exception as e:
                 logger.error("Image 標籤元資料讀取異常: %s", e)
 
-        # 依鍵長由長到短排序，利於最長匹配優先
-        self._sorted_pixiv_keys: list[str] = sorted(
-            self._pixiv_dict.keys(), key=len, reverse=True
-        )
         self._booru_client = BooruClient()
 
     # ------------------------------------------------------------------
@@ -442,16 +438,17 @@ class ImageSearchTool(BaseTool):
     # 公開介面：ReAct Agent 快速呼叫
     # ------------------------------------------------------------------
 
-    async def search(self, user_query: str) -> tuple[str, list[str], bool]:
+    async def search(self, user_query: str, allow_nsfw: bool = False) -> tuple[str, list[str], bool]:
         """ReAct Agent 專用快速搜圖介面（本地解析 + 分級退避）。
 
         Args:
             user_query: 使用者的搜圖描述。
+            allow_nsfw: 是否允許限制級圖片檢索（僅限 NSFW 頻道）。
 
         Returns:
             (img_url, used_tags, is_fallback)
         """
-        is_nsfw = bool(re.search(
+        is_nsfw = allow_nsfw and bool(re.search(
             r"(裸|大奶|巨乳|色圖|naked|large_breasts|small_breasts|大胸|貧乳|nude)",
             user_query, re.IGNORECASE,
         ))
@@ -481,7 +478,11 @@ class ImageSearchTool(BaseTool):
             return ToolResult.error("BotBrain 未就緒。", is_direct_rendered=True)
         brain: Any = brain_cog
 
-        is_nsfw = bool(re.search(
+        is_channel_nsfw = bool(getattr(message.channel, "is_nsfw", lambda: False)())
+        if not is_channel_nsfw and hasattr(message.channel, "guild") and message.channel.guild is None:
+            is_channel_nsfw = True
+
+        is_nsfw = is_channel_nsfw and bool(re.search(
             r"(裸|大奶|巨乳|色圖|naked|large_breasts|small_breasts|大胸|貧乳|nude)",
             user_query, re.IGNORECASE,
         ))
@@ -581,7 +582,7 @@ class ImageSearchTool(BaseTool):
             system_prompt=extract_prompt,
             user_prompt=user_query,
             callback=_on_extract_reply,
-            model=settings.QUICK_MODEL,
+            model=settings.LIGHT_MODEL,
             task_id=f"booru-extract-{id(user_query)}",
         ))
 

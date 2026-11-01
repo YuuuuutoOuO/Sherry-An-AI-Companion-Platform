@@ -331,8 +331,9 @@ def migrate_stock_trader() -> Tuple[int, int]:
                     data = json.load(f)
                 json_records += 1
                 cur.execute("""
-                    INSERT OR REPLACE INTO portfolio (id, cash, initial_capital, realized_pnl, total_trades_count, winning_trades_count, created_at, updated_at)
+                    INSERT INTO portfolio (id, cash, initial_capital, realized_pnl, total_trades_count, winning_trades_count, created_at, updated_at)
                     VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT DO NOTHING
                 """, (
                     float(data.get("cash", 100000.0)),
                     float(data.get("initial_capital", 100000.0)),
@@ -347,8 +348,9 @@ def migrate_stock_trader() -> Tuple[int, int]:
                 for ticker, p_data in data.get("positions", {}).items():
                     json_records += 1
                     cur.execute("""
-                        INSERT OR REPLACE INTO positions (ticker, shares, avg_cost, current_price, updated_at)
+                        INSERT INTO positions (ticker, shares, avg_cost, current_price, updated_at)
                         VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT DO NOTHING
                     """, (
                         ticker,
                         float(p_data.get("shares", 0.0)),
@@ -372,8 +374,9 @@ def migrate_stock_trader() -> Tuple[int, int]:
                         json_records += 1
                         t_id = str(t.get("trade_id") or t.get("id") or f"trade_{t.get('timestamp')}_{t.get('ticker')}")
                         cur.execute("""
-                            INSERT OR REPLACE INTO trades (trade_id, timestamp, ticker, action, shares, execution_price, fee, total_amount, realized_pnl, reason)
+                            INSERT INTO trades (trade_id, timestamp, ticker, action, shares, execution_price, fee, total_amount, realized_pnl, reason)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT DO NOTHING
                         """, (
                             t_id,
                             str(t.get("timestamp", _now_str())),
@@ -403,8 +406,9 @@ def migrate_stock_trader() -> Tuple[int, int]:
                     for h in history_list:
                         json_records += 1
                         cur.execute("""
-                            INSERT OR REPLACE INTO daily_history (date, total_asset_value, cash, total_pnl, return_rate_pct, day_pnl)
+                            INSERT INTO daily_history (date, total_asset_value, cash, total_pnl, return_rate_pct, day_pnl)
                             VALUES (?, ?, ?, ?, ?, ?)
+                            ON CONFLICT DO NOTHING
                         """, (
                             str(h.get("date", _now_str()[:10])),
                             float(h.get("total_asset_value", 100000.0)),
@@ -561,8 +565,9 @@ def migrate_memory_and_relations() -> Tuple[int, int]:
                             continue
                         aliases = doc.get("aliases", [])
                         cur.execute("""
-                            INSERT OR REPLACE INTO user_profiles (user_id, aliases_json, created_at, updated_at)
+                            INSERT INTO user_profiles (user_id, aliases_json, created_at, updated_at)
                             VALUES (?, ?, ?, ?)
+                            ON CONFLICT DO NOTHING
                         """, (str(uid), json.dumps(aliases, ensure_ascii=False), _now_str(), _now_str()))
                         json_records += 1
                         db_records += 1
@@ -593,8 +598,9 @@ def migrate_memory_and_relations() -> Tuple[int, int]:
                         if isinstance(r_obj, dict):
                             json_records += 1
                             cur.execute("""
-                                INSERT OR REPLACE INTO user_relations (user_id, affinity, tier, interaction_count, last_interaction, updated_at)
+                                INSERT INTO user_relations (user_id, affinity, tier, interaction_count, last_interaction, updated_at)
                                 VALUES (?, ?, ?, ?, ?, ?)
+                                ON CONFLICT DO NOTHING
                             """, (
                                 str(uid),
                                 float(r_obj.get("affinity", 0.0)),
@@ -618,8 +624,9 @@ def migrate_memory_and_relations() -> Tuple[int, int]:
                     for ch_id, topics in v_data.items():
                         json_records += 1
                         cur.execute("""
-                            INSERT OR REPLACE INTO channel_vibes (channel_id, topics_json, updated_at)
+                            INSERT INTO channel_vibes (channel_id, topics_json, updated_at)
                             VALUES (?, ?, ?)
+                            ON CONFLICT DO NOTHING
                         """, (str(ch_id), json.dumps(topics, ensure_ascii=False), _now_str()))
                         db_records += 1
                 break
@@ -644,12 +651,13 @@ def migrate_memory_and_relations() -> Tuple[int, int]:
                             text = last.get("text", "") if isinstance(last, dict) else str(last)
                         json_records += 1
                         cur.execute("""
-                            INSERT OR REPLACE INTO topic_memory (topic, summary, updated_at)
-                            VALUES (?, ?, ?)
+                            INSERT INTO topic_memory (topic, summary, updated_at)
+                            SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM topic_memory WHERE topic = ?)
                         """, (
                             str(topic_name),
                             str(text),
                             str(entry.get("last_updated", _now_str())),
+                            str(topic_name),
                         ))
                         db_records += 1
                 break
@@ -664,14 +672,16 @@ def migrate_memory_and_relations() -> Tuple[int, int]:
                     ro_data = json.load(f)
                 if isinstance(ro_data, dict):
                     cur.execute("""
-                        INSERT OR REPLACE INTO roast_config (id, enabled, global_cooldown_seconds, updated_at)
+                        INSERT INTO roast_config (id, enabled, global_cooldown_seconds, updated_at)
                         VALUES (1, ?, ?, ?)
+                        ON CONFLICT DO NOTHING
                     """, (1 if ro_data.get("enabled", True) else 0, float(ro_data.get("global_cooldown_seconds", 8.0)), _now_str()))
                     for r in ro_data.get("rules", []):
                         json_records += 1
                         cur.execute("""
-                            INSERT OR REPLACE INTO roast_rules (id, keyword, reply_guide, probability, match_mode, enabled)
+                            INSERT INTO roast_rules (id, keyword, reply_guide, probability, match_mode, enabled)
                             VALUES (?, ?, ?, ?, ?, ?)
+                            ON CONFLICT DO NOTHING
                         """, (
                             str(r.get("id", "")),
                             str(r.get("keyword", "")),
@@ -720,8 +730,9 @@ def migrate_plugins() -> Tuple[int, int]:
                         s_data = json.load(f)
                     json_records += 1
                     cur_ds.execute("""
-                        INSERT OR REPLACE INTO research_sessions (session_id, title, topic, data_json, updated_at)
+                        INSERT INTO research_sessions (session_id, title, topic, data_json, updated_at)
                         VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT DO NOTHING
                     """, (
                         str(s_data.get("session_id") or sf.stem),
                         str(s_data.get("topic") or sf.stem),
@@ -770,11 +781,12 @@ def migrate_plugins() -> Tuple[int, int]:
                     for p in p_list:
                         json_records += 1
                         cur_fs.execute("""
-                            INSERT OR REPLACE INTO shared_posts (
+                            INSERT INTO shared_posts (
                                 post_id, source, title, url, original_summary, sherry_analysis,
                                 author_or_repo, tags_json, canonical_keys_json, published_at, posted_at, raw_json
                             )
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT DO NOTHING
                         """, (
                             str(p.get("post_id", "")),
                             str(p.get("source", "")),
@@ -835,8 +847,9 @@ def migrate_plugins() -> Tuple[int, int]:
                     for tid, tdata in t_dict.items():
                         json_records += 1
                         cur_spk.execute("""
-                            INSERT OR REPLACE INTO triggers (trigger_id, user_id, channel_id, trigger_type, name, is_active, data_json, updated_at)
+                            INSERT INTO triggers (trigger_id, user_id, channel_id, trigger_type, name, is_active, data_json, updated_at)
                             VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                            ON CONFLICT DO NOTHING
                         """, (
                             str(tid),
                             int(tdata.get("user_id", 0)),
@@ -879,10 +892,11 @@ def migrate_plugins() -> Tuple[int, int]:
                     for t in sch_data.get("tasks", []):
                         json_records += 1
                         cur_sched.execute("""
-                            INSERT OR REPLACE INTO schedule_tasks (
+                            INSERT INTO schedule_tasks (
                                 task_id, user_id, display_name, channel_id, schedule_type, trigger_time, cron_expr, content, is_active
                             )
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT DO NOTHING
                         """, (
                             str(t.get("task_id", "")),
                             str(t.get("user_id", "")),
@@ -970,11 +984,12 @@ def migrate_dnd() -> Tuple[int, int]:
                     for cid, char in c_data.items():
                         json_records += 1
                         cur.execute("""
-                            INSERT OR REPLACE INTO characters (
+                            INSERT INTO characters (
                                 user_id, name, race, character_class, level, experience,
                                 hp_max, hp_current, ac, stats_json, inventory_json, location_id, created_at
                             )
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT DO NOTHING
                         """, (
                             int(cid),
                             str(char.get("name", "")),
@@ -1003,6 +1018,27 @@ def migrate_dnd() -> Tuple[int, int]:
 # ---------------------------------------------------------------------------
 # 歸檔舊 JSON 檔案
 # ---------------------------------------------------------------------------
+def _merge_move_dir(src_dir: Path, dest_dir: Path) -> None:
+    """R7：非破壞性合併搬移——將 src_dir 內容併入 dest_dir，同名檔案以 src 覆蓋。
+
+    取代舊版「刪除既有歸檔目錄後再搬移」的破壞性歸檔（報告 §5.2.8）：
+    既有歸檔內容不再被整批刪除，僅被本次來源中同名者覆蓋。
+    """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for item in list(src_dir.iterdir()):
+        target = dest_dir / item.name
+        if item.is_dir():
+            _merge_move_dir(item, target)
+        else:
+            if target.exists() and target.is_file():
+                target.unlink()
+            shutil.move(str(item), str(target))
+    try:
+        src_dir.rmdir()
+    except OSError:
+        pass
+
+
 def archive_migrated_json_files() -> int:
     """將已轉移進 SQLite 的舊 JSON/JSONL 移動到 data/archive_legacy_json/ 進行歸檔。"""
     archive_dir = DATA_DIR / "archive_legacy_json"
@@ -1058,23 +1094,19 @@ def archive_migrated_json_files() -> int:
             shutil.move(str(file_path), str(dest))
             moved_count += 1
 
-    # 歸檔 chat_logs 目錄
+    # 歸檔 chat_logs 目錄（R7：非破壞性合併，不刪除既有歸檔）
     chat_log_dir = DATA_DIR / "chat_logs"
     if chat_log_dir.exists() and any(chat_log_dir.iterdir()):
         dest_chat = archive_dir / "chat_logs"
-        if dest_chat.exists():
-            shutil.rmtree(dest_chat)
-        shutil.move(str(chat_log_dir), str(dest_chat))
+        _merge_move_dir(chat_log_dir, dest_chat)
         chat_log_dir.mkdir(parents=True, exist_ok=True)
         moved_count += 1
 
-    # 歸檔 deep_search/sessions 目錄
+    # 歸檔 deep_search/sessions 目錄（R7：非破壞性合併，不刪除既有歸檔）
     ds_sessions_dir = DATA_DIR / "deep_search" / "sessions"
     if ds_sessions_dir.exists() and any(ds_sessions_dir.iterdir()):
         dest_ds = archive_dir / "deep_search_sessions"
-        if dest_ds.exists():
-            shutil.rmtree(dest_ds)
-        shutil.move(str(ds_sessions_dir), str(dest_ds))
+        _merge_move_dir(ds_sessions_dir, dest_ds)
         ds_sessions_dir.mkdir(parents=True, exist_ok=True)
         moved_count += 1
 
@@ -1085,11 +1117,100 @@ def archive_migrated_json_files() -> int:
 # ---------------------------------------------------------------------------
 # 主執行流程
 # ---------------------------------------------------------------------------
-def run_migration(do_archive: bool = False) -> None:
+def _dry_run_plan() -> list[tuple[str, list[Path]]]:
+    """列出各目標 DB 與其來源檔案／目錄（不建立、不寫入）。"""
+    return [
+        (
+            "chat_history.db",
+            [
+                DATA_DIR / "runtime_log.jsonl",
+                DATA_DIR / "error_log.jsonl",
+                DATA_DIR / "admin_audit.jsonl",
+                DATA_DIR / "chat_logs",
+            ],
+        ),
+        (
+            "stock_trader.db",
+            [
+                DATA_DIR / "sherry_stock" / "portfolio.json",
+                DATA_DIR / "sherry_stock" / "trades.json",
+                DATA_DIR / "sherry_stock" / "daily_history.json",
+                DATA_DIR / "sherry_stock" / "thoughts.jsonl",
+            ],
+        ),
+        (
+            "sherry_memory.db",
+            [
+                DATA_DIR / "user_memory.json",
+                DATA_DIR / "user_relations.json",
+                DATA_DIR / "relationship.json",
+                DATA_DIR / "topic_memory.json",
+                DATA_DIR / "channel_vibe.json",
+                DATA_DIR / "roast_rules.json",
+                DATA_DIR / "world_memory.jsonl",
+            ],
+        ),
+        (
+            "spark/spark.db",
+            [DATA_DIR / "spark" / "triggers.json"],
+        ),
+        (
+            "schedules.db",
+            [DATA_DIR / "schedule.json"],
+        ),
+        (
+            "feed_sentinel/feed.db",
+            [DATA_DIR / "feed_sentinel" / "posts.json"],
+        ),
+        (
+            "deep_search/deep_search.db",
+            [DATA_DIR / "deep_search" / "sessions"],
+        ),
+        (
+            "dnd/dnd.db",
+            [
+                DATA_DIR / "dnd_world.json",
+                DATA_DIR / "dnd_world_setting.json",
+                DATA_DIR / "dnd_characters.json",
+                DATA_DIR / "dnd_quests.json",
+                DATA_DIR / "dnd_npcs.json",
+                DATA_DIR / "dnd_history.jsonl",
+            ],
+        ),
+    ]
+
+
+def print_dry_run_plan() -> None:
+    """輸出遷移計畫；``--dry-run`` 專用，保證零副作用。"""
+    print("=" * 65)
+    print("🧪 雪莉 (Sherry) JSON→SQLite 遷移乾跑（--dry-run）")
+    print(f"⏰ 執行時間: {_now_str()}")
+    print("=" * 65)
+    total = 0
+    for db_name, sources in _dry_run_plan():
+        existing = [path for path in sources if path.exists()]
+        total += len(existing)
+        status = "既有 DB（將 upsert）" if (DATA_DIR / db_name).exists() else "新 DB（將建立）"
+        print(f"  - {db_name}: {len(existing)}/{len(sources)} 個來源，{status}")
+        for path in existing:
+            try:
+                label = path.relative_to(BASE_DIR)
+            except ValueError:
+                label = path
+            print(f"      • {label}")
+    print(f"共 {total} 個來源存在；未執行備份、建表、寫入或歸檔。")
+    print("=" * 65)
+
+
+def run_migration(do_archive: bool = False, dry_run: bool = False) -> None:
     print("=" * 65)
     print("🚀 雪莉 (Sherry) 全系統 JSON 轉 SQLite 終極遷移工具啟動")
     print(f"⏰ 執行時間: {_now_str()}")
     print("=" * 65)
+
+    if dry_run:
+        print_dry_run_plan()
+        return
 
     # 1. 備份
     backup_path = _backup_data_folder()
@@ -1127,5 +1248,17 @@ def run_migration(do_archive: bool = False) -> None:
 
 
 if __name__ == "__main__":
-    archive_flag = "--archive" in sys.argv or "--clean" in sys.argv
-    run_migration(do_archive=archive_flag)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="雪莉全系統 JSON/JSONL → SQLite 遷移工具")
+    parser.add_argument("--dry-run", action="store_true", help="只輸出遷移計畫，不備份、不寫入")
+    parser.add_argument(
+        "--archive",
+        "--clean",
+        dest="archive",
+        action="store_true",
+        help="遷移後將舊 JSON 歸檔至 data/archive_legacy_json/",
+    )
+    args = parser.parse_args()
+    run_migration(do_archive=args.archive, dry_run=args.dry_run)
+

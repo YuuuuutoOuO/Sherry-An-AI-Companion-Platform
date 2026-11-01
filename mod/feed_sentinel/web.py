@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from quart import Blueprint, Response, jsonify, request
+from core.error_report import safe_error_payload
 
 from .repository import SentinelRepository
 
@@ -74,8 +75,9 @@ async def get_shared_posts() -> Response | tuple[Response, int] | Any:
             "total_pages": total_pages,
         })
     except Exception as exc:
-        logger.exception("[FeedSentinel Web] 獲取文章清單失敗: %s", exc)
-        return jsonify({"status": "error", "message": str(exc), "posts": [], "total": 0}), 500
+        payload = safe_error_payload("mod.feed_sentinel.web", exc)
+        payload.update({"posts": [], "total": 0})
+        return jsonify(payload), 500
 
 
 @feed_sentinel_bp.route("/api/feed_sentinel/stats", methods=["GET"])
@@ -107,8 +109,7 @@ async def get_sentinel_stats() -> Response | tuple[Response, int] | Any:
             "sentinel": sentinel_info,
         })
     except Exception as exc:
-        logger.exception("[FeedSentinel Web] 獲取統計資訊失敗: %s", exc)
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        return jsonify(safe_error_payload("mod.feed_sentinel.web", exc)), 500
 
 
 @feed_sentinel_bp.route("/api/feed_sentinel/trigger", methods=["POST"])
@@ -145,8 +146,7 @@ async def trigger_sentinel_patrol() -> tuple[Response, int] | Response:
                 "message": "已完成抓取巡邏，但目前所有情報均已推播過或目標頻道未就緒。",
             })
     except Exception as exc:
-        logger.exception("[FeedSentinel Web] 手動觸發情報哨兵巡邏異常: %s", exc)
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        return jsonify(safe_error_payload("mod.feed_sentinel.web", exc)), 500
 
 
 @feed_sentinel_bp.route("/api/feed_sentinel/posts/<path:post_id>", methods=["DELETE"])
@@ -160,5 +160,4 @@ async def delete_shared_post(post_id: str) -> Response | tuple[Response, int] | 
             return jsonify({"status": "success", "message": f"已刪除文章紀錄: {post_id}"})
         return jsonify({"status": "error", "message": f"找不到文章識別碼: {post_id}"}), 404
     except Exception as exc:
-        logger.exception("[FeedSentinel Web] 刪除文章記錄失敗: %s", exc)
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        return jsonify(safe_error_payload("mod.feed_sentinel.web", exc)), 500

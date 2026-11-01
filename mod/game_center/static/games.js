@@ -31,7 +31,8 @@
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   function _showToast(msg, type) {
@@ -44,6 +45,14 @@
     }
   }
 
+  // R3：/api/games/* 收斂為管理員專用後，Cookie 鑑權之 POST 需附 CSRF 標頭
+  // （double-submit：sherry_csrf → X-CSRF-Token，由 SherryUI.getAuthHeaders 提供）
+  function _gameHeaders() {
+    return (window.SherryUI && typeof window.SherryUI.getAuthHeaders === 'function')
+      ? window.SherryUI.getAuthHeaders()
+      : { 'Content-Type': 'application/json' };
+  }
+
   // ── Rock Paper Scissors ──────────────────────────────────
   async function playRPS(choice) {
     const dialogueEl = document.getElementById('sherry-game-dialogue');
@@ -52,7 +61,7 @@
     try {
       const res = await fetch('/api/games/rps/play', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: _gameHeaders(),
         body: JSON.stringify({ choice }),
       });
       const data = await res.json();
@@ -93,7 +102,7 @@
     try {
       const res = await fetch('/api/games/blackjack/start', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: _gameHeaders(),
       });
       const data = await res.json();
       if (data.error) {
@@ -113,7 +122,7 @@
     try {
       const res = await fetch('/api/games/blackjack/hit', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: _gameHeaders(),
         body: JSON.stringify({ game_id: currentBlackjackId }),
       });
       const data = await res.json();
@@ -128,7 +137,7 @@
     try {
       const res = await fetch('/api/games/blackjack/stand', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: _gameHeaders(),
         body: JSON.stringify({ game_id: currentBlackjackId }),
       });
       const data = await res.json();
@@ -193,7 +202,7 @@
     try {
       const res = await fetch('/api/games/minesweeper/start', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: _gameHeaders(),
         body: JSON.stringify({ rows: 8, cols: 8, mines: 10 }),
       });
       const data = await res.json();
@@ -209,7 +218,7 @@
     try {
       const res = await fetch('/api/games/minesweeper/reveal', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: _gameHeaders(),
         body: JSON.stringify({ game_id: currentMinesweeperId, row: r, col: c }),
       });
       const data = await res.json();
@@ -225,7 +234,7 @@
     try {
       const res = await fetch('/api/games/minesweeper/flag', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: _gameHeaders(),
         body: JSON.stringify({ game_id: currentMinesweeperId, row: r, col: c }),
       });
       const data = await res.json();
@@ -246,7 +255,7 @@
     try {
       const res = await fetch('/api/games/minesweeper/hint', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: _gameHeaders(),
         body: JSON.stringify({ game_id: currentMinesweeperId }),
       });
       const data = await res.json();
@@ -306,7 +315,7 @@
   // ── Turtle Soup ───────────────────────────────────────────
   async function startTurtleSoup() {
     try {
-      const res = await fetch('/api/games/turtle_soup/start', { method: 'POST' });
+      const res = await fetch('/api/games/turtle_soup/start', { method: 'POST', headers: _gameHeaders() });
       const data = await res.json();
       currentTurtleSoupId = data.game_id;
 
@@ -333,7 +342,7 @@
     try {
       const res = await fetch('/api/games/turtle_soup/ask', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: _gameHeaders(),
         body: JSON.stringify({ game_id: currentTurtleSoupId, question }),
       });
       const data = await res.json();
@@ -358,7 +367,7 @@
   // ── Akinator 20 Questions ──────────────────────────────────
   async function startAkinator() {
     try {
-      const res = await fetch('/api/games/akinator/start', { method: 'POST' });
+      const res = await fetch('/api/games/akinator/start', { method: 'POST', headers: _gameHeaders() });
       const data = await res.json();
       currentAkinatorId = data.game_id;
 
@@ -377,7 +386,7 @@
     try {
       const res = await fetch('/api/games/akinator/answer', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: _gameHeaders(),
         body: JSON.stringify({ game_id: currentAkinatorId, answer: ans }),
       });
       const data = await res.json();
@@ -396,7 +405,7 @@
   // ── Escape Room ───────────────────────────────────────────
   async function startEscapeRoom() {
     try {
-      const res = await fetch('/api/games/escape_room/start', { method: 'POST' });
+      const res = await fetch('/api/games/escape_room/start', { method: 'POST', headers: _gameHeaders() });
       const data = await res.json();
       currentEscapeRoomId = data.game_id;
 
@@ -416,7 +425,7 @@
     try {
       const res = await fetch('/api/games/escape_room/action', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: _gameHeaders(),
         body: JSON.stringify({ game_id: currentEscapeRoomId, target }),
       });
       const data = await res.json();
@@ -431,7 +440,7 @@
   // ── Tic Tac Toe ────────────────────────────────────────────
   async function startTTT() {
     try {
-      const res = await fetch('/api/games/ttt/start', { method: 'POST' });
+      const res = await fetch('/api/games/ttt/start', { method: 'POST', headers: _gameHeaders() });
       const data = await res.json();
       currentTTTId = data.game_id;
       renderTTTBoard(data);
@@ -445,7 +454,7 @@
     try {
       const res = await fetch('/api/games/ttt/move', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: _gameHeaders(),
         body: JSON.stringify({ game_id: currentTTTId, index }),
       });
       const data = await res.json();

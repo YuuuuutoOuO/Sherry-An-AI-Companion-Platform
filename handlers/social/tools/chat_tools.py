@@ -37,6 +37,7 @@ def _should_trigger_search(query: str) -> bool:
     """
     pattern = (
         r"(0050|美伊|戰爭|新聞|最新|時事|狀況|進展|趨勢|評價|怎麼樣|現況|發展|資訊|幫.*查|搜尋|查詢|怎麼看|是什麼|價格|指數|股票|"
+        r"CPI|PCE|GDP|非農|FOMC|聯準會|降息|升息|通膨|匯率|美債|財報|法說|消息|情報|動態|發生什麼|"
         r"天氣|氣溫|溫度|下雨|降雨|紫外線|颱風|氣象|體感|幾度)"
     )
     if bool(re.search(pattern, query, re.IGNORECASE)):
@@ -88,10 +89,11 @@ class ChatTool(BaseTool):
         brain: Any = brain_cog
 
         # ── 檢查是否需要即時網路/實體檢索 ───────────────────────────────
+        force_search = bool(kwargs.get("force_search", False))
         web_context = ""
         ref_link = ""
-        if _should_trigger_search(user_query):
-            logger.info("🌐 [ChatTool] 觸發 CHAT 聯網實體檢索: '%s'", user_query)
+        if force_search or _should_trigger_search(user_query):
+            logger.info("🌐 [ChatTool] 觸發 CHAT 聯網實體檢索 (force=%s): '%s'", force_search, user_query)
             web_context, ref_link = await fetch_web_and_entity_context(user_query)
 
         # ── 掃描用文本（結合前文氣氛餘韻 + 當前訊息）───────────────────
@@ -101,11 +103,17 @@ class ChatTool(BaseTool):
         head_persona, tail_lore = build_dynamic_persona(
             recent_text, self.intent_name, channel_id=message.channel.id,
             server_id=str(message.guild.id) if message.guild else "",
+            user_query=user_query,
+            bot=bot,
+            guild_id=message.guild.id if message.guild else None,
         )
 
         # ── 第二層：長期記憶注入 ────────────────────────────────────────
         memory_block = build_user_memory_block(
-            bot, message.author.id, message.author.display_name
+            bot,
+            message.author.id,
+            message.author.display_name,
+            query_text=user_query,
         )
 
         # ── 第三層：Vibe（頻道氛圍）─────────────────────────────────────
@@ -135,8 +143,17 @@ class ChatTool(BaseTool):
         ) if (is_sherry and (images or active_vis)) else ""
         author_note = f"\n{tail_lore}\n{vision_self_lore}" if (tail_lore or vision_self_lore) else ""
 
-        if self.can_handle_by_regex(recent_text):
+        # ── 頻道 NSFW 狀態與使用者當前輸入安全性檢查 ──
+        is_channel_nsfw = bool(getattr(message.channel, "is_nsfw", lambda: False)())
+        if not is_channel_nsfw and hasattr(message.channel, "guild") and message.channel.guild is None:
+            is_channel_nsfw = True
+
+        query_is_nsfw = self.can_handle_by_regex(user_query)
+
+        if query_is_nsfw and is_channel_nsfw:
             length_rule = "2. 【性愛與調戲特權解除】：這是一場延續的色情或曖昧話題！請延續這個氣氛，盡情釋放狂氣與慾望！可以多講幾句，大膽露骨且無下限地用言語反擊、迎合或調戲對方，展現妳的瘋狂，絕對不要只講一兩句話敷衍！"
+        elif query_is_nsfw and not is_channel_nsfw:
+            length_rule = "2. 【公眾頻道合規守則】：當前為公眾/全年齡頻道，嚴禁露骨色情描寫或性愛互動！請以俏皮、吐槽、微慍或傲嬌轉移話題的伴侶口吻，得體應對使用者的調戲，守護健康歡樂的頻道氛圍。"
         elif web_context:
             length_rule = "2. 請根據調閱到的情報資訊進行豐富、具體且詳盡的分析解答，講述重點與數據，不要含糊概括。"
         else:
@@ -174,6 +191,14 @@ class ChatTool(BaseTool):
             dynamic_parts.append(memory_block)
         if author_note:
             dynamic_parts.append(author_note.strip())
+
+        spark_memory = str(kwargs.get("spark_previous_memory") or "").strip()
+        if spark_memory:
+            spark_block = (
+                "【📌 上次排程匯報紀錄（供本次增量比較，請點出最新變化而非重複舊聞）】\n"
+                f"{spark_memory}"
+            )
+            dynamic_parts.append(spark_block)
 
         dynamic_suffix = "\n\n".join(dynamic_parts)
         sys_prompt = f"{static_prefix}\n\n{dynamic_suffix}".strip() if dynamic_suffix else static_prefix
@@ -250,7 +275,7 @@ class ChatTool(BaseTool):
                     reply_future.set_result("")
 
         task = InferenceTask(
-            priority=settings.PRIORITY_TAG_RESPONSE,
+            priority=settings.priority_for(settings.Priority.INTERACTIVE),
             system_prompt=sys_prompt,
             user_prompt=user_instruct,
             callback=_on_reply,

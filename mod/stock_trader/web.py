@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from quart import Blueprint, Response, jsonify
+from core.error_report import safe_error_payload
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +77,7 @@ async def get_stock_trader_overview() -> Response | tuple[Response, int] | Any:
             }
         })
     except Exception as exc:
-        logger.error("[stock_trader] overview error: %s", exc)
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        return jsonify(safe_error_payload("mod.stock_trader.web", exc)), 500
 
 
 @stock_trader_bp.route("/api/stock_trader/chart", methods=["GET"])
@@ -109,8 +109,7 @@ async def get_stock_trader_chart() -> Response | tuple[Response, int] | Any:
             "data": chart_data,
         })
     except Exception as exc:
-        logger.error("[stock_trader] chart error: %s", exc)
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        return jsonify(safe_error_payload("mod.stock_trader.web", exc)), 500
 
 
 @stock_trader_bp.route("/api/stock_trader/holdings", methods=["GET"])
@@ -140,8 +139,7 @@ async def get_stock_trader_holdings() -> Response | tuple[Response, int] | Any:
             "data": holdings_list,
         })
     except Exception as exc:
-        logger.error("[stock_trader] holdings error: %s", exc)
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        return jsonify(safe_error_payload("mod.stock_trader.web", exc)), 500
 
 
 @stock_trader_bp.route("/api/stock_trader/trades", methods=["GET"])
@@ -174,8 +172,7 @@ async def get_stock_trader_trades() -> Response | tuple[Response, int] | Any:
             "data": trade_list,
         })
     except Exception as exc:
-        logger.error("[stock_trader] trades error: %s", exc)
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        return jsonify(safe_error_payload("mod.stock_trader.web", exc)), 500
 
 
 @stock_trader_bp.route("/api/stock_trader/thoughts", methods=["GET"])
@@ -203,8 +200,7 @@ async def get_stock_trader_thoughts() -> Response | tuple[Response, int] | Any:
             "data": thought_list,
         })
     except Exception as exc:
-        logger.error("[stock_trader] thoughts error: %s", exc)
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        return jsonify(safe_error_payload("mod.stock_trader.web", exc)), 500
 
 
 @stock_trader_bp.route("/api/stock_trader/targets", methods=["GET"])
@@ -228,8 +224,7 @@ async def get_stock_trader_targets() -> Response | tuple[Response, int] | Any:
             "data": indicators,
         })
     except Exception as exc:
-        logger.error("[stock_trader] targets error: %s", exc)
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        return jsonify(safe_error_payload("mod.stock_trader.web", exc)), 500
 
 
 @stock_trader_bp.route("/api/stock_trader/trigger", methods=["POST"])
@@ -247,8 +242,7 @@ async def trigger_stock_trader_eval() -> Response | tuple[Response, int] | Any:
             res = await temp_cog.run_evaluation_cycle(trigger_type="MANUAL")
         return jsonify({"status": "success", "result": res})
     except Exception as exc:
-        logger.exception("[stock_trader] 手動觸發看盤發生異常: %s", exc)
-        return jsonify({"status": "error", "message": f"觸發異常: {exc}"}), 500
+        return jsonify(safe_error_payload("mod.stock_trader.web", exc)), 500
 
 
 @stock_trader_bp.route("/api/stock_trader/refresh_prices", methods=["POST"])
@@ -287,5 +281,4 @@ async def refresh_stock_trader_prices() -> Response | tuple[Response, int] | Any
                 "total_pnl": account.get_total_pnl(),
             })
     except Exception as exc:
-        logger.exception("[stock_trader] 刷新標的行情異常: %s", exc)
-        return jsonify({"status": "error", "message": f"刷新失敗: {exc}"}), 500
+        return jsonify(safe_error_payload("mod.stock_trader.web", exc)), 500

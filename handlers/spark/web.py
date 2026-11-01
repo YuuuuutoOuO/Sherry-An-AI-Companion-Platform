@@ -11,9 +11,11 @@ from typing import Any, Optional
 
 from quart import Blueprint, Response, jsonify, request
 
+from core.error_report import safe_error_payload
+
 from .clients import RssClient, StockClient, WeatherClient
 from .repository import SparkRepository
-from .service import SparkService, build_spark_service
+from .service import SparkQuotaExceeded, SparkService, build_spark_service
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +93,9 @@ async def list_triggers() -> Response | tuple[Response, int] | Any:
             "total": len(triggers),
         })
     except Exception as exc:
-        logger.exception("[Spark Web] 獲取觸發器列表失敗: %s", exc)
-        return jsonify({"status": "error", "message": str(exc), "triggers": [], "total": 0}), 500
+        payload = safe_error_payload("handlers.spark.web.list_triggers", exc)
+        payload.update({"triggers": [], "total": 0})
+        return jsonify(payload), 500
 
 
 @spark_bp.route("/api/spark/triggers", methods=["POST"])
@@ -127,9 +130,11 @@ async def create_trigger() -> Response | tuple[Response, int] | Any:
             "trigger": trigger.to_dict(),
             "message": "觸發器建立成功",
         })
+    except SparkQuotaExceeded as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 429
     except Exception as exc:
-        logger.exception("[Spark Web] 建立觸發器失敗: %s", exc)
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        payload = safe_error_payload("handlers.spark.web.create_trigger", exc)
+        return jsonify(payload), 500
 
 
 @spark_bp.route("/api/spark/triggers/<trigger_id>", methods=["DELETE"])
@@ -142,8 +147,8 @@ async def delete_trigger(trigger_id: str) -> Response | tuple[Response, int] | A
             return jsonify({"status": "success", "message": "刪除成功"})
         return jsonify({"status": "error", "message": "找不到該觸發器"}), 404
     except Exception as exc:
-        logger.exception("[Spark Web] 刪除觸發器失敗: %s", exc)
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        payload = safe_error_payload("handlers.spark.web.delete_trigger", exc)
+        return jsonify(payload), 500
 
 
 @spark_bp.route("/api/spark/triggers/<trigger_id>/toggle", methods=["POST"])
@@ -160,8 +165,8 @@ async def toggle_trigger(trigger_id: str) -> Response | tuple[Response, int] | A
             })
         return jsonify({"status": "error", "message": "找不到該觸發器"}), 404
     except Exception as exc:
-        logger.exception("[Spark Web] 切換觸發器狀態失敗: %s", exc)
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        payload = safe_error_payload("handlers.spark.web.toggle_trigger", exc)
+        return jsonify(payload), 500
 
 
 @spark_bp.route("/api/spark/triggers/<trigger_id>/test", methods=["POST"])
@@ -173,16 +178,17 @@ async def test_trigger(trigger_id: str) -> Response | tuple[Response, int] | Any
         if not trigger:
             return jsonify({"status": "error", "message": "找不到該觸發器"}), 404
 
-        result, _ = await service.check_trigger(trigger)
+        result, _ = await service.check_trigger(trigger, dry_run=True)
         return jsonify({
             "status": "success",
+            "dry_run": True,
             "should_fire": result.should_fire,
             "current_value": result.current_value,
             "detail_data": result.detail_data,
         })
     except Exception as exc:
-        logger.exception("[Spark Web] 測試觸發器異常: %s", exc)
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        payload = safe_error_payload("handlers.spark.web.test_trigger", exc)
+        return jsonify(payload), 500
 
 
 @spark_bp.route("/api/spark/stats", methods=["GET"])
@@ -196,5 +202,5 @@ async def get_stats() -> Response | tuple[Response, int] | Any:
             "stats": stats,
         })
     except Exception as exc:
-        logger.exception("[Spark Web] 獲取統計資料失敗: %s", exc)
-        return jsonify({"status": "error", "message": str(exc)}), 500
+        payload = safe_error_payload("handlers.spark.web.get_stats", exc)
+        return jsonify(payload), 500

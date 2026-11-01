@@ -31,7 +31,7 @@ class AIAnalyst:
     """Gemini AI market analysis and prediction report generator."""
 
     def __init__(self) -> None:
-        self.model_name = "gemini-2.0-flash-lite"
+        self.model_name = "gemini-3.5-flash-lite"
         if _GENAI_AVAILABLE:
             try:
                 self.client: genai.Client | None = genai.Client(api_key=cfg.GEMINI_API_KEY)

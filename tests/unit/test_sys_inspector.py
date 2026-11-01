@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from unittest.mock import MagicMock, patch
 
@@ -62,6 +63,34 @@ async def test_sampler_async_cache() -> None:
     with patch("core.sys_inspector.sampler._LAST_METRICS_TIME", time.time() - 10.0):
         m3 = await get_system_metrics_async(ttl=5.0)
         assert isinstance(m3, dict)
+
+
+@pytest.mark.anyio
+async def test_sampler_async_coalesces_concurrent_misses() -> None:
+    """測試並行快取 misses 僅執行一次系統採樣。"""
+    import core.sys_inspector.sampler as sampler
+
+    sampler._CACHED_SYSTEM_METRICS = {}
+    sampler._LAST_METRICS_TIME = 0.0
+    sampler._METRICS_SAMPLE_LOCK = None
+    call_count = 0
+
+    def sample() -> dict[str, float]:
+        nonlocal call_count
+        call_count += 1
+        time.sleep(0.05)
+        return {"timestamp": float(call_count)}
+
+    try:
+        with patch("core.sys_inspector.sampler.get_system_metrics", side_effect=sample):
+            results = await asyncio.gather(*(get_system_metrics_async(ttl=60.0) for _ in range(8)))
+    finally:
+        sampler._CACHED_SYSTEM_METRICS = {}
+        sampler._LAST_METRICS_TIME = 0.0
+        sampler._METRICS_SAMPLE_LOCK = None
+
+    assert call_count == 1
+    assert all(result is results[0] for result in results)
 
 
 def test_formatter_public_and_admin() -> None:

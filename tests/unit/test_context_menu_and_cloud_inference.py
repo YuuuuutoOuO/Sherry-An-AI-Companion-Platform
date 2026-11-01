@@ -230,18 +230,18 @@ def test_cloud_inference_client_model_resolution() -> None:
     """測試動態解析 settings.CLOUD_SEARCH_MODEL 前綴邏輯。"""
     client = CloudInferenceClient()
 
-    with patch("settings.CLOUD_SEARCH_MODEL", "gemini:gemini-2.0-flash"):
-        assert client.get_resolved_model_name() == "gemini-2.0-flash"
+    with patch("settings.CLOUD_SEARCH_MODEL", "gemini:gemini-3.5-flash-lite"):
+        assert client.get_resolved_model_name() == "gemini-3.5-flash-lite"
 
-    with patch("settings.CLOUD_SEARCH_MODEL", "gemini:gemini-2.5-flash-lite"):
-        assert client.get_resolved_model_name() == "gemini-2.5-flash-lite"
+    with patch("settings.CLOUD_SEARCH_MODEL", "gemini:gemini-3.8-flash"):
+        assert client.get_resolved_model_name() == "gemini-3.8-flash"
 
-    # 若設定為非 Gemini 體系模型 (如 deepseek:)，自動後備至預設 Gemini 模型 (gemini-3.6-flash)
+    # 若設定為非 Gemini 體系模型 (如 deepseek:)，自動後備至預設 Gemini 模型 (gemini-3.5-flash-lite)
     with patch("settings.CLOUD_SEARCH_MODEL", "deepseek:deepseek-v4-flash"):
-        assert client.get_resolved_model_name() == "gemini-3.6-flash"
+        assert client.get_resolved_model_name() == "gemini-3.5-flash-lite"
 
     with patch("settings.CLOUD_SEARCH_MODEL", ""):
-        assert client.get_resolved_model_name() == "gemini-3.6-flash"
+        assert client.get_resolved_model_name() == "gemini-3.5-flash-lite"
 
 
 def test_cloud_inference_client_503_fallback_cascade() -> None:
@@ -249,13 +249,13 @@ def test_cloud_inference_client_503_fallback_cascade() -> None:
     async def _run() -> None:
         client = CloudInferenceClient(api_key="fake-key")
 
-        # Mock: 第一次呼叫 (gemini-3.6-flash) 拋出 503 過載異常，第二次備援模型成功返回
+        # Mock: 第一次呼叫 (gemini-3.5-flash-lite) 拋出 503 過載異常，第二次備援模型成功返回
         call_count = 0
 
         def _fake_sync_call(contents: any, model_name: str, system_instruction: any = None) -> str:
             nonlocal call_count
             call_count += 1
-            if "3.6-flash" in model_name:
+            if "3.5-flash-lite" in model_name:
                 raise RuntimeError("503 UNAVAILABLE. This model is currently experiencing high demand.")
             return f"來自備援模型 {model_name} 的成功回覆"
 
@@ -269,8 +269,32 @@ def test_cloud_inference_client_503_fallback_cascade() -> None:
     asyncio.run(_run())
 
 
+def test_cloud_inference_client_safety_settings_block_only_high() -> None:
+    """測試 CloudInferenceClient 同步呼叫時帶入 BLOCK_ONLY_HIGH 安全過濾設定。"""
+    client = CloudInferenceClient(api_key="fake-key")
+
+    mock_genai_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = "生成的摘要"
+    mock_genai_client.models.generate_content.return_value = mock_response
+
+    with patch.object(client, "_get_genai_client", return_value=mock_genai_client):
+        res = client._call_generate_sync("測試內容", "gemini-3.5-flash-lite", system_instruction="測試指令")
+
+    assert res == "生成的摘要"
+    mock_genai_client.models.generate_content.assert_called_once()
+    _, kwargs = mock_genai_client.models.generate_content.call_args
+    config = kwargs.get("config")
+    assert config is not None
+    assert hasattr(config, "safety_settings") and config.safety_settings is not None
+    # 驗證包含 4 項危害類別且 threshold 皆為 BLOCK_ONLY_HIGH
+    assert len(config.safety_settings) == 4
+    for setting in config.safety_settings:
+        assert "BLOCK_ONLY_HIGH" in str(setting.threshold)
+
+
 def test_cloud_inference_client_404_fallback_cascade() -> None:
-    """測試當模型遭遇 404 NOT_FOUND (如 2.0 下線) 時，自動自適應推薦並切換至 3.6 成功回傳。"""
+    """測試當模型遭遇 404 NOT_FOUND (如 2.0 下線) 時，自動自適應推薦並動態插入新模型 (如 3.9) 成功回傳。"""
     async def _run() -> None:
         client = CloudInferenceClient(api_key="fake-key", default_model="gemini-2.0-flash")
 
@@ -281,16 +305,17 @@ def test_cloud_inference_client_404_fallback_cascade() -> None:
             if "2.0-flash" in model_name:
                 raise RuntimeError(
                     "404 NOT_FOUND. This model models/gemini-2.0-flash is no longer available. "
-                    "Please update your code to use models/gemini-3.6-flash for the latest features."
+                    "Please update your code to use models/gemini-3.9-pro for the latest features."
                 )
             return f"成功由 {model_name} 產出摘要"
 
-        with patch.object(client, "_call_generate_sync", side_effect=_fake_sync_call):
-            result = await client.summarize_text("測試下線自動遷移")
+        with patch("settings.CLOUD_SEARCH_MODEL", "gemini:gemini-2.0-flash"):
+            with patch.object(client, "_call_generate_sync", side_effect=_fake_sync_call):
+                result = await client.summarize_text("測試下線自動遷移")
 
-        assert "gemini-3.6-flash" in result
+        assert "gemini-3.9-pro" in result
         assert "gemini-2.0-flash" in call_log
-        assert "gemini-3.6-flash" in call_log
+        assert "gemini-3.9-pro" in call_log
 
     asyncio.run(_run())
 

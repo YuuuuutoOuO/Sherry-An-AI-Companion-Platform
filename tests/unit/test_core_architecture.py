@@ -150,6 +150,7 @@ def test_core_guard_rate_limit_and_loop() -> None:
 
     # 頻率限制測試 (max 3 次 / 10 秒)
     u_id = 999
+    guard.clear_user_history(u_id)
     allowed1, _ = guard.check_rate_limit(u_id, max_calls=3, window_sec=10.0)
     allowed2, _ = guard.check_rate_limit(u_id, max_calls=3, window_sec=10.0)
     allowed3, _ = guard.check_rate_limit(u_id, max_calls=3, window_sec=10.0)

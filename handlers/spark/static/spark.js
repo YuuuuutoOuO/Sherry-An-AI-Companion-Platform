@@ -20,6 +20,16 @@ const SparkApp = {
             : { 'Content-Type': 'application/json' };
     },
 
+    // R4：統一轉義工具（報告 §5.4.1）——資料入 innerHTML 前一律先轉義
+    _esc(str) {
+        return String(str ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    },
+
     async loadStats() {
         try {
             const res = await fetch('/api/spark/stats', { headers: this.getHeaders() });
@@ -53,7 +63,7 @@ const SparkApp = {
                 if (container) {
                     container.innerHTML = `
                         <div style="text-align: center; padding: 40px; background: rgba(239, 68, 68, 0.1); border-radius: 8px; color: #f87171;">
-                            ❌ 載入觸發器失敗: ${data.message || '未知錯誤'}
+                            ❌ 載入觸發器失敗: ${this._esc(data.message || '未知錯誤')}
                         </div>
                     `;
                 }
@@ -65,7 +75,7 @@ const SparkApp = {
             if (container) {
                 container.innerHTML = `
                     <div style="text-align: center; padding: 40px; background: rgba(239, 68, 68, 0.1); border-radius: 8px; color: #f87171;">
-                        ❌ 載入觸發器發生異常: ${err.message}
+                        ❌ 載入觸發器發生異常: ${this._esc(err.message)}
                     </div>
                 `;
             }
@@ -94,29 +104,29 @@ const SparkApp = {
         };
 
         const html = triggers.map(t => {
-            const typeLabel = typeEmojis[t.trigger_type] || t.trigger_type;
+            const typeLabel = this._esc(typeEmojis[t.trigger_type] || t.trigger_type);
             const statusBadge = t.is_active
                 ? '<span style="background: rgba(74, 222, 128, 0.2); color: #4ade80; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600;">🟢 啟用中</span>'
                 : '<span style="background: rgba(251, 191, 36, 0.2); color: #fbbf24; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600;">⏸️ 已暫停</span>';
             
-            const lastRun = t.last_triggered_at ? t.last_triggered_at.replace('T', ' ').slice(0, 19) : '尚未觸發';
-            const condDetails = Object.entries(t.condition || {}).map(([k, v]) => `<span style="background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 4px; margin-right: 4px;">${k}: <b>${v}</b></span>`).join(' ');
+            const lastRun = this._esc(t.last_triggered_at ? t.last_triggered_at.replace('T', ' ').slice(0, 19) : '尚未觸發');
+            const condDetails = Object.entries(t.condition || {}).map(([k, v]) => `<span style="background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 4px; margin-right: 4px;">${this._esc(k)}: <b>${this._esc(v)}</b></span>`).join(' ');
 
             return `
                 <div style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 16px; display: flex; justify-content: space-between; align-items: center; gap: 15px;">
                     <div style="flex: 1;">
                         <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px;">
                             <span style="font-weight: 700; color: #c4b5fd;">[${typeLabel}]</span>
-                            <code style="background: rgba(0,0,0,0.4); padding: 2px 6px; border-radius: 4px; font-size: 0.8rem; color: #94a3b8;">${t.trigger_id.slice(0, 8)}</code>
+                            <code style="background: rgba(0,0,0,0.4); padding: 2px 6px; border-radius: 4px; font-size: 0.8rem; color: #94a3b8;">${this._esc(t.trigger_id.slice(0, 8))}</code>
                             ${statusBadge}
-                            <span style="font-size: 0.85rem; color: #64748b;">頻道: ${t.channel_id}</span>
+                            <span style="font-size: 0.85rem; color: #64748b;">頻道: ${this._esc(t.channel_id)}</span>
                         </div>
                         <div style="font-size: 0.9rem; color: #cbd5e1; margin-bottom: 6px;">
                             條件: ${condDetails}
                         </div>
-                        ${t.message ? `<div style="font-size: 0.85rem; color: #a78bfa; margin-bottom: 4px;">💬 訊息: "${t.message}"</div>` : ''}
+                        ${t.message ? `<div style="font-size: 0.85rem; color: #a78bfa; margin-bottom: 4px;">💬 訊息: "${this._esc(t.message)}"</div>` : ''}
                         <div style="font-size: 0.8rem; color: #64748b;">
-                            上次觸發: ${lastRun} | 冷卻: ${t.cooldown_seconds}s
+                            上次觸發: ${lastRun} | 冷卻: ${this._esc(t.cooldown_seconds)}s
                         </div>
                     </div>
                     <div style="display: flex; gap: 8px; align-items: center;">

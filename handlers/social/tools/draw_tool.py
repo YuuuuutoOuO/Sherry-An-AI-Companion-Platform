@@ -33,8 +33,8 @@ class DrawControlView(discord.ui.View):
             
         await interaction.response.defer(ephemeral=True)
         await interaction.followup.send("好的！我重新畫一張，請稍候...", ephemeral=True)
-        from handlers.social.registry import TOOL_LIST
-        draw_tool = next((t for t in TOOL_LIST if t.intent_name == "DRAW"), None)
+        from handlers.social.registry import get_tool
+        draw_tool = get_tool("DRAW")
         if draw_tool and isinstance(interaction.client, commands.Bot) and interaction.message is not None:
             asyncio.create_task(draw_tool.execute(interaction.client, interaction.message, self.user_query, "", ""))
 
@@ -56,8 +56,8 @@ class DrawControlView(discord.ui.View):
                 await modal_interaction.response.defer(ephemeral=True)
                 await modal_interaction.followup.send("收到新的提示詞！立刻重畫...", ephemeral=True)
                 new_query = self.prompt_input.value
-                from handlers.social.registry import TOOL_LIST
-                draw_tool = next((t for t in TOOL_LIST if t.intent_name == "DRAW"), None)
+                from handlers.social.registry import get_tool
+                draw_tool = get_tool("DRAW")
                 if draw_tool and isinstance(modal_interaction.client, commands.Bot) and interaction.message is not None:
                     asyncio.create_task(draw_tool.execute(modal_interaction.client, interaction.message, new_query, "", ""))
         
@@ -75,7 +75,6 @@ class DrawTool(BaseTool):
                 logger.info("DrawTool: 已載入 pixiv_tag.json，共 %d 筆 tag。", len(self._pixiv_dict))
             except Exception as e:
                 logger.error("DrawTool: pixiv_tag.json 載入失敗: %s", e)
-        self._sorted_pixiv_keys: list[str] = sorted(self._pixiv_dict.keys(), key=len, reverse=True)
         self._session: aiohttp.ClientSession | None = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -134,9 +133,10 @@ class DrawTool(BaseTool):
         return bool(re.search(r"((幫|給)我畫|畫\s*一張|生成\s*一張|幫忙畫|幫我生成|draw me|generate\s+an?)", text, re.IGNORECASE))
 
     def _extract_danbooru_tags(self, user_query: str) -> list[str]:
-        """
-        用 pixiv_tag.json 字典掃描使用者輸入，萃取精確的 Danbooru tag。
-        採「最長匹配優先」策略，避免短關鍵詞吃掉長關鍵詞。
+        """用 pixiv_tag.json 字典掃描使用者輸入，萃取精確的 Danbooru tag。
+
+        採「最長候選詞哈希查找優先」策略，O(L^2) 滑動窗口配合 O(1) 字典比對，
+        避免 5 萬筆全量遍歷。
         例如：「蔚藍檔案星野的泳裝」→ ["hoshino_(blue_archive)", "swimsuit"]
         """
         if not self._pixiv_dict:
@@ -144,19 +144,22 @@ class DrawTool(BaseTool):
 
         found_tags: list[str] = []
         scan_text = user_query.lower()
+        max_w = min(len(scan_text), 50)
 
-        # 依 key 長度由長到短排序，確保長詞優先匹配
-        sorted_keys = self._sorted_pixiv_keys
-        for key in sorted_keys:
-            if len(key) < 2:
+        for w in range(max_w, 1, -1):
+            if len(scan_text) < w:
                 continue
-            if key.lower() in scan_text:
-                tag = self._pixiv_dict[key]
-                # 避免重複加入同一個 tag
-                if tag not in found_tags:
-                    found_tags.append(tag)
-                # 從掃描文字中移除已匹配的關鍵詞，防止重複命中
-                scan_text = scan_text.replace(key.lower(), " ", 1)
+            i = 0
+            while i <= len(scan_text) - w:
+                sub = scan_text[i : i + w]
+                if "\x00" not in sub and sub in self._pixiv_dict:
+                    tag = self._pixiv_dict[sub]
+                    if tag not in found_tags:
+                        found_tags.append(tag)
+                    scan_text = scan_text[:i] + ("\x00" * w) + scan_text[i + w :]
+                    i += w
+                else:
+                    i += 1
 
         logger.info("DrawTool: 字典萃取到 %d 個 Danbooru tag: %s", len(found_tags), found_tags)
         return found_tags
@@ -194,7 +197,7 @@ class DrawTool(BaseTool):
             system_prompt=sys_prompt,
             user_prompt=user_query,
             callback=on_reply,
-            model=settings.QUICK_MODEL,
+            model=settings.LIGHT_MODEL,
             task_id=f"draw-translate-{id(user_query)}",
         )
         await brain.enqueue_task(task)
@@ -253,7 +256,7 @@ class DrawTool(BaseTool):
             system_prompt=sys_prompt,
             user_prompt=f"使用者輸入：{user_query}",
             callback=on_reply,
-            model=settings.QUICK_MODEL,
+            model=settings.LIGHT_MODEL,
             task_id=f"draw-expand-{id(user_query)}",
         )
         await brain.enqueue_task(task)

@@ -7,7 +7,7 @@ interfaces.py (mod/stock_trader/domain)
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import List
 
 from mod.stock_trader.domain.models import (
     DailySnapshot, PortfolioAccount, ThoughtLog, TradeRecord,
@@ -55,23 +55,4 @@ class ITraderRepository(ABC):
     @abstractmethod
     def append_thought(self, thought: ThoughtLog) -> bool:
         """新增一條雪莉思考日誌。"""
-        pass
-
-
-class IMarketDataFetcher(ABC):
-    """市場行情數據抓取抽象介面。"""
-
-    @abstractmethod
-    def get_watch_tickers(self) -> List[str]:
-        """取得追蹤的標的代碼清單 (來自 market_plugin 或預設)。"""
-        pass
-
-    @abstractmethod
-    def get_current_prices(self, tickers: List[str]) -> Dict[str, float]:
-        """抓取指定標的之最新成交價。"""
-        pass
-
-    @abstractmethod
-    def get_stock_indicators(self, tickers: List[str]) -> List[Dict[str, Any]]:
-        """抓取指定標的之技術指標數據 (RSI, MA, EMA, BB, 1D%, 1M%)。"""
         pass

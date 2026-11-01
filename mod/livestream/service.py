@@ -16,8 +16,10 @@ from urllib.parse import parse_qs, quote, urlparse
 from mod.livestream import config
 from mod.livestream.contracts import ILivestreamBroadcaster, ILivestreamService
 from mod.livestream.domain import (
+    ChatMessage,
     MediaItem,
     PlayAction,
+    PlayMode,
     PlaybackStatus,
     StreamEvent,
     StreamPlaybackState,
@@ -27,6 +29,10 @@ logger = logging.getLogger(__name__)
 
 # Standard YouTube 11-character video ID regex pattern
 _YT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{11}$")
+
+# Bilibili BV and av pattern matching
+_BILI_BV_PATTERN = re.compile(r"BV[0-9a-zA-Z_-]{8,12}", re.IGNORECASE)
+_BILI_AV_PATTERN = re.compile(r"av\d+", re.IGNORECASE)
 
 # Supported video file extensions for local library
 _SUPPORTED_EXTENSIONS: tuple[str, ...] = config.SUPPORTED_VIDEO_EXTENSIONS
@@ -49,6 +55,8 @@ class LivestreamService(ILivestreamService):
         """
         self._broadcaster: ILivestreamBroadcaster = broadcaster
         self._video_dir: Path = video_dir if video_dir is not None else config.VIDEO_DIR
+        self._chat_history: list[ChatMessage] = []
+        self._max_chat_history: int = config.MAX_CHAT_HISTORY
 
     # -----------------------------------------------------------------------
     # Local Video Library Scanning & Resolution
@@ -130,20 +138,20 @@ class LivestreamService(ILivestreamService):
         return videos[idx]
 
     # -----------------------------------------------------------------------
-    # YouTube Info Extraction
+    # YouTube & Bilibili Info Extraction
     # -----------------------------------------------------------------------
 
-    def extract_youtube_info(self, url: str) -> Tuple[str, int]:
-        """Extracts the YouTube video ID and optional start offset seconds from a URL.
+    def extract_youtube_info(self, url: str) -> Tuple[str, int, str]:
+        """Extracts the YouTube video ID, optional start offset seconds, and playlist ID from a URL.
 
         Args:
             url: YouTube URL or video ID string.
 
         Returns:
-            A tuple of (video_id, start_seconds).
+            A tuple of (video_id, start_seconds, playlist_id).
 
         Raises:
-            ValueError: If no valid YouTube video ID could be extracted.
+            ValueError: If no valid YouTube video ID or playlist ID could be extracted.
         """
         clean_url = url.strip()
         if not clean_url:
@@ -151,7 +159,7 @@ class LivestreamService(ILivestreamService):
 
         # Direct 11-char ID check
         if _YT_ID_PATTERN.match(clean_url):
-            return clean_url, 0
+            return clean_url, 0, ""
 
         # Ensure scheme is present for urlparse if starting with domain
         parse_target = clean_url
@@ -169,6 +177,10 @@ class LivestreamService(ILivestreamService):
 
         video_id: Optional[str] = None
         start_seconds: int = 0
+        playlist_id: str = ""
+
+        if "list" in query_params:
+            playlist_id = query_params["list"][0]
 
         # Parse start seconds if 't' or 'start' query param exists
         time_raw = ""
@@ -192,10 +204,15 @@ class LivestreamService(ILivestreamService):
                 candidate = query_params["v"][0]
                 if _YT_ID_PATTERN.match(candidate):
                     video_id = candidate
+            elif path == "/playlist" and playlist_id:
+                video_id = "videoseries"
             elif path.startswith("/embed/"):
                 parts = [p for p in path[len("/embed/"):].split("/") if p]
-                if parts and _YT_ID_PATTERN.match(parts[0]):
-                    video_id = parts[0]
+                if parts:
+                    if parts[0] == "videoseries":
+                        video_id = "videoseries"
+                    elif _YT_ID_PATTERN.match(parts[0]):
+                        video_id = parts[0]
             elif path.startswith("/shorts/"):
                 parts = [p for p in path[len("/shorts/"):].split("/") if p]
                 if parts and _YT_ID_PATTERN.match(parts[0]):
@@ -206,9 +223,72 @@ class LivestreamService(ILivestreamService):
                     video_id = parts[0]
 
         if not video_id:
-            raise ValueError(f"無法從網址中解析出有效的 YouTube 影片 ID: {clean_url}")
+            if playlist_id:
+                video_id = "videoseries"
+            else:
+                raise ValueError(f"無法從網址中解析出有效的 YouTube 影片 ID: {clean_url}")
 
-        return video_id, start_seconds
+        return video_id, start_seconds, playlist_id
+
+    def extract_bilibili_info(self, url: str) -> Tuple[str, int, str]:
+        """Extracts the Bilibili video ID (BV/av), page index, and playlist/medialist ID from a URL.
+
+        Args:
+            url: Bilibili URL, BV id, or av id string.
+
+        Returns:
+            A tuple of (video_id, page_index, list_id).
+
+        Raises:
+            ValueError: If no valid Bilibili video ID or list ID could be extracted.
+        """
+        clean_url = url.strip()
+        if not clean_url:
+            raise ValueError("提供的 Bilibili 影片網址或 BV 號不能為空。")
+
+        # Direct BV check (e.g. BV1xx411c7X-)
+        bv_match = _BILI_BV_PATTERN.search(clean_url)
+        av_match = _BILI_AV_PATTERN.search(clean_url)
+
+        page_index = 1
+        list_id = ""
+
+        # Parse URL parameters if applicable
+        parse_target = clean_url
+        if not parse_target.startswith(("http://", "https://")):
+            parse_target = "https://" + parse_target
+
+        try:
+            parsed = urlparse(parse_target)
+            query_params = parse_qs(parsed.query)
+            if "p" in query_params and query_params["p"][0].isdigit():
+                page_index = max(1, int(query_params["p"][0]))
+            elif "page" in query_params and query_params["page"][0].isdigit():
+                page_index = max(1, int(query_params["page"][0]))
+
+            # Check medialist or list
+            if "medialist" in parsed.path or "list" in query_params:
+                if "list" in query_params:
+                    list_id = query_params["list"][0]
+                else:
+                    ml_match = re.search(r"ml\d+", parsed.path)
+                    if ml_match:
+                        list_id = ml_match.group(0)
+        except Exception:
+            pass
+
+        video_id = ""
+        if bv_match:
+            video_id = bv_match.group(0)
+        elif av_match:
+            video_id = av_match.group(0)
+        elif list_id:
+            video_id = list_id
+
+        if not video_id:
+            raise ValueError(f"無法從網址中解析出有效的 Bilibili 影片 BV/av 號: {clean_url}")
+
+        return video_id, page_index, list_id
 
     def _parse_time_param(self, raw_time: str) -> int:
         """Parses timestamp parameter into integer seconds (e.g. '120', '1m30s', '1h2m3s')."""
@@ -233,13 +313,21 @@ class LivestreamService(ILivestreamService):
         self,
         action: PlayAction,
         context: str,
+        play_mode: PlayMode = PlayMode.AUTOPLAY,
+        episode: int = 1,
         requester_name: str = "Unknown",
         requester_avatar: str = "",
     ) -> StreamPlaybackState:
-        """Plays video based on action and context (YouTube or Local)."""
+        """Plays video based on action, context, play mode and episode (YouTube, Bilibili, or Local)."""
         if action == PlayAction.YOUTUBE:
-            video_id, start_sec = self.extract_youtube_info(context)
-            title = f"YouTube: {video_id}"
+            video_id, start_sec, playlist_id = self.extract_youtube_info(context)
+            if video_id == "videoseries":
+                title = f"YouTube 播放清單: {playlist_id}"
+            else:
+                title = f"YouTube: {video_id}"
+                if playlist_id:
+                    title += f" (清單: {playlist_id})"
+
             media_item = MediaItem(
                 action=action,
                 video_id=video_id,
@@ -249,11 +337,33 @@ class LivestreamService(ILivestreamService):
                 requester_avatar=requester_avatar,
                 requested_at=time.time(),
                 start_seconds=start_sec,
+                play_mode=play_mode,
+                playlist_id=playlist_id,
+            )
+        elif action == PlayAction.BILIBILI:
+            bvid, p_idx, list_id = self.extract_bilibili_info(context)
+            final_p = episode if episode > 1 else p_idx
+            title = f"Bilibili: {bvid} (P{final_p})"
+            if list_id:
+                title += f" [清單: {list_id}]"
+
+            media_item = MediaItem(
+                action=action,
+                video_id=bvid,
+                original_url=context.strip(),
+                title=title,
+                requester_name=requester_name,
+                requester_avatar=requester_avatar,
+                requested_at=time.time(),
+                page_index=final_p,
+                play_mode=play_mode,
+                playlist_id=list_id,
             )
         elif action in (PlayAction.LOCAL, PlayAction.FILE):
             return await self.play_local_video(
                 series_name=context,
-                episode=1,
+                episode=episode,
+                play_mode=play_mode,
                 requester_name=requester_name,
                 requester_avatar=requester_avatar,
             )
@@ -279,8 +389,10 @@ class LivestreamService(ILivestreamService):
 
         await self._broadcaster.broadcast(event)
         logger.info(
-            "Livestream playback updated to PLAYING for video_id=%s requested by %s",
-            video_id,
+            "Livestream playback updated to PLAYING for video_id=%s [action=%s, mode=%s] requested by %s",
+            media_item.video_id,
+            action.value,
+            play_mode.value,
             requester_name,
         )
         return new_state
@@ -289,6 +401,7 @@ class LivestreamService(ILivestreamService):
         self,
         series_name: str,
         episode: int = 1,
+        play_mode: PlayMode = PlayMode.AUTOPLAY,
         requester_name: str = "Unknown",
         requester_avatar: str = "",
     ) -> StreamPlaybackState:
@@ -332,6 +445,7 @@ class LivestreamService(ILivestreamService):
             total_episodes=total_episodes,
             file_path=str(selected_file),
             stream_url=stream_url,
+            play_mode=play_mode,
         )
 
         current = self._broadcaster.get_state()
@@ -353,44 +467,96 @@ class LivestreamService(ILivestreamService):
 
         await self._broadcaster.broadcast(event)
         logger.info(
-            "Livestream local video started: %s (ep %d/%d) requested by %s",
+            "Livestream local video started: %s (ep %d/%d) [mode=%s] requested by %s",
             target_series,
             episode,
             total_episodes,
+            play_mode.value,
             requester_name,
         )
         return new_state
 
     async def next_episode(self) -> StreamPlaybackState:
-        """Advances to the next episode in the current series, looping back to episode 1 if at the end."""
+        """Advances to the next episode or part in the current series/video."""
         current = self._broadcaster.get_state()
-        if (
-            current.current_media is None
-            or current.current_media.action != PlayAction.LOCAL
-            or not current.current_media.series_name
-        ):
-            logger.info("Cannot advance next episode: current media is not a local series.")
+        if current.current_media is None:
+            logger.info("Cannot advance next episode: current media is None.")
             return current
 
-        series_name = current.current_media.series_name
-        curr_ep = current.current_media.episode_index
-        total_ep = current.current_media.total_episodes
+        media = current.current_media
 
-        next_ep = (curr_ep % total_ep) + 1
-        logger.info(
-            "Continuous Autoplay: Advancing series '%s' from ep %d to ep %d (total %d)",
-            series_name,
-            curr_ep,
-            next_ep,
-            total_ep,
-        )
+        # 1. Local Video Series
+        if media.action in (PlayAction.LOCAL, PlayAction.FILE) and media.series_name:
+            series_name = media.series_name
+            curr_ep = media.episode_index
+            total_ep = media.total_episodes
 
-        return await self.play_local_video(
-            series_name=series_name,
-            episode=next_ep,
-            requester_name=current.current_media.requester_name,
-            requester_avatar=current.current_media.requester_avatar,
-        )
+            # In single mode, next episode stops
+            if media.play_mode == PlayMode.SINGLE:
+                return await self.stop()
+
+            # In loop mode, repeat the current episode
+            if media.play_mode == PlayMode.LOOP:
+                next_ep = curr_ep
+            else:
+                next_ep = (curr_ep % total_ep) + 1
+
+            logger.info(
+                "Autoplay: Advancing series '%s' from ep %d to ep %d (total %d, mode=%s)",
+                series_name,
+                curr_ep,
+                next_ep,
+                total_ep,
+                media.play_mode.value,
+            )
+
+            return await self.play_local_video(
+                series_name=series_name,
+                episode=next_ep,
+                play_mode=media.play_mode,
+                requester_name=media.requester_name,
+                requester_avatar=media.requester_avatar,
+            )
+
+        # 2. Bilibili Multi-Part (分P)
+        elif media.action == PlayAction.BILIBILI and media.video_id:
+            if media.play_mode == PlayMode.SINGLE:
+                return await self.stop()
+
+            curr_p = media.page_index
+            next_p = curr_p if media.play_mode == PlayMode.LOOP else curr_p + 1
+
+            logger.info(
+                "Autoplay: Advancing Bilibili '%s' from P%d to P%d (mode=%s)",
+                media.video_id,
+                curr_p,
+                next_p,
+                media.play_mode.value,
+            )
+
+            return await self.play_video(
+                action=PlayAction.BILIBILI,
+                context=media.original_url or media.video_id,
+                play_mode=media.play_mode,
+                episode=next_p,
+                requester_name=media.requester_name,
+                requester_avatar=media.requester_avatar,
+            )
+
+        # 3. YouTube or others
+        elif media.action == PlayAction.YOUTUBE:
+            if media.play_mode == PlayMode.SINGLE:
+                return await self.stop()
+            elif media.play_mode == PlayMode.LOOP:
+                return await self.play_video(
+                    action=PlayAction.YOUTUBE,
+                    context=media.original_url or media.video_id,
+                    play_mode=media.play_mode,
+                    requester_name=media.requester_name,
+                    requester_avatar=media.requester_avatar,
+                )
+
+        return current
 
     async def stop(self) -> StreamPlaybackState:
         """Stops the current video playback and resets the livestream UI to IDLE."""
@@ -464,3 +630,45 @@ class LivestreamService(ILivestreamService):
     def get_current_state(self) -> StreamPlaybackState:
         """Returns the current playback state."""
         return self._broadcaster.get_state()
+
+    def get_chat_history(self) -> list[ChatMessage]:
+        """Returns the recent in-memory chat message history."""
+        return list(self._chat_history)
+
+    async def post_chat_message(
+        self,
+        author_name: str,
+        author_avatar: str = "",
+        content: str = "",
+        is_owner: bool = False,
+        badge: str = "💬 觀眾",
+        channel_id: str = "",
+    ) -> ChatMessage:
+        """Posts a new chat message and broadcasts it to all connected livestream clients."""
+        msg_id = f"chat_{int(time.time() * 1000)}_{len(self._chat_history) + 1}"
+        chat_msg = ChatMessage(
+            id=msg_id,
+            author_name=author_name or "匿名探員",
+            author_avatar=author_avatar,
+            content=content,
+            timestamp=time.time(),
+            is_owner=is_owner,
+            badge=badge,
+            channel_id=channel_id,
+        )
+        self._chat_history.append(chat_msg)
+        if len(self._chat_history) > self._max_chat_history:
+            self._chat_history = self._chat_history[-self._max_chat_history :]
+
+        # Broadcast chat_message event via broadcaster
+        event = StreamEvent(
+            event_type="chat_message",
+            state=self.get_current_state(),
+            timestamp=time.time(),
+            message=content,
+            chat_message=chat_msg,
+        )
+        await self._broadcaster.broadcast(event)
+        logger.debug("Livestream chat message broadcasted from '%s': %s", author_name, content[:30])
+        return chat_msg
+

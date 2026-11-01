@@ -45,7 +45,7 @@ class DiscordChannelHandler(logging.Handler):
                 if channel and hasattr(channel, "send"):
                     await channel.send(truncated)
             except Exception:
-                pass
+                logger.debug("HealthMonitor: 發送頻道日誌失敗", exc_info=True)
 
         for uid in user_ids:
             try:
@@ -106,6 +106,7 @@ class HealthMonitor(commands.Cog):
             async with self._session.get(settings.OLLAMA_BASE_URL, timeout=aiohttp.ClientTimeout(total=settings.HEALTH_CHECK_TIMEOUT)) as resp:
                 return resp.status == 200
         except Exception:
+            logger.debug("HealthMonitor: Ollama ping 失敗", exc_info=True)
             return False
 
     async def notify_admin(self, message: str) -> None:
@@ -127,7 +128,7 @@ class HealthMonitor(commands.Cog):
                 try:
                     await channel.send(alert_text)
                 except Exception:
-                    pass
+                    logger.debug("HealthMonitor: 發送警報頻道訊息失敗", exc_info=True)
             else:
                 logger.warning(f"HealthMonitor: 無法取得警告頻道 {channel_id}")
 

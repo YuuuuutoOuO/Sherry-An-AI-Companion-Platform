@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import discord
@@ -6,7 +7,7 @@ from typing import Any
 
 import settings
 # 分為內部同包裹載入儲存模型
-from .storage import load_vibe_store, save_vibe_store, TopicEntry, VibeStore
+from .storage import load_vibe_store, save_vibe_channel, save_vibe_store, TopicEntry, VibeStore
 from handlers.bot_brain import InferenceTask
 
 logger = logging.getLogger(__name__)
@@ -16,18 +17,51 @@ class VibeManager(commands.Cog):
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        # 從剛剛新建的 storage 去安全提取檔案!
-        self._store: VibeStore = load_vibe_store(settings.CHANNEL_VIBE_PATH)
+        # 實際載入延後到 cog_load，避免在建構期間於事件循環同步讀取 SQLite。
+        self._store: VibeStore = {}
+        self._save_lock = asyncio.Lock()
         logger.info("VibeManager: 群眾心態模擬體啟動. 裝載通道熱搜庫共: %d.", len(self._store))
 
     async def cog_load(self) -> None:
+        self._store = await asyncio.to_thread(
+            load_vibe_store, settings.CHANNEL_VIBE_PATH
+        )
+        logger.info(
+            "VibeManager: 已載入通道熱搜庫共 %d 個頻道。", len(self._store)
+        )
         self._decay_loop.change_interval(seconds=settings.VIBE_DECAY_INTERVAL_SECONDS)
         self._decay_loop.start()
 
     async def cog_unload(self) -> None:
         self._decay_loop.cancel()
-        save_vibe_store(self._store, settings.CHANNEL_VIBE_PATH)
+        await self._persist_all()
         logger.info("VibeManager: 重起中止-關閉自動卸除所有記憶落盤緩存。")
+
+    # ==========================
+    # 落盤：批次／單頻道 + 工作執行緒
+    # ==========================
+    async def _persist_channel(self, channel_id: str) -> None:
+        """將單一頻道主題快照寫入 SQLite（不阻塞事件循環）。"""
+        snapshot: dict[str, TopicEntry] = {
+            topic: TopicEntry(summary=entry["summary"], weight=entry["weight"])
+            for topic, entry in self._store.get(channel_id, {}).items()
+        }
+        async with self._save_lock:
+            await asyncio.to_thread(save_vibe_channel, channel_id, snapshot)
+
+    async def _persist_all(self) -> None:
+        """將全部頻道主題快照批次寫入 SQLite（不阻塞事件循環）。"""
+        snapshot: VibeStore = {
+            ch_id: {
+                topic: TopicEntry(summary=entry["summary"], weight=entry["weight"])
+                for topic, entry in topics.items()
+            }
+            for ch_id, topics in self._store.items()
+        }
+        async with self._save_lock:
+            await asyncio.to_thread(
+                save_vibe_store, snapshot, settings.CHANNEL_VIBE_PATH
+            )
 
     # ==========================
     # 輸出熱搜文本讓雪莉對話帶入
@@ -101,12 +135,12 @@ class VibeManager(commands.Cog):
                 else:
                     initial_weight = int(getattr(settings, "VIBE_MIN_WEIGHT_TO_INJECT", 5))
                     channel_store[topic] = TopicEntry(summary=summary, weight=initial_weight)
-            save_vibe_store(self._store, settings.CHANNEL_VIBE_PATH)
+            await self._persist_channel(channel_id_str)
 
         task = InferenceTask(
             priority=settings.PRIORITY_VIBE_UPDATE, system_prompt=system_prompt,
             user_prompt=conversation_block, callback=_on_vibe_result,
-            model=settings.VIBE_MODEL, task_id=f"vibe-update-{channel.id}",
+            model=settings.LIGHT_MODEL, task_id=f"vibe-update-{channel.id}",
         )
         await brain.enqueue_task(task)
 
@@ -137,7 +171,7 @@ class VibeManager(commands.Cog):
             if not channel_topics:
                 del self._store[channel_id]
             
-        save_vibe_store(self._store, settings.CHANNEL_VIBE_PATH)
+        await self._persist_all()
 
     @_decay_loop.before_loop
     async def _before_decay_loop(self) -> None:
