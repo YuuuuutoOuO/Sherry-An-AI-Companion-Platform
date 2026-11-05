@@ -568,6 +568,10 @@ Sherry-An-AI-Companion-Platform/
 
 ---
 
-## 📄 License
+## 📄 授權聲明 (License Notice)
 
-本專案採用 [MIT License](LICENSE) 授權開源。
+本專案之原始碼僅供**個人能力展示、作品集檢視與技術交流**使用。
+
+- 本專案自即日起由原開源協議變更為 **All Rights Reserved（非商業展示條款）**，詳見 [LICENSE](LICENSE)。
+- **未經作者授權，嚴格禁止任何形式之商業用途、二次分發或未授權修改轉載。**
+- 如有任何合作或商業授權需求，請聯繫作者 EnTing：[corpse0712@gmail.com](mailto:corpse0712@gmail.com)。
